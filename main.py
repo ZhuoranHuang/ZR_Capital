@@ -25,7 +25,7 @@ data = yf.download(TICKER, period=PERIOD)
 print(f"数据下载完成，共 {len(data)} 条记录")
 
 # ===== 运行回测 =====
-data, trades, stats = run_backtest(
+data, trades, report = run_backtest(
     data,
     initial_cash=INITIAL_CASH,
     ma_short=MA_SHORT,
@@ -44,10 +44,8 @@ for t in trades:
 
 # ===== 打印统计 =====
 print("\n===== 回测统计 =====")
-print(f"初始资金:  ${stats['initial']:,.2f}")
-print(f"最终资产:  ${stats['final']:,.2f}")
-print(f"总收益率:  {stats['return_pct']}%")
-print(f"交易次数:  {stats['n_trades']} 次")
+for k, v in report.items():
+    print(f"{k}: {v}")
 
 # ===== 画图 =====
 fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(14, 10), sharex=True)

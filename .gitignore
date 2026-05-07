@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Claude Code local config
+.claude/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Data & logs (do not commit market data or runtime logs)
+data/*.csv
+data/*.parquet
+data/*.feather
+*.log
+
+# Notebooks checkpoints
+.ipynb_checkpoints/

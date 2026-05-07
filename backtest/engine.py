@@ -2,7 +2,8 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from strategies.ma_rsi_strategy import generate_signals, get_trade_signal
+from strategy.technical.ma_rsi_strategy import generate_signals, get_trade_signal
+from backtest.metrics import get_full_report
 
 def run_backtest(data, initial_cash=100000, ma_short=20, ma_long=60, 
                  rsi_window=14, stop_loss=0.08):
@@ -66,13 +67,7 @@ def run_backtest(data, initial_cash=100000, ma_short=20, ma_long=60,
         portfolio.append(cash + shares * price)
 
     data['Portfolio'] = portfolio
-    final = data['Portfolio'].iloc[-1]
-    
-    stats = {
-        'initial': initial_cash,
-        'final': round(final, 2),
-        'return_pct': round((final - initial_cash) / initial_cash * 100, 2),
-        'n_trades': len([t for t in trades if t['action'] == '买入']),
-    }
 
-    return data, trades, stats
+    report = get_full_report(data['Portfolio'], trades, initial_cash)
+
+    return data, trades, report
