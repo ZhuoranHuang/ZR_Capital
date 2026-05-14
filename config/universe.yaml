@@ -1,0 +1,9 @@
+# Stock universe configuration.
+# Defines named tradable universes consumed by data/universe.py.
+# Example (to be filled in later):
+# sp500:
+#   description: S&P 500 constituents
+#   source: index_membership
+# us_large_cap_liquid:
+#   description: US large-cap names with >$10M ADV
+#   source: filter

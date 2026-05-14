@@ -14,16 +14,16 @@ The buildout is staged from idea generation → portfolio construction → live 
 
 | Phase | Theme | What gets built | Exit criteria |
 |---|---|---|---|
-| 1 | **Technical strategy baseline** *(current)* | MA+RSI rules, single-asset backtest engine, full metrics report (Sharpe, Calmar, drawdown, win rate, profit factor) | Reproducible backtest on a single ticker with institutional-grade metrics ✅ |
-| 2 | **Strategy library expansion** | Multi-asset universe, more `strategy/technical/*` rules (breakout, momentum, mean-reversion bands), parameter sweeps | A registry of strategies all conforming to the `generate_signals` + `get_trade_signal` interface |
-| 3 | **Statistical & arbitrage strategies** | `strategy/statistical/` — pairs trading, cointegration, stat-arb baskets, vol-targeted carry | Strategies that depend on cross-sectional data, not just per-ticker series |
-| 4 | **Fundamental overlay** | `strategy/fundamental/` — quality/value/growth screens, earnings/macro filters, fundamental data ingestion under `data/` | Strategies that combine price-based signals with fundamental gates |
-| 5 | **Research infrastructure** | `research/factors/` (factor library), `research/signals/` (alpha research), `research/notebooks/` (Jupyter exploration); IC/IR analysis; factor decay studies | A research-to-production path: notebook → vetted signal → strategy module |
-| 6 | **ML strategies** | `strategy/ml/` — feature pipelines off the factor library, classical ML (XGBoost, ridge), then sequence models (LSTM/Transformer) for return forecasting; walk-forward CV, leakage controls, hyperparam tracking | ML models that beat the technical baselines net of costs on out-of-sample data |
-| 7 | **Risk & portfolio construction** | `risk/` — VaR, CVaR, exposure caps, vol targeting, correlation/regime monitoring, stop-loss policies; `portfolio/` — position sizing, multi-strategy capital allocation, Kelly/risk-parity/mean-variance optimizers, rebalance scheduling | A combined book that respects risk limits and allocates capital across strategies |
-| 8 | **Execution** | `execution/` — paper-trading layer first, then broker adapters (IBKR / Alpaca / crypto venues), order routing, slippage & cost modeling, TWAP/VWAP/POV algos, smart order types | Live-equivalent order flow with realistic fills feeding back into the backtest cost model |
-| 9 | **Monitoring & dashboards** | `monitor/` — real-time PnL, drawdown alerts, signal-decay & strategy-health watchdogs, kill-switches; `dashboard/{components,pages}` — operator UI for live book, trade blotter, factor exposures, risk reports | An ops console that an institutional risk committee would accept |
-| 10 | **Production hardening** | `data/` pipelines (vendor ingestion, point-in-time storage, corporate actions), `config/` per-environment settings, `tests/` regression + property + integration tests, CI, scheduled jobs, audit logs, post-trade attribution | Reproducible, observable, auditable system suitable for outside capital |
+| 1 | **Basic strategy + backtest + metrics** *(DONE)* | MA+RSI rules, single-asset backtest engine, full metrics report (Sharpe, Calmar, drawdown, win rate, profit factor) | Reproducible backtest on a single ticker with institutional-grade metrics ✅ |
+| 2 | **Data layer + statistical foundations** *(next)* | `data/` (downloader, cleaner, storage, features, universe, validators), `utils/statistics.py` (ADF/KPSS, correlation, IC/rank-IC, significance testing), unified schema and point-in-time storage | A clean, point-in-time data spine and statistical toolkit usable by every later phase |
+| 3 | **Factor engineering** | Technical, fundamental, and alpha factors built on the data layer; IC / rank-IC analysis, factor decay studies, factor combination logic under `research/factors/` and `research/signals/` | A vetted factor library with documented IC/decay properties feeding strategies and ML |
+| 4 | **Multi-factor models + tree-based ML** | `strategy/ml/tree.py` (XGBoost, LightGBM) as the primary ML track; walk-forward CV, leakage controls, hyperparam tracking; ensembles via `strategy/ml/ensemble.py`; neural models (`neural.py`) optional follow-on | Tree-based models that beat technical baselines net of costs on out-of-sample data |
+| 5 | **Portfolio management** | `portfolio/optimizer.py` (Markowitz, extending to risk-parity / Kelly / Black-Litterman), `portfolio/weighting.py`, `portfolio/rebalance.py` | A combined book that allocates capital across strategies with scheduled / threshold rebalances |
+| 6 | **Risk control** | `risk/position.py` (pyramid scaling), `risk/var.py`, `risk/drawdown.py`, `risk/exposure.py`, `risk/compliance.py`; pre-trade checks and post-trade attribution | Risk limits enforced before every order; kill-switches on limit breach |
+| 7 | **Execution layer** | `execution/longbridge.py` (live broker), `execution/simulator.py` (shared with backtest), `execution/slippage.py`, `execution/cost.py` | Live-equivalent order flow with realistic fills feeding back into the backtest cost model |
+| 8 | **Monitoring** | `monitor/logger.py`, `monitor/alert.py`, `monitor/performance.py` — structured logs, drawdown / signal-decay / data-quality alerts, real-time PnL and exposure | Runtime observability an institutional risk committee would accept |
+| 9 | **Dashboard (Streamlit)** | `dashboard/app.py` plus `dashboard/pages/{backtest,live,research}.py` and shared `components/` | Operator console for backtest visualization, live book, and research exploration |
+| 10 | **Systematization** | Scheduled runs, automation (CI, cron jobs, retraining pipelines), audit logs, per-environment `config/` (dev/paper/live), regression + property + integration tests, documentation | Reproducible, observable, auditable system suitable for outside capital |
 
 ## Planned modules
 
@@ -81,3 +81,61 @@ Key seam: `get_trade_signal(cross, rsi_value, position, buy_price, current_price
 
 - `backtest/engine.py` and `strategy/technical/ma_rsi_strategy.py` both manipulate `sys.path` to add the project root so sibling-package imports resolve when scripts are run directly. Packages have `__init__.py` files, so prefer plain `from strategy.technical... import ...` over re-adding path hacks.
 - `engine.py` defends against `yfinance` returning multi-column frames by checking `hasattr(row['Close'], 'iloc')` on each row — preserve this pattern when modifying the loop, or normalize the dataframe upstream instead.
+
+## Roadmap refinements (agreed)
+
+These refinements override the surface reading of the phase table above. When the table and this section disagree, this section wins.
+
+1. **Data layer + factor engineering are core foundations, not late-stage work.** Pull them forward into Phase 2–3. A factor library and clean data spine must exist before strategies multiply, not after — otherwise every later phase inherits broken plumbing.
+2. **Statistical tooling is a Phase 2 deliverable.** Stationarity tests (ADF/KPSS), correlation matrices, IC / rank-IC analysis, and significance testing (t-stats, bootstrap, multiple-testing correction) ship alongside the strategy registry — they are how strategies get vetted, not optional research polish.
+3. **Tree-based models (XGBoost, LightGBM) are the primary ML track.** Phase 4 starts here. Sequence models (LSTM/Transformer/neural nets) are optional follow-ons, justified only when tabular models hit a ceiling on a specific problem.
+4. **Mid-to-low frequency is the operating regime.** Holding periods range from days to weeks. This is set by individual-grade infrastructure (no co-location, no L2 feeds). HFT/microstructure strategies are explicitly out of scope until infra changes.
+
+## Core quant principles
+
+5. **Quant is data engineering, not strategy engineering.** Most edge in this codebase will come from clean, consistent, point-in-time data — not from cleverer signals. Phase 2 must include:
+   - **Unified schema** across all assets and time frames (consistent column names, dtypes, timezones, index conventions).
+   - **Database storage** (Parquet + DuckDB or Postgres) — no more ad-hoc `yfinance.download` calls scattered across strategies.
+   - **Multi-period data management** — daily / weekly / intraday bars stored with explicit period tags; resampling is a single audited code path.
+   - **Field naming standards** — `close_adj`, `ret_1d`, `vol_20d`, etc., defined once in a data dictionary.
+   - **Data quality checks** — missing bars, splits/dividends, survivorship-bias filters, outlier detection.
+   - **Backtest-vs-live data consistency** — the same field on the same date must return the same value in research and production. Snapshot vendor data at ingestion time.
+6. **MA crossovers are lagging by construction.** Golden/death crosses confirm trends that already happened. Phase 3 must introduce **leading signals**:
+   - Capital flow / order flow (net buying, large-trade imbalance).
+   - Options chain anomalies (IV skew shifts, unusual volume, put/call ratios).
+   - Fundamental changes (earnings revisions, guidance, insider activity).
+   - Multi-factor combinations that anticipate price moves rather than confirm them.
+   Treat the MA+RSI baseline as a benchmark to beat, not a template to replicate.
+7. **Position management uses pyramid scaling, not all-in / all-out.** Phase 6 (`risk/position.py`, working with `portfolio/weighting.py`) implements:
+   - **Scaling-in** — add to winners in tranches as the thesis confirms (e.g., 1/3, 1/3, 1/3 across confirmation levels).
+   - **Scaling-out** — trim winners progressively at target levels; never sell the whole position on a single signal.
+   - Position size is a continuous function of signal strength and risk, not a binary flag.
+
+## Known risks (must be addressed in their phases)
+
+Each item below is a known way this system will produce misleading results if ignored. The phase listed is where the fix lands.
+
+8. **Look-ahead bias** → **Phase 2 data layer.** Any computation that uses information not yet available at the decision timestamp (e.g., today's close to decide today's open trade, restated fundamentals, future-dated index membership). Fix: strict point-in-time data in `data/storage.py`, decision-time slicing, leakage audit on every feature in `data/features.py`.
+9. **Fill-ability issues** → **Phase 7 slippage model.** Assuming we always fill at the printed price ignores spread, depth, and adverse selection. Fix: explicit slippage model (`execution/slippage.py`) parameterized by volume share, volatility, and side; reject fills that exceed a notional fraction of bar volume.
+10. **Backtest matching bias** → **Phase 7 execution simulation.** Backtest fills must mirror what the live broker would actually do (queue position, partial fills, halts, locked markets). Fix: `execution/simulator.py` shared between backtest and paper-trading, fed the same order book / bar assumptions.
+11. **Risk exposure control gap** → **Phase 6 risk module.** Without VaR/CVaR, correlation monitoring, sector/factor exposure limits, and gross/net caps, a "winning" book can blow up on a single regime change. Fix: pre-trade exposure checks and post-trade attribution; kill-switch on limit breaches.
+12. **Distribution shift** → **Phase 4 ML.** Market regimes change; a model fit on 2015–2020 may be actively harmful in 2026. Fix: rolling-window retraining, walk-forward CV, out-of-sample holdout that is never touched during research, regime-conditioned performance reports.
+13. **LLM training data contamination.** Any LLM-based strategy (signal generation, news scoring, agentic research) must be backtested **only on data dated AFTER the model's training cutoff** — otherwise the model has already "seen" the answers and results are uninvestable. Traditional ML (XGBoost, LightGBM, ridge, etc.) is **not** affected by this; standard walk-forward CV is sufficient for those.
+
+## Data source strategy (US equities)
+
+14. `data/downloader.py` will expose a **multi-source abstraction layer** so strategies never name a vendor directly. Vendor swaps stay local to the downloader.
+    - **Market data (OHLCV, quotes):** `yfinance` (free, research) + **Longbridge API** (live trading) + **Polygon.io** (premium tier, intraday + historical depth).
+    - **Fundamentals:** `yfinance` + **Longbridge**.
+    - **News / sentiment:** **Bloomberg API** / **Finnhub** (future; gated behind cost/access).
+    - **Macro:** **FRED** (Federal Reserve Economic Data — official, free, definitive for US macro series).
+
+   Contract: every strategy and research notebook reads through `data/` interfaces; no module outside `data/` may import a vendor SDK directly.
+
+## Future exploration (not main roadmap)
+
+Items below are tracked but not committed milestones. Revisit when their prerequisites are stable.
+
+15. **MACD indicator (DIF / DEA / histogram)** — additive to `utils/indicators.py` once the leading-signal work in Phase 3 begins; useful as a momentum confirmation companion to MA+RSI.
+16. **Anthropic Financial Skills** — evaluate as a Phase 3–4 research aid (fundamental parsing, filing summarization). Subject to the LLM-contamination rule in item 13.
+17. **TradingAgents** (multi-agent research system, ~65K-star open source) — consider in Phase 3–4 as a research-assistant layer (not an execution layer). Sandbox first, then wire into `research/` if it produces vetted signals.

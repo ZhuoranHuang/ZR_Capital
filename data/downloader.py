@@ -1,0 +1,1 @@
+"""Multi-source market data download abstraction (yfinance for research, Longbridge for live, Polygon.io for premium). Strategies and notebooks must read through this layer; no module outside data/ may import a vendor SDK directly."""
