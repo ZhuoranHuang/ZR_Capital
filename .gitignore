@@ -20,6 +20,7 @@ env/
 Thumbs.db
 
 # Data & logs (do not commit market data or runtime logs)
+data/cache/
 data/*.csv
 data/*.parquet
 data/*.feather

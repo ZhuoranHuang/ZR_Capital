@@ -139,3 +139,53 @@ Items below are tracked but not committed milestones. Revisit when their prerequ
 15. **MACD indicator (DIF / DEA / histogram)** — additive to `utils/indicators.py` once the leading-signal work in Phase 3 begins; useful as a momentum confirmation companion to MA+RSI.
 16. **Anthropic Financial Skills** — evaluate as a Phase 3–4 research aid (fundamental parsing, filing summarization). Subject to the LLM-contamination rule in item 13.
 17. **TradingAgents** (multi-agent research system, ~65K-star open source) — consider in Phase 3–4 as a research-assistant layer (not an execution layer). Sandbox first, then wire into `research/` if it produces vetted signals.
+
+## TradingView Integration Plan
+
+TradingView is an **auxiliary tool, not a replacement** for our core Python system. Core strategy logic, the backtest engine, and execution must remain in Python. TradingView is layered on top for visualization, alerting, and operator UX.
+
+Integration points across phases:
+
+**Phase 2–3 (Research stage):**
+- Use free TradingView web for visual chart inspection and pattern recognition.
+- Cross-reference our Python signals with TV charts for validation.
+- Cost: $0.
+
+**Phase 7–8 (Execution + Monitoring):**
+- TradingView Pro subscription ($15–60/month) with Webhook alerts.
+- TV price/indicator alerts → Webhook → push to Telegram / email / our `monitor/alert.py`.
+- Reduces need for constant manual monitoring.
+
+**Phase 9 (Dashboard):**
+- Embed TradingView Widget (free) for live quotes and heatmaps in our Streamlit dashboard.
+- Consider TradingView Charting Library (paid, enterprise) for professional-grade interactive K-line charts, comparable to broker terminals (Longbridge, Futu, etc. use this library).
+
+**Phase 10+ (After institutional setup):**
+- Evaluate TradingView Charting Library commercial license for branded dashboard.
+
+**DO NOT use TradingView for:**
+- Writing core strategy logic (Pine Script locks you into their platform).
+- Primary backtest engine (data accuracy and execution assumptions are suboptimal).
+- Live trading execution (must go through Longbridge API).
+
+## Phase 3 addition — Market regime detection
+
+Add a new module: **`research/regime/`** for market state classification.
+
+- Detect market regimes: trending, mean-reverting, high-vol, low-vol.
+- Use indicators like ADX, realized volatility, cross-asset correlations.
+- Tag each strategy with applicable regimes.
+- System auto-switches or re-weights strategies based on the current regime.
+- **Rationale:** the same strategy performs very differently across regimes; regime-aware allocation prevents drawdowns during unfavorable conditions.
+
+## Phase 6 addition — Circuit breaker system
+
+Add a new module: **`risk/circuit_breaker.py`**.
+
+- Auto-halt trading when triggered by:
+  - Single-day loss exceeds X% (configurable threshold).
+  - Consecutive N-day losses.
+  - Data source anomalies.
+  - Strategy drawdown exceeds historical max + buffer.
+- Requires manual override to resume.
+- **Rationale:** protect capital during black-swan events (e.g., the Oct 2025 $19.3B flash crash); systems without circuit breakers compound losses, systems with them survive.

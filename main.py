@@ -1,4 +1,3 @@
-import yfinance as yf
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import sys
@@ -6,6 +5,7 @@ import os
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from backtest.engine import run_backtest
+from data.downloader import YFinanceSource
 
 mpl.rcParams['font.sans-serif'] = ['Microsoft YaHei']
 mpl.rcParams['axes.unicode_minus'] = False
@@ -19,10 +19,10 @@ MA_LONG = 60          # 长期均线
 RSI_WINDOW = 14       # RSI周期
 STOP_LOSS = 0.08      # 止损比例8%
 
-# ===== 下载数据 =====
-print(f"正在下载 {TICKER} {PERIOD} 数据...")
-data = yf.download(TICKER, period=PERIOD)
-print(f"数据下载完成，共 {len(data)} 条记录")
+# ===== 加载数据 =====
+print(f"正在加载 {TICKER} {PERIOD} 数据...")
+data = YFinanceSource().get(TICKER, PERIOD)
+print(f"数据加载完成，共 {len(data)} 条记录")
 
 # ===== 运行回测 =====
 data, trades, report = run_backtest(
