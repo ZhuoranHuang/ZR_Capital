@@ -5,23 +5,28 @@ import os
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from backtest.engine import run_backtest
-from data.downloader import YFinanceSource
+from config.loader import load_settings, load_strategy
+from data.downloader import get_source
 
 mpl.rcParams['font.sans-serif'] = ['Microsoft YaHei']
 mpl.rcParams['axes.unicode_minus'] = False
 
-# ===== 参数设置 =====
-TICKER = "AAPL"       # 股票代码
-PERIOD = "5y"         # 回测周期
-INITIAL_CASH = 100000 # 初始资金
-MA_SHORT = 20         # 短期均线
-MA_LONG = 60          # 长期均线
-RSI_WINDOW = 14       # RSI周期
-STOP_LOSS = 0.08      # 止损比例8%
+# ===== 参数加载 =====
+settings = load_settings()
+strategy = load_strategy('ma_rsi')
+
+TICKER       = strategy['universe']['ticker']
+PERIOD       = strategy['universe']['period']
+INITIAL_CASH = strategy['capital']['initial_cash']
+MA_SHORT     = strategy['params']['ma_short']
+MA_LONG      = strategy['params']['ma_long']
+RSI_WINDOW   = strategy['params']['rsi_window']
+STOP_LOSS    = strategy['params']['stop_loss']
 
 # ===== 加载数据 =====
 print(f"正在加载 {TICKER} {PERIOD} 数据...")
-data = YFinanceSource().get(TICKER, PERIOD)
+source = get_source(settings['data']['default_source'])
+data = source.get(TICKER, PERIOD, ttl_hours=settings['data']['cache_ttl_hours'])
 print(f"数据加载完成，共 {len(data)} 条记录")
 
 # ===== 运行回测 =====

@@ -1,0 +1,6 @@
+# Global infrastructure settings.
+# Strategy-specific parameters live in config/strategies/.
+data:
+  default_source: yfinance
+  cache_ttl_hours: 24
+base_currency: USD

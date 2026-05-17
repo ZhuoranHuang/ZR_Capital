@@ -1,0 +1,12 @@
+capital:
+  initial_cash: 100000
+description: 双均线 + RSI 趋势策略，含止损
+name: ma_rsi
+params:
+  ma_long: 60
+  ma_short: 10
+  rsi_window: 14
+  stop_loss: 0.08
+universe:
+  period: 5y
+  ticker: AAPL

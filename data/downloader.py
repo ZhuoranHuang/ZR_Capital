@@ -54,3 +54,12 @@ class YFinanceSource(DataSource):
 
     def download(self, ticker, period, interval='1d'):
         return yf.download(ticker, period=period, interval=interval)
+
+
+_SOURCES = {'yfinance': YFinanceSource}
+
+
+def get_source(name: str) -> DataSource:
+    if name not in _SOURCES:
+        raise ValueError(f"Unknown data source: {name}. Available: {list(_SOURCES)}")
+    return _SOURCES[name]()
