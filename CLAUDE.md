@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ZR Capital is being built as a quantitative trading system. The long-term goal is to grow this codebase into a **professional, world-class, institutional quantitative hedge fund** — not a personal hobby project. Every architectural decision should be evaluated against that bar: would a multi-PM institutional shop accept this design in production?
 
-The project is in early scaffolding stage: only `main.py`, `backtest/`, `strategy/technical/ma_rsi_strategy.py`, and `utils/indicators.py` contain code. Most other top-level dirs (`config/`, `dashboard/`, `data/`, `execution/`, `monitor/`, `portfolio/`, `research/`, `risk/`, `tests/`) are empty placeholders that define the intended architecture. Code comments, log output, and chart labels are in Chinese.
+The project is in early scaffolding stage. Files with real code: `main.py`, `backtest/` (`engine.py`, `metrics.py`), `strategy/technical/ma_rsi_strategy.py`, `utils/indicators.py`, `data/downloader.py`, and `config/loader.py`. Other dirs are placeholders defining intended architecture. Code comments, log output, and chart labels are in Chinese.
 
 ## Vision & roadmap
 
@@ -14,7 +14,7 @@ The buildout is staged from idea generation → portfolio construction → live 
 
 | Phase | Theme | What gets built | Exit criteria |
 |---|---|---|---|
-| 1 | **Basic strategy + backtest + metrics** *(DONE)* | MA+RSI rules, single-asset backtest engine, full metrics report (Sharpe, Calmar, drawdown, win rate, profit factor) | Reproducible backtest on a single ticker with institutional-grade metrics ✅ |
+| 1 | **Basic strategy + backtest + metrics** *(NEEDS REWORK — see Phase 1 Audit section)* | MA+RSI rules, single-asset backtest engine, full metrics report (Sharpe, Calmar, drawdown, win rate, profit factor) | Backtest runs but a 2026-05-21 code audit found look-ahead bias and 4 other issues; results not yet trustworthy ⚠️ |
 | 2 | **Data layer + statistical foundations** *(next)* | `data/` (downloader, cleaner, storage, features, universe, validators), `utils/statistics.py` (ADF/KPSS, correlation, IC/rank-IC, significance testing), unified schema and point-in-time storage | A clean, point-in-time data spine and statistical toolkit usable by every later phase |
 | 3 | **Factor engineering** | Technical, fundamental, and alpha factors built on the data layer; IC / rank-IC analysis, factor decay studies, factor combination logic under `research/factors/` and `research/signals/` | A vetted factor library with documented IC/decay properties feeding strategies and ML |
 | 4 | **Multi-factor models + tree-based ML** | `strategy/ml/tree.py` (XGBoost, LightGBM) as the primary ML track; walk-forward CV, leakage controls, hyperparam tracking; ensembles via `strategy/ml/ensemble.py`; neural models (`neural.py`) optional follow-on | Tree-based models that beat technical baselines net of costs on out-of-sample data |
@@ -80,7 +80,7 @@ Key seam: `get_trade_signal(cross, rsi_value, position, buy_price, current_price
 ## Things to be aware of before editing
 
 - `backtest/engine.py` and `strategy/technical/ma_rsi_strategy.py` both manipulate `sys.path` to add the project root so sibling-package imports resolve when scripts are run directly. Packages have `__init__.py` files, so prefer plain `from strategy.technical... import ...` over re-adding path hacks.
-- `engine.py` defends against `yfinance` returning multi-column frames by checking `hasattr(row['Close'], 'iloc')` on each row — preserve this pattern when modifying the loop, or normalize the dataframe upstream instead.
+- `engine.py` currently works around `yfinance` MultiIndex columns with a per-row `hasattr(row['Close'], 'iloc')` check. The 2026-05-21 audit flagged this as a band-aid (issue #5) — the fix is to flatten columns to single level in `downloader.py`, NOT to preserve this pattern. Remove the hack during the engine rework.
 
 ## Roadmap refinements (agreed)
 
@@ -158,7 +158,7 @@ Integration points across phases:
 
 **Phase 9 (Dashboard):**
 - Embed TradingView Widget (free) for live quotes and heatmaps in our Streamlit dashboard.
-- Consider TradingView Charting Library (paid, enterprise) for professional-grade interactive K-line charts, comparable to broker terminals (Longbridge, Futu, etc. use this library).
+- Consider TradingView Charting Library (paid, enterprise) for professional-grade interactive K-line charts, comparable to professional broker terminals (verify which specific charting library any given broker uses before relying on this).
 
 **Phase 10+ (After institutional setup):**
 - Evaluate TradingView Charting Library commercial license for branded dashboard.
@@ -167,6 +167,57 @@ Integration points across phases:
 - Writing core strategy logic (Pine Script locks you into their platform).
 - Primary backtest engine (data accuracy and execution assumptions are suboptimal).
 - Live trading execution (must go through Longbridge API).
+
+## Cross-sectional analysis (核心方法论)
+
+Cross-sectional analysis is a **core methodology, not optional**. It is a widely-used approach in quantitative investing, grounded in the Fama-French three-factor model (1992) and Jegadeesh-Titman momentum research (1993). We implement it explicitly in our system.
+
+**Key distinction:**
+- **Time-series analysis:** study one stock's history (MA, RSI, etc.) — what Phase 1 did.
+- **Cross-sectional analysis:** at a given time, compare *all* stocks in the universe — rank by factors, select top N%, neutralize by sector/size.
+
+**Phase 3 implementation:**
+- All factors in `research/factors/` must support cross-sectional scoring.
+- Add `research/cross_section/` module with:
+  - Ranking utilities (percentile, z-score, decile).
+  - Sector neutralization.
+  - Market-cap neutralization.
+  - Factor IC (Information Coefficient) computation across the universe.
+
+**Phase 4 implementation:**
+- Multi-factor models combine multiple cross-sectional scores.
+- ML models (XGBoost, LightGBM) trained on cross-sectional features predict *relative ranking*, not absolute price.
+
+**Phase 5 implementation:**
+- Portfolio construction selects top-decile names from cross-sectional scores.
+- Long-short strategies short the bottom decile, long the top decile (cross-sectional alpha).
+
+**Rationale:** most retail quants only do time-series; cross-sectional methods are a major source of documented alpha in the academic literature.
+
+## Phase 3 prerequisite — Engine-strategy decoupling refactor
+
+Before adding any new strategies in Phase 3, **the backtest engine must first be decoupled from specific strategy logic.** Do this as **Phase 3 Step 0**, before any other Phase 3 work.
+
+**Current problem:**
+- `backtest/engine.py:run_backtest()` accepts strategy-specific parameters (`ma_short`, `ma_long`, `rsi_window`) directly.
+- Adding new strategies (Bollinger, Momentum, ML-based) requires modifying the engine.
+- This violates the open-closed principle and blocks Phase 3 expansion.
+
+**Required refactor:**
+1. Define an abstract `Strategy` base class in `strategy/base.py` with:
+   - Abstract method: `generate_signal(data) -> 'buy' | 'sell' | 'hold'`.
+   - Abstract method: `get_name() -> str`.
+2. Refactor `strategy/technical/ma_rsi_strategy.py` to inherit from the `Strategy` base class.
+3. Refactor `backtest/engine.py:run_backtest()` signature:
+   - **Old:** `run_backtest(data, ma_short, ma_long, rsi_window, stop_loss, ...)`.
+   - **New:** `run_backtest(data, strategy: Strategy, initial_cash, stop_loss, ...)`.
+4. Engine calls `strategy.generate_signal(today_data)` instead of `generate_signals(..., ma_short, ...)`.
+5. `main.py` instantiates the strategy object from YAML config and passes it to the engine.
+6. **Verify:** existing MA+RSI backtest produces identical results to baseline commit `cd948ef` (6 trades, $105,353.76 terminal, −21.44% drawdown).
+
+After this refactor, adding new strategies becomes trivial: subclass `Strategy`, no engine changes needed. This is the foundation for Phase 3 (multi-strategy factor research) and Phase 4 (ML strategies).
+
+**Rationale:** separation of concerns; the engine should be strategy-agnostic. This is how mainstream open-source backtest frameworks are structured — zipline, backtrader, and qlib all use this strategy-base-class pattern (verifiable in their public repos).
 
 ## Phase 3 addition — Market regime detection
 
@@ -188,4 +239,38 @@ Add a new module: **`risk/circuit_breaker.py`**.
   - Data source anomalies.
   - Strategy drawdown exceeds historical max + buffer.
 - Requires manual override to resume.
-- **Rationale:** protect capital during black-swan events (e.g., the Oct 2025 $19.3B flash crash); systems without circuit breakers compound losses, systems with them survive.
+- **Rationale:** protect capital during black-swan events (e.g., historical flash crashes and liquidity-vacuum events); systems without circuit breakers compound losses, systems with them survive.
+
+## Phase 1 Code Audit (2026-05-21)
+
+A line-by-line audit of all 6 code files. Conclusion: the Phase 1 backtest result (6 trades, Sharpe -0.41) is NOT trustworthy and must be reproduced after fixing the issues below.
+
+### Critical issues (must fix before trusting any backtest)
+1. **engine.py — look-ahead bias.** Signal computed from day i's data, fill executed at day i's CLOSE. Reality: you cannot trade at a close price that is only known at close. Fix: signal on day i -> fill at day i+1 OPEN.
+2. **engine.py — bare `except:` swallows errors** and may reuse a stale `price` value, hiding bugs. Fix: remove bare except, handle NaN and boundary rows explicitly.
+3. **indicators.py — RSI uses simple moving average, not Wilder's smoothing** (the 1978 standard). Result differs from every mainstream platform (TradingView etc.). Fix: use `ewm(alpha=1/window, adjust=False)`.
+4. **indicators.py — RSI division-by-zero unhandled.** When avg_loss=0 (sustained rally) it produces NaN. Fix: RSI=100 when avg_loss=0.
+5. **downloader.py + engine.py — MultiIndex band-aid.** yfinance 1.3.0 returns MultiIndex columns even for one ticker; engine hacks around it with `.iloc[0]`, which silently breaks for multiple tickers. Fix: flatten columns to single level in downloader.
+
+### Minor issues (fix when convenient)
+6. **metrics.py — profit_factor is mislabeled.** The function named `profit_factor` actually computes mean-profit / mean-loss (payoff ratio). True profit factor = sum(profits)/sum(losses). The earlier "3.01" was payoff ratio, not profit factor.
+7. **downloader.py — make adjustment explicit.** yfinance 1.3.0 defaults auto_adjust=True (verified), but relying on the default is not reproducible. Write auto_adjust=True explicitly.
+8. **metrics.py — risk-free rate hardcoded at 0.04**, should be read from config.
+
+### Deferred (design simplifications, later phases)
+9. All-in / all-out sizing -> Phase 5 position management.
+10. No transaction cost / slippage -> execution layer.
+11. Stop-loss uses close price, not intrabar -> Phase 6 risk.
+
+### Verified correct (do not change)
+- moving_average: rolling() correct, no look-ahead.
+- cross_signal: golden/death cross via diff(), event definition correct.
+- max_drawdown, total_return, annualized_return, sharpe_ratio, calmar_ratio, win_rate: algorithms correct.
+- DataSource abstract base class design: correct, matches Qlib/Backtrader patterns.
+
+### Rework order (this replaces the vague "Phase 2 next" framing)
+Step 1: fix indicators.py (RSI Wilder + div-zero).
+Step 2: fix downloader.py (explicit auto_adjust, flatten MultiIndex, empty-data check).
+Step 3: refactor engine.py (look-ahead fix: signal day i -> fill day i+1 open; remove MultiIndex band-aid; fix exception handling; optionally do the Strategy-base-class decoupling here).
+Step 4: fix metrics.py (profit_factor naming, risk-free from config).
+Step 5: re-run backtest, compare before/after, document the new (trustworthy) numbers.
