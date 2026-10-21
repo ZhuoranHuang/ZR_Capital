@@ -1,0 +1,35 @@
+# 事件检测器参数（STRATEGY_V1 第 1 层）。全部是待测参数（CLAUDE.md 规则 11），不是定论。
+detectors:
+  E1:   # 通道回踩
+    enabled: true
+    eps: 0.001            # |low − 中轨| / 中轨
+  E2:   # 开盘区间突破
+    enabled: true
+    range_min: 30         # 也测 15
+  E3:   # VWAP 失而复得
+    enabled: true
+    min_bars: 5           # 站回前至少在另一侧的 bar 数
+  E4:   # 长均线 + RSI 顺势交叉
+    enabled: true
+    ma_n: 120
+    slope_n: 10
+    rsi_n: 14
+    rsi_low: 30
+    rsi_high: 70
+  E5:   # CUSUM
+    enabled: true
+    k: 3.0
+    sigma_window: 60
+  E6:   # 布林带挤压后扩张
+    enabled: true
+    lookback_days: 20
+    low_pct: 0.1
+    expand: 0.05
+  E7:   # 日内动量
+    enabled: true
+    entry_minute: 930     # 15:30 ET = 15*60+30
+    min_abs_ret: 0.0
+  E8:   # VWAP 均值回归
+    enabled: true
+    k: 2.0
+    require_gex: false    # 无期权 OI 数据时不门控，结果标注 ungated

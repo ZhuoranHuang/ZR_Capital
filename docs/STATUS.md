@@ -1,10 +1,20 @@
 # 状态
 
-更新：2026-10-22 07:40 SGT · main
+更新：2026-10-22 08:45 SGT · main
 
 ## 阶段
 
-W1 收尾完成，W2 开始（ThetaData 接入 `feat/thetadata`；事件与标签 `feat/w2-events`）。标的收敛为 **SPY / QQQ / MU**（D-016）。
+W1 收尾完成；W2 第一步（事件 × 标签）已跑完三标的；ThetaData 代码就绪、验证等负责人登录。标的收敛为 **SPY / QQQ / MU**（D-016）。
+
+## W2 第一步结果（`docs/research/EVENT_LABEL_TABLE.md`，2023-10-02～2026-10-21，三标的 24 秒）
+
+- 代码：`zr/features/bars.py`（2/5 分钟聚合、成交量 bar）、`zr/features/features.py`（23 个正股特征，逐一无前视测试）、`zr/research/{events,labels,run}.py`、`config/{events,research_w2}.yaml`；96 个测试。
+- 触发频率（次/日，SPY/QQQ/MU）：E1 153/137/64（eps 太松）、E2 0.54/0.49/0.45、E3 4.4/4.2/3.9、E4 0.36/0.33/0.35、E5 35/34/34、E6 0.31/0.34/0.39、E7 ≈1、E8 9.8/9.3/8.8。
+- 原始成功率（hit_rate）全部在 0.42–0.54 之间；没有一个检测器在三标的上稳定 >0.5。
+- 响应曲线见顶：E2 MU 15 分钟（+4.5 bp）、E3 MU 10 / SPY 15 分钟、E4 MU 5 分钟、E5 1–3 分钟即见顶后转负、E6 MU 10 分钟、E7 5–10 分钟、E8 QQQ 30 / SPY 15 分钟。
+- 扣费后近似 P&L（单张 ATM、delta 0.5、D-013 费用 + 2 tick 点差）几乎全为负（−4～−13 USD/张）；唯一为正的是 E4 MU H=15/30（+1.9 / +4.9 USD，样本 274，不可信）。
+- R-004：H=30 vs H=5 无一致方向，交易史「持仓越长越差」未在事件标签上复现。R-005：按离场时长分桶的差异是选择偏差，不作证据。
+- 结论：当前八个检测器在正股层面都没有可覆盖期权费用的 alpha；下一步是参数扫描（E1 eps、E2 15 分钟版、E5 k）、E8 加 gamma 门控（需 ThetaData OI）、以及元标签而不是单检测器。
 
 ## W1 收尾（2026-10-22）
 
@@ -25,5 +35,5 @@ W1 收尾完成，W2 开始（ThetaData 接入 `feat/thetadata`；事件与标�
 ## 下一步
 
 1. `feat/thetadata`：读官方文档 → 装 JDK 21 + ThetaTerminal → `zr/data/thetadata.py` → SPY 2026-09 验证 → 停下由负责人决定全量。
-2. `feat/w2-events`：bars/features/events/labels/run → `docs/research/EVENT_LABEL_TABLE.md`。
+2. W2 第二步：参数扫描 + 元标签特征表（事件 × 特征 × 标签）；E8 门控等 OI。
 3. 10-22 13:20 UTC timer 启动的录制器应写到 `~/zr_data/`（新 unit 已装）；healthcheck 盘中应无 stale 报警。

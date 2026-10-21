@@ -1,0 +1,19 @@
+# W2 第一步：检测器 × 参数 × 标的 × H。全部是待测参数。
+symbols: [SPY.US, QQQ.US, MU.US]
+start: 2023-10-02
+end: 2026-10-21
+
+labels:
+  horizons: [3, 5, 10, 15, 30]
+  k: 1.0                 # 障碍 = k × σ_H
+  sigma_window: 60       # 1 分钟对数收益滚动 std 窗口
+response_horizons: [1, 2, 3, 5, 10, 15, 30]
+
+# 扣费后近似（R-004）：单张 ATM 期权 P&L ≈ r_signed × S × 100 × delta − 往返费用 − 点差
+fee_model:
+  delta: 0.5
+  premium_pct_of_spot: 0.005   # 假设 0–1DTE ATM 权利金 ≈ 0.5% 现价，用于 tick 与 SEC 费
+  spread_ticks: 2
+
+detectors_config: config/events.yaml
+out_dir: docs/research

@@ -1,0 +1,123 @@
+"""1 分钟 K 的加载、聚合（2/5 分钟）与成交量 bar。
+
+全部按美东交易日分组，不跨日。
+
+输入统一为 DataFrame，索引 `ts`（UTC tz-aware、升序），
+列 open/high/low/close/volume（可含 turnover/session）。
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import numpy as np
+import pandas as pd
+
+ET = ZoneInfo("America/New_York")
+OHLCV_AGG = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+
+
+def load_bars(
+    root: Path,
+    und: str,
+    start: dt.date | None = None,
+    end: dt.date | None = None,
+    intraday_only: bool = True,
+) -> pd.DataFrame:
+    """读取 bars_1m/underlying=XXX/year=*/bars.parquet。
+
+    返回以 ts(UTC) 为索引的升序 DataFrame。
+    """
+    files = sorted((root / "bars_1m" / f"underlying={und}").glob("year=*/bars.parquet"))
+    if not files:
+        raise FileNotFoundError(f"没有 {und} 的 1 分钟 K：{root / 'bars_1m'}")
+    df = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
+    if intraday_only and "session" in df:
+        df = df[df["session"] == "Intraday"]
+    df = df.set_index("ts").sort_index()
+    df.index = df.index.tz_convert("UTC")
+    if start is not None or end is not None:
+        d = et_date(df.index)
+        if start is not None:
+            df = df[d >= start]
+        if end is not None:
+            df = df[et_date(df.index) <= end]
+    return df[~df.index.duplicated(keep="last")]
+
+
+def et_date(index: pd.DatetimeIndex) -> np.ndarray:
+    return index.tz_convert(ET).date
+
+
+def resample_bars(df: pd.DataFrame, rule: str) -> pd.DataFrame:
+    """按美东日分组后 resample（label=left，bar 时间戳 = 开盘时刻），不跨日。
+
+    rule 如 "2min" / "5min"。
+    """
+    parts = []
+    for _, g in df.groupby(et_date(df.index)):
+        r = g.resample(rule, label="left", closed="left", origin="start").agg(OHLCV_AGG)
+        parts.append(r.dropna(subset=["open"]))
+    out = pd.concat(parts)
+    out.index.name = "ts"
+    return out
+
+
+def daily_volume(df: pd.DataFrame) -> pd.Series:
+    s = df["volume"].groupby(et_date(df.index)).sum()
+    s.index = pd.Index(s.index, name="date")
+    return s
+
+
+def volume_threshold(
+    df: pd.DataFrame, lookback_days: int = 20, divisor: float = 100.0
+) -> pd.Series:
+    """每个交易日的成交量 bar 阈值 = 之前 lookback_days 个交易日日均量 / divisor。
+
+    不含当日，无前视。
+    """
+    dv = daily_volume(df)
+    thr = dv.shift(1).rolling(lookback_days, min_periods=lookback_days).mean() / divisor
+    thr.name = "threshold"
+    return thr
+
+
+def volume_bars(df: pd.DataFrame, threshold: float | pd.Series) -> pd.DataFrame:
+    """成交量 bar：累计成交量达到阈值即收一根；日内重置。
+
+    threshold 可为标量或按日 Series（index=date）。
+    """
+    rows = []
+    for day, g in df.groupby(et_date(df.index)):
+        thr = float(threshold) if np.isscalar(threshold) else threshold.get(day, np.nan)
+        if not np.isfinite(thr) or thr <= 0:
+            continue
+        cum, o, h, lo, n, t_open = 0.0, None, -np.inf, np.inf, 0, None
+        for ts, r in zip(
+            g.index,
+            g[["open", "high", "low", "close", "volume"]].itertuples(index=False),
+            strict=True,
+        ):
+            if o is None:
+                o, t_open = r.open, ts
+            h, lo = max(h, r.high), min(lo, r.low)
+            cum += r.volume
+            n += 1
+            if cum >= thr:
+                rows.append(
+                    {
+                        "ts_open": t_open,
+                        "ts_close": ts,
+                        "open": o,
+                        "high": h,
+                        "low": lo,
+                        "close": r.close,
+                        "volume": cum,
+                        "n_bars": n,
+                        "date": day,
+                    }
+                )
+                cum, o, h, lo, n, t_open = 0.0, None, -np.inf, np.inf, 0, None
+    return pd.DataFrame(rows)
