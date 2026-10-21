@@ -20,10 +20,12 @@ import traceback
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from zr.broker.serialize import to_json, to_py
 from zr.config import get_settings
 
+ET = ZoneInfo("America/New_York")
 PAGE_SLEEP_S = 0.15
 MAX_PAGES = 30
 SUBSCRIBE_SECONDS = 20
@@ -105,7 +107,9 @@ def _earliest_minute_bar(qctx: Any, symbol: str, period: Any, adjust: Any, sessi
 
 
 def _nearest_atm_call(qctx: Any, symbol: str) -> dict[str, Any]:
-    expiries = qctx.option_chain_expiry_date_list(symbol)
+    # 已观测（2026-10-21）：expiry_date_list 含已过期日期，必须过滤 >= 今日
+    today = dt.datetime.now(dt.UTC).astimezone(ET).date()
+    expiries = [d for d in qctx.option_chain_expiry_date_list(symbol) if d >= today]
     expiry = sorted(expiries)[0]
     chain = qctx.option_chain_info_by_date(symbol, expiry)
     spot = float(qctx.quote([symbol])[0].last_done)
@@ -162,7 +166,9 @@ def _subscribe_probe(qctx: Any, symbols: list[str]) -> dict[str, Any]:
     }
 
 
-def run_quote_checks(report: Report, qctx: Any, symbols: list[str]) -> dict[str, Any] | None:
+def run_quote_checks(
+    report: Report, qctx: Any, symbols: list[str], skip_bars: bool = False
+) -> dict[str, Any] | None:
     from longport.openapi import AdjustType, Market, Period, TradeSessions
 
     report.section("行情包与交易日")
@@ -182,7 +188,9 @@ def run_quote_checks(report: Report, qctx: Any, symbols: list[str]) -> dict[str,
         _run(report, f"depth({s})", lambda s=s: qctx.depth(s))
 
     report.section("1 分钟 bar 可回溯起点")
-    for s in symbols:
+    if skip_bars:
+        report.lines.append("（--skip-bars，跳过翻页；结果见上一次运行）\n")
+    for s in [] if skip_bars else symbols:
         _run(
             report,
             f"earliest_minute_bar({s})",
@@ -262,6 +270,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="长桥 API 只读核验")
     parser.add_argument("--out", default="docs/API_FACTS.md")
     parser.add_argument("--skip-trade", action="store_true", help="不创建 TradeContext")
+    parser.add_argument("--skip-bars", action="store_true", help="跳过 1 分钟 bar 翻页")
     args = parser.parse_args(argv)
 
     settings = get_settings()
@@ -279,7 +288,7 @@ def main(argv: list[str] | None = None) -> int:
     atm = None
     if qctx is not None:
         try:
-            atm = run_quote_checks(report, qctx, symbols)
+            atm = run_quote_checks(report, qctx, symbols, skip_bars=args.skip_bars)
         except Exception as exc:  # noqa: BLE001
             report.fail("run_quote_checks 外层", exc)
             report.lines.append(f"```\n{traceback.format_exc()}\n```\n")
