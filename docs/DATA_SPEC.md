@@ -15,9 +15,10 @@
 
 - DTE ≤ `max_dte`、行权价范围现价 ± `strike_band_pct`，值取自 `config/universe.yaml`（当前 SPY/QQQ ±3%，MU/AMD ±8%，DTE ≤ 5）
 - 范围：2024-01-01 至今
-- 路径：`options_nbbo/underlying=XXX/date=YYYY-MM-DD/*.parquet`
-- 列：`ts` · `option_symbol` · `expiry`(date) · `strike`(float64) · `right`(C/P) · `bid` `ask` `bid_size` `ask_size` · `last` · `volume` · `oi`
-- Loader：`zr/data/thetadata.py`（Task 1.5，未写）
+- 路径：`options_1m/underlying=XXX/date=YYYY-MM-DD/{quotes,ohlc,oi}.parquet`（`zr/data/thetadata.py`，`manifest.jsonl` 记每日耗时与行数）
+- 列（quotes）：`ts`(UTC) · `trade_date` · `symbol`(长桥格式) · `underlying` · `expiry` · `strike` · `right`(call/put) · `bid` `bid_size` `bid_exchange` `bid_condition` · `ask` `ask_size` `ask_exchange` `ask_condition`；ohlc：`open high low close volume count vwap`；oi：`open_interest`
+- 逐笔：`options_ticks/underlying=XXX/date=YYYY-MM-DD/<contract>_<HHMM>-<HHMM>.parquet`（`ticks_window`，事件前后 ±15 分钟）
+- 时间：Theta 返回美东无时区时间戳，入库统一转 UTC；1m 的 quote 为该分钟末次 NBBO，ohlc 时间戳为 bar 开盘时刻
 
 ## 3. 自建录制器输出（`zr/data/recorder.py`）
 

@@ -20,7 +20,7 @@ W1 收尾完成，W2 开始（ThetaData 接入 `feat/thetadata`；事件与标�
 1. 账户净资产 ≈ 0（上轮发现），实盘前需入金。
 2. 1 分钟 K 只能回溯到 2023-10-02；2023-01～09 若需要另找源。
 3. D-008 蒙特卡洛脚本未入库（R-002）。
-4. ThetaData：终端首次登录由负责人在本机终端完成（见 `feat/thetadata` 的 STATUS 更新）。
+4. **ThetaData 首次登录（阻塞验证）**：JDK 21 与 `ThetaTerminalv3.jar` 已就位（`~/thetadata/`，无需 sudo）。请负责人在自己的终端运行 `bash scripts/run_theta_terminal.sh` 并登录（或 `--api-key`）。登录后我跑 SPY 2026-09 验证：`uv run python -m zr.data.thetadata --symbols SPY.US --start 2026-09-01 --end 2026-09-30`，再 `uv run python -m zr.data.thetadata --symbols SPY.US --start 2026-10-21 --end 2026-10-21` + `uv run python -m zr.data.theta_vs_recorder --date 2026-10-21`，结果写 DATA_INVENTORY 后停下由负责人决定全量。
 
 ## 下一步
 

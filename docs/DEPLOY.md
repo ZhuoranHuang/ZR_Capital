@@ -89,6 +89,21 @@ zrproxy uv run python -c "import longport; print('ok')"
 
 恢复：`launchctl unload ~/Library/LaunchAgents/com.zr.socks.plist`；删掉 ssh config 的 `Host github.com` 块；`git remote set-url origin https://github.com/ZhuoranHuang/ZR_Capital.git`。
 
+## ThetaData（Mac 本地）
+
+Options Standard 档：tick 级，2016 起，账户并发 4（本项目用 2）。来源 https://thetadata.net/docs/Articles/Getting-Started/Subscriptions.html（2026-10-22）。
+
+| 组件 | 位置 | 说明 |
+|---|---|---|
+| Temurin JDK 21 | `~/thetadata/jdk/`（用户目录，无需 sudo） | `~/thetadata/jdk/Contents/Home/bin/java -version` → 21.0.12.1 |
+| `ThetaTerminalv3.jar` | `~/thetadata/` | 来自 https://downloads.thetadata.us/ThetaTerminalv3.jar，启动时自动更新 |
+| `scripts/run_theta_terminal.sh` | 仓库 | 启动终端（REST `127.0.0.1:25503`），默认经 SOCKS 跳板（`THETA_VIA_SOCKS=0` 关闭）；日志 `~/thetadata/logs/` |
+| `deploy/launchd/com.zr.theta-terminal.plist.example` | 仓库 | 常驻示例，**未安装**；需先用 API key 方式认证（`~/thetadata/.env` 的 `THETADATA_API_KEY`，负责人自己写） |
+| `zr/data/thetadata.py` | 仓库 | `bulk_quotes_1m` / `ticks_window`；CLI `uv run python -m zr.data.thetadata --start 2026-09-01 --end 2026-09-30 --symbols SPY.US` |
+| `zr/data/theta_vs_recorder.py` | 仓库 | 与录制器同一合约同一分钟 bid/ask 对比 |
+
+首次使用：负责人在自己的终端里运行 `bash scripts/run_theta_terminal.sh` 并按提示登录（或 `--api-key`）；之后 `curl "http://127.0.0.1:25503/v3/option/list/expirations?symbol=SPY&format=json" | head -c 200` 有返回即可。macOS Gatekeeper 若拦截 jar，按文档在「隐私与安全性」里 Open Anyway。
+
 ## 迁移到新加坡（ap-southeast-1）
 
 1. Lightsail 控制台 → 实例 → 快照 → 创建快照。

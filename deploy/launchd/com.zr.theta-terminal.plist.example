@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 示例：Theta Terminal 常驻（先不安装）。前提：已用 API key 方式完成认证（~/thetadata/.env 里 THETADATA_API_KEY，
+     由负责人自己写入），否则无人值守启动会卡在登录。
+     安装：cp deploy/launchd/com.zr.theta-terminal.plist.example ~/Library/LaunchAgents/com.zr.theta-terminal.plist
+           launchctl load ~/Library/LaunchAgents/com.zr.theta-terminal.plist -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.zr.theta-terminal</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/zhuoranhuang/code/ZR_Capital/scripts/run_theta_terminal.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/zhuoranhuang/thetadata</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+        <key>THETA_VIA_SOCKS</key>
+        <string>1</string>
+    </dict>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>StandardOutPath</key>
+    <string>/tmp/zr-theta-terminal.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/zr-theta-terminal.log</string>
+</dict>
+</plist>
