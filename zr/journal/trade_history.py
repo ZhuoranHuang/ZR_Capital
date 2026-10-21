@@ -136,6 +136,12 @@ def fetch(
         detail = tctx.order_detail(oid)
         charges.extend(_flatten_charges(oid, detail))
 
+    # 已观测（2026-10-21）：history_orders 的 msg 对被拒订单为空，拒绝原因只在 order_detail.msg
+    for oid, row in orders.items():
+        if row.get("status") == "Rejected":
+            throttle.wait()
+            row["reject_reason"] = to_py(tctx.order_detail(oid)).get("msg")
+
     return (
         pd.DataFrame(list(orders.values())),
         pd.DataFrame(list(executions.values())),

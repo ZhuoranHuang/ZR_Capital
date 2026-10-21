@@ -254,9 +254,12 @@ def build_report(root: Path) -> str:
         pd.to_datetime(rej["expiry"]) - rej["submitted_et"].dt.tz_localize(None).dt.normalize()
     ).dt.days
     rej["time_et"] = rej["submitted_et"].dt.strftime("%Y-%m-%d %H:%M:%S")
+    # reject_reason 由 trade_history.py 从 order_detail 取；旧数据没有这列时回退到 msg
+    rej["reason"] = rej["reject_reason"] if "reject_reason" in rej else rej["msg"]
+    rej["reason"] = rej["reason"].fillna("").replace("", "(空)")
     rej["after_11_on_expiry"] = (rej["dte"] == 0) & (rej["submitted_et"].dt.hour >= 11)
     rtab = rej[
-        ["time_et", "symbol", "side", "quantity", "dte", "after_11_on_expiry", "msg"]
+        ["time_et", "symbol", "side", "quantity", "dte", "after_11_on_expiry", "reason"]
     ].sort_values("time_et")
     out += [
         "## 被拒订单",
@@ -268,7 +271,7 @@ def build_report(root: Path) -> str:
         "",
         "### 拒绝原因计数",
         "",
-        md(rej["msg"].value_counts().rename_axis("msg").reset_index(name="count")),
+        md(rej["reason"].value_counts().rename_axis("reason").reset_index(name="count")),
         "",
     ]
     can = orders[orders["status"] == "Canceled"]
