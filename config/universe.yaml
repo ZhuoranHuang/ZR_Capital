@@ -1,0 +1,24 @@
+# 标的池。规范见 docs/UNIVERSE_SPEC.md；改值需在 docs/DECISIONS.md 追加记录。
+subscription_cap: 450
+
+underlyings:
+  SPY.US:
+    n_expiries: 2
+    strikes_each_side: 10
+    strike_band_pct: 0.03
+    max_dte: 5
+  QQQ.US:
+    n_expiries: 2
+    strikes_each_side: 10
+    strike_band_pct: 0.03
+    max_dte: 5
+  MU.US:
+    n_expiries: 2
+    strikes_each_side: 8
+    strike_band_pct: 0.08
+    max_dte: 5
+  AMD.US:
+    n_expiries: 2
+    strikes_each_side: 8
+    strike_band_pct: 0.08
+    max_dte: 5

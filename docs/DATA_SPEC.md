@@ -4,7 +4,7 @@
 
 ## 1. 正股 1 分钟 bar
 
-- 标的：SPY、QQQ、MU、AMD（`ZR_SYMBOLS`）
+- 标的：`config/universe.yaml`（见 `docs/UNIVERSE_SPEC.md`），`ZR_SYMBOLS` 只能选其子集
 - 范围：2023-01-01 至今
 - 来源：长桥 `history_candlesticks_by_offset(symbol, Period.Min_1, AdjustType.NoAdjust, forward, count, time, TradeSessions)`；实际可回溯深度由 `zr/ops/api_facts.py` 核验后写入 `docs/API_FACTS.md`
 - 路径：`bars_1m/underlying=XXX/date=YYYY-MM-DD/*.parquet`
@@ -12,8 +12,7 @@
 
 ## 2. 期权 NBBO（ThetaData Options Standard）
 
-- DTE ≤ 5
-- 行权价范围：SPY/QQQ 现价 ±3%，MU/AMD 现价 ±8%
+- DTE ≤ `max_dte`、行权价范围现价 ± `strike_band_pct`，值取自 `config/universe.yaml`（当前 SPY/QQQ ±3%，MU/AMD ±8%，DTE ≤ 5）
 - 范围：2024-01-01 至今
 - 路径：`options_nbbo/underlying=XXX/date=YYYY-MM-DD/*.parquet`
 - 列：`ts` · `option_symbol` · `expiry`(date) · `strike`(float64) · `right`(C/P) · `bid` `ask` `bid_size` `ask_size` · `last` · `volume` · `oi`

@@ -4,13 +4,13 @@ import re
 import pyarrow.parquet as pq
 
 from zr.data.recorder import (
-    ChainRule,
     ParquetSink,
     StrikeInfo,
     build_subscription_set,
     diff_subscriptions,
     underlying_of,
 )
+from zr.data.universe import ChainRule
 
 TODAY = dt.date(2026, 10, 21)
 _SYM_RE = re.compile(r"^(?P<base>[A-Z]+)(?P<exp>\d{6})[CP](?P<strike>\d+)\.US$")
@@ -41,7 +41,7 @@ def test_subscription_set_strike_window_and_expiries():
     exps = [TODAY + dt.timedelta(days=k) for k in (-1, 0, 1, 2)]
     chains = {"SPY.US": _chain("SPY", 500.0, 30, exps)}
     rules = {"SPY.US": ChainRule(n_expiries=2, strikes_each_side=10)}
-    subs = build_subscription_set(chains, {"SPY.US": 500.0}, TODAY, rules)
+    subs = build_subscription_set(chains, {"SPY.US": 500.0}, TODAY, rules, cap=450)
     assert subs[0] == "SPY.US"
     opts = subs[1:]
     # 2 个到期日 × 21 档 × call+put

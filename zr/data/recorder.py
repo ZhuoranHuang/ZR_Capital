@@ -34,14 +34,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from zr.broker.serialize import to_json
-from zr.config import get_settings
+from zr.data.universe import ChainRule, load_universe
 
 log = logging.getLogger("zr.recorder")
 ET = ZoneInfo("America/New_York")
 
 OPTION_RE = re.compile(r"^(?P<underlying>[A-Z.\-]+?)\d{6}[CP]\d+\.US$")
 KINDS = ("quote", "depth", "trade")
-SUBSCRIPTION_CAP = 450
 
 
 # ---------- 订阅集构造（纯函数） ----------
@@ -54,21 +53,9 @@ class StrikeInfo:
     put: str
 
 
-@dataclass(frozen=True)
-class ChainRule:
-    n_expiries: int
-    strikes_each_side: int
-
-
-# 规则来自任务书；SPY/QQQ 今日与次日到期 ±10 档，MU/AMD 最近 2 个到期 ±8 档。
-# 两者都等价于「≥今日的最近 n_expiries 个到期日」，差别只在档数。
-DEFAULT_RULES: dict[str, ChainRule] = {
-    "SPY.US": ChainRule(2, 10),
-    "QQQ.US": ChainRule(2, 10),
-    "MU.US": ChainRule(2, 8),
-    "AMD.US": ChainRule(2, 8),
-}
-
+# 规则（ChainRule）来自 config/universe.yaml，见 docs/UNIVERSE_SPEC.md。
+# SPY/QQQ「今日与次日到期」与 MU/AMD「最近 2 个到期」都等价于
+# 「≥今日的最近 n_expiries 个到期日」，差别只在档数。
 Chain = dict[dt.date, list[StrikeInfo]]
 
 
@@ -103,11 +90,10 @@ def build_subscription_set(
     chains: dict[str, Chain],
     spots: dict[str, float],
     today: dt.date,
-    rules: dict[str, ChainRule] | None = None,
-    cap: int = SUBSCRIPTION_CAP,
+    rules: dict[str, ChainRule],
+    cap: int,
 ) -> list[str]:
     """正股永远保留；期权按距 ATM 由远及近裁剪到 cap。"""
-    rules = rules or DEFAULT_RULES
     underlyings = list(rules)
     candidates: list[tuple[float, str]] = []
     for u in underlyings:
@@ -285,14 +271,15 @@ class Recorder:
         self,
         qctx: Any,
         sink: ParquetSink,
-        underlyings: list[str],
-        rules: dict[str, ChainRule] | None = None,
+        rules: dict[str, ChainRule],
+        cap: int,
         resub_interval_s: float = 300.0,
     ) -> None:
         self.qctx = qctx
         self.sink = sink
-        self.underlyings = underlyings
-        self.rules = rules or {u: DEFAULT_RULES[u] for u in underlyings if u in DEFAULT_RULES}
+        self.underlyings = list(rules)
+        self.rules = rules
+        self.cap = cap
         self.resub_interval_s = resub_interval_s
         self.current: set[str] = set()
         self.stats: dict[str, SymbolStats] = defaultdict(SymbolStats)
@@ -343,7 +330,7 @@ class Recorder:
         from longport.openapi import SubType
 
         chains, spots = self.fetch_chains(today)
-        desired = set(build_subscription_set(chains, spots, today, self.rules))
+        desired = set(build_subscription_set(chains, spots, today, self.rules, self.cap))
         add, remove = diff_subscriptions(self.current, desired)
         sub_types = [SubType.Quote, SubType.Depth, SubType.Trade]
         if remove:
@@ -417,14 +404,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+    from zr.config import get_settings
+
     settings = get_settings()
-    underlyings = settings.symbols
+    uni = load_universe()
+    underlyings = uni.symbols
+    rules = uni.chain_rules()
     today = dt.datetime.now(ET).date()
 
     if args.dry_run:
         chains, spots = _fake_chains(today, underlyings)
-        subs = build_subscription_set(chains, spots, today)
-        print(f"订阅集 {len(subs)} 个（上限 {SUBSCRIPTION_CAP}）")
+        subs = build_subscription_set(chains, spots, today, rules, uni.subscription_cap)
+        print(f"订阅集 {len(subs)} 个（上限 {uni.subscription_cap}）")
         by_und: dict[str, int] = defaultdict(int)
         for s in subs:
             by_und[underlying_of(s)] += 1
@@ -436,7 +427,7 @@ def main(argv: list[str] | None = None) -> int:
 
     hh, mm = (int(x) for x in args.until.split(":"))
     sink = ParquetSink(settings.zr_data_root / "recorder")
-    rec = Recorder(make_quote_ctx(), sink, underlyings)
+    rec = Recorder(make_quote_ctx(), sink, rules, uni.subscription_cap)
     rec.run(until_et=dt.time(hh, mm), qa_dir=Path("docs/recorder_qa"))
     return 0
 
