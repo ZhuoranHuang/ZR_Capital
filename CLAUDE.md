@@ -45,6 +45,8 @@ uv run pytest -q
 - SDK 返回的 datetime 为 naive，值是 UTC。
 - `trading_days(Market.US, begin, end)` 返回 `MarketTradingDays{trading_days, half_trading_days}`。
 - 期权 1 分钟 K：`candlesticks` 与 `history_candlesticks_by_offset` 都可用。
+- 一次 `subscribe` 308 个代码 × Quote/Depth/Trade 正常；一分钟内反复订阅大量期权会触发 `code=301607 Too many option securities request within one minute`。
+- systemd：`EnvironmentFile` 覆盖 `Environment=`，服务里的 `ZR_DATA_ROOT` 必须写在 `ExecStart=/usr/bin/env ...` 上。
 
 ## 运行环境
 

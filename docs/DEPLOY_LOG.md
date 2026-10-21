@@ -31,3 +31,6 @@
 - 18:45 UTC 启动三个 timer；`universe` 手动跑一次 → `~/zr_data/universe/universe_2026-10-21.json`（308 订阅）；`healthcheck` 手动跑一次正确报警（当时录制器未启动）。
 - 18:46 UTC `systemctl start zr-recorder.service`，跑到 16:05 ET 自动退出。
 - 内存：bootstrap 后 used 466 MB / 1906，swap 2 GB 基本未用。
+- 18:47–18:55 UTC 录制器启动后 `~/zr_data/recorder` 无文件、healthcheck 报警。诊断：标准脚本订阅 308×3 在 10 秒收到 5545 条，说明推送正常；真实原因是 systemd `EnvironmentFile`（.env 的 `ZR_DATA_ROOT=./data_store`）覆盖了 `Environment=ZR_DATA_ROOT`，数据写到了 `~/ZR_Capital/data_store/recorder/`（8 分钟 300 个文件 5.6 MB）。修复：unit 改为 `ExecStart=/usr/bin/env ZR_DATA_ROOT=... uv run ...`；重新 deploy 后 rsync 旧文件到 `~/zr_data/recorder/`（原文件保留）。
+- 诊断中发现：一分钟内重复订阅大量期权触发 `OpenApiException code=301607 Too many option securities request within one minute`；录制器每 5 分钟只订阅差集，正常不会触发。
+- 录制器进程 RSS 约 183 MB。

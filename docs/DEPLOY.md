@@ -73,4 +73,5 @@ ssh zr 'cd ZR_Capital && ZR_DATA_ROOT=~/zr_data ~/.local/bin/uv run python -m zr
 
 - `zr-recorder.timer` 13:20 UTC 在夏令时是 09:20 ET、冬令时 08:20 ET，程序内部用 `America/New_York` 等到 09:25 再订阅，所以 DST 切换不需要改 timer。
 - healthcheck 不查交易日历，美股假日会误报一次。
+- systemd 的 `EnvironmentFile`（.env）会覆盖 `Environment=`；服务里 `ZR_DATA_ROOT` 必须放在 `ExecStart=/usr/bin/env ZR_DATA_ROOT=... ` 上，不要移回 `Environment=`。
 - 2 GB 内存：录制器缓冲 5000 条 / 30 秒 flush，实测内存见 `docs/DEPLOY_LOG.md`。

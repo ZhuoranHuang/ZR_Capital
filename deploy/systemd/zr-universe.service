@@ -8,7 +8,7 @@ User=ubuntu
 WorkingDirectory=/home/ubuntu/ZR_Capital
 EnvironmentFile=/home/ubuntu/ZR_Capital/.env
 Environment=HOME=/home/ubuntu
-Environment=ZR_DATA_ROOT=/home/ubuntu/zr_data
-ExecStart=/home/ubuntu/.local/bin/uv run python -m zr.data.universe
+# 见 zr-recorder.service：ZR_DATA_ROOT 必须放命令行，否则被 .env 覆盖
+ExecStart=/usr/bin/env ZR_DATA_ROOT=/home/ubuntu/zr_data /home/ubuntu/.local/bin/uv run python -m zr.data.universe
 StandardOutput=journal
 StandardError=journal
