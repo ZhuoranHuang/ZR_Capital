@@ -35,11 +35,11 @@ W1 数据层收尾。费用模型已用真实成交逐项验证为精确；交�
 
 - **SPY 最早 2023-10-02 08:00 UTC**（04:00 ET 盘前）；780 页 779,200 根，去重后 747,019 行（2023: 62,400 / 2024: 251,460 / 2025: 239,460 / 2026: 193,699）；约 9.5 分钟
 - 服务端在此之前不再返回数据（`stop_reason=no_progress`），即长桥 1 分钟 K 回溯约 2 年；DATA_SPEC 的"2023-01 至今"改为"2023-10 至今"，2023-01～09 若需要只能靠其他数据源
-- QQQ / MU / AMD 排队运行中（19:28 UTC 起），完成后重新生成 `docs/DATA_INVENTORY.md`
+- QQQ、MU 已完成，最早同为 **2023-10-02 08:00 UTC**（各 747k 行）；AMD 运行中（19:46 UTC 到 2026-08-25）。`docs/DATA_INVENTORY.md` 为当前快照；收盘任务会在 VPS 重新生成到 `~/zr_data/reports/DATA_INVENTORY.md`
 
 ## 录制与同步
 
-- 10-21 录制器 14:46 ET 起一直是同一进程（NRestarts=0），**全程写到 `~/ZR_Capital/data_store/`**：18:52 的 deploy 因 VPS 工作区脏文件静默失败，新 unit 没装上（DEPLOY_LOG 有更正）。已手动装好新 unit 并验证环境变量生效；16:05 ET 收盘后把 `data_store/recorder*` 并入 `~/zr_data/`，QA 数字随后补
+- 10-21 录制器 14:46 ET 起一直是同一进程（NRestarts=0），**全程写到 `~/ZR_Capital/data_store/`**：18:52 的 deploy 因 VPS 工作区脏文件静默失败，新 unit 没装上（DEPLOY_LOG 有更正）。已手动装好新 unit 并验证环境变量生效；收盘后由 VPS 一次性 systemd 任务 `zr-post-close-20261021`（20:10 UTC 触发，`deploy/post_close.sh`）完成：等 QA → 并入 `~/zr_data/` → deploy `feat/w1-analysis` → 回填进度与清单；日志 `~/zr_data/logs/post_close_2026-10-21.log`，明天读它补 QA 数字
 - 录制器新增静默看门狗：盘中 120 秒无推送则清空本地订阅状态强制全量重订，次数写入 QA
 - `deploy.sh` 改为 checkout 前自动 stash、每步显式报错；`api_facts` 默认输出改到 `ZR_DATA_ROOT/reports/`
 - `deploy/sync_from_vps.sh`：11.5 秒、426 个文件、7.3 MB（第一次全量）；journal 二次同步 <5 秒
@@ -55,6 +55,6 @@ W1 数据层收尾。费用模型已用真实成交逐项验证为精确；交�
 
 ## 下一步
 
-1. 网络配置写入并验证；装 launchd 同步
-2. 等 QQQ/MU/AMD 回填完成 → DATA_INVENTORY；10-21 QA 报告写入 STATUS
+1. 读 `ssh zr 'cat ~/zr_data/logs/post_close_2026-10-21.log'`，把 QA（每标的消息数、最大间隔、缺口）与 deploy 结果写进 STATUS；确认 10-22 13:20 UTC timer 启动的录制器写到 `~/zr_data/`
+2. 公钥加到 GitHub 后验证 `git ls-remote`
 3. Task 1.4 成本报告（费用公式 + 录制器 spread）；Task 1.5 ThetaData
