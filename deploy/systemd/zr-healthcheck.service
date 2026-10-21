@@ -1,0 +1,12 @@
+[Unit]
+Description=ZR recorder health check
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/ZR_Capital
+Environment=HOME=/home/ubuntu
+Environment=ZR_DATA_ROOT=/home/ubuntu/zr_data
+ExecStart=/home/ubuntu/.local/bin/uv run python -m zr.ops.healthcheck
+StandardOutput=journal
+StandardError=journal

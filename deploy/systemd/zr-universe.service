@@ -1,0 +1,14 @@
+[Unit]
+Description=ZR universe snapshot
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/ZR_Capital
+EnvironmentFile=/home/ubuntu/ZR_Capital/.env
+Environment=HOME=/home/ubuntu
+Environment=ZR_DATA_ROOT=/home/ubuntu/zr_data
+ExecStart=/home/ubuntu/.local/bin/uv run python -m zr.data.universe
+StandardOutput=journal
+StandardError=journal

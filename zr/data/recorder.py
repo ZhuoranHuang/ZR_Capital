@@ -2,9 +2,12 @@
 
 订阅 4 正股 + 近端期权链的 Quote / Depth / Trade 推送，原始事件落 Parquet：
   ZR_DATA_ROOT/recorder/date=YYYY-MM-DD/underlying=XXX/<kind>_<ts>.parquet
+QA 报告：ZR_DATA_ROOT/recorder_qa/YYYY-MM-DD.md
 
-运行：uv run python -m zr.data.recorder [--dry-run]
---dry-run 不连接 API，用假期权链打印订阅集构造结果。
+运行：uv run python -m zr.data.recorder [--dry-run] [--now]
+时段：启动后用 trading_days 判断交易日（非交易日退出 0）；9:25 ET 前等待；16:05 ET 写 QA 后退出 0。
+时间计算只用 ZoneInfo("America/New_York")。
+--dry-run 不连接 API，用假期权链打印订阅集构造结果。--now 跳过交易日判断与等待。
 
 纯逻辑（订阅集构造、缓冲落盘）与 I/O（Recorder）分离，前者有单元测试且不触网。
 
@@ -25,6 +28,7 @@ import re
 import threading
 import time
 from collections import OrderedDict, defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -263,6 +267,42 @@ def write_qa_report(
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+# ---------- 交易日与时段（只用 America/New_York） ----------
+
+SUBSCRIBE_AT = dt.time(9, 25)
+SESSION_END = dt.time(16, 5)
+
+
+def session_action(
+    now_et: dt.datetime,
+    is_trading_day: bool,
+    start: dt.time = SUBSCRIBE_AT,
+    end: dt.time = SESSION_END,
+) -> tuple[str, float]:
+    """返回 (动作, 等待秒数)。动作 ∈ skip / wait / run / done。"""
+    if not is_trading_day:
+        return "skip", 0.0
+    t = now_et.timetz().replace(tzinfo=None)
+    if t >= end:
+        return "done", 0.0
+    if t < start:
+        target = now_et.replace(
+            hour=start.hour, minute=start.minute, second=0, microsecond=0
+        )
+        return "wait", (target - now_et).total_seconds()
+    return "run", 0.0
+
+
+def is_trading_day(qctx: Any, day: dt.date) -> bool:
+    """trading_days(Market.US, day, day)；半日也算交易日。返回结构已内省：
+    MarketTradingDays{trading_days, half_trading_days}（元素类型未验证，按 date 处理）。"""
+    from longport.openapi import Market
+
+    res = qctx.trading_days(Market.US, day, day)
+    days = set(res.trading_days) | set(res.half_trading_days)
+    return day in days
+
+
 # ---------- 主循环 ----------
 
 
@@ -340,22 +380,28 @@ class Recorder:
         self.current = desired
         log.info("订阅集 %d（+%d −%d）", len(desired), len(add), len(remove))
 
-    def run(self, until_et: dt.time = dt.time(16, 0), qa_dir: Path | None = None) -> None:
+    def run(
+        self,
+        until_et: dt.time = SESSION_END,
+        qa_dir: Path | None = None,
+        now_fn: Callable[[], dt.datetime] = lambda: dt.datetime.now(ET),
+        sleep_fn: Callable[[float], None] = time.sleep,
+    ) -> None:
         self.install_callbacks()
-        today = dt.datetime.now(ET).date()
-        last_resub = 0.0
+        today = now_fn().date()
+        last_resub: float | None = None
         while True:
-            now_et = dt.datetime.now(ET)
+            now_et = now_fn()
             if now_et.time() >= until_et:
                 break
-            if time.monotonic() - last_resub >= self.resub_interval_s:
+            if last_resub is None or time.monotonic() - last_resub >= self.resub_interval_s:
                 try:
                     self.resubscribe(today)
                 except Exception:  # noqa: BLE001
                     log.exception("重算订阅集失败")
                 last_resub = time.monotonic()
             self.sink.maybe_flush()
-            time.sleep(1.0)
+            sleep_fn(1.0)
         self.sink.flush()
         if qa_dir is not None:
             write_qa_report(
@@ -400,7 +446,8 @@ def _fake_chains(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="分钟级期权行情录制器")
     parser.add_argument("--dry-run", action="store_true", help="不连接 API，打印订阅集")
-    parser.add_argument("--until", default="16:00", help="美东停止时间 HH:MM")
+    parser.add_argument("--until", default="16:05", help="美东停止时间 HH:MM")
+    parser.add_argument("--now", action="store_true", help="跳过交易日判断与 9:25 等待，立即订阅")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -426,9 +473,26 @@ def main(argv: list[str] | None = None) -> int:
     from zr.broker.longport_client import make_quote_ctx
 
     hh, mm = (int(x) for x in args.until.split(":"))
+    until = dt.time(hh, mm)
+    qctx = make_quote_ctx()
+
+    if not args.now:
+        try:
+            trading = is_trading_day(qctx, today)
+        except Exception:  # noqa: BLE001
+            # 日历查询失败时按交易日处理（宁可空跑，不可漏录）
+            log.exception("trading_days 查询失败，按交易日处理")
+            trading = True
+        action, wait_s = session_action(dt.datetime.now(ET), trading, end=until)
+        log.info("今日 %s 交易日=%s 动作=%s 等待=%.0fs", today, trading, action, wait_s)
+        if action in ("skip", "done"):
+            return 0
+        if action == "wait":
+            time.sleep(wait_s)
+
     sink = ParquetSink(settings.zr_data_root / "recorder")
-    rec = Recorder(make_quote_ctx(), sink, rules, uni.subscription_cap)
-    rec.run(until_et=dt.time(hh, mm), qa_dir=Path("docs/recorder_qa"))
+    rec = Recorder(qctx, sink, rules, uni.subscription_cap)
+    rec.run(until_et=until, qa_dir=settings.zr_data_root / "recorder_qa")
     return 0
 
 

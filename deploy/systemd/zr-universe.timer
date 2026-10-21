@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly ZR universe snapshot after US close
+
+[Timer]
+OnCalendar=Fri *-*-* 21:30:00 UTC
+Persistent=true
+Unit=zr-universe.service
+
+[Install]
+WantedBy=timers.target

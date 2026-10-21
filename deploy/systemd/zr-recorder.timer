@@ -1,0 +1,11 @@
+[Unit]
+Description=Start ZR recorder daily before US open
+
+[Timer]
+# 13:20 UTC = 09:20 EDT / 08:20 EST；程序自行判断交易日并等到 09:25 ET 再订阅
+OnCalendar=Mon..Fri *-*-* 13:20:00 UTC
+Persistent=false
+Unit=zr-recorder.service
+
+[Install]
+WantedBy=timers.target

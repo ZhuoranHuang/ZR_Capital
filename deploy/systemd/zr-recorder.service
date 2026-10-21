@@ -1,0 +1,17 @@
+[Unit]
+Description=ZR options recorder (one trading session)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/ZR_Capital
+EnvironmentFile=/home/ubuntu/ZR_Capital/.env
+Environment=HOME=/home/ubuntu
+Environment=ZR_DATA_ROOT=/home/ubuntu/zr_data
+ExecStart=/home/ubuntu/.local/bin/uv run python -m zr.data.recorder
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal

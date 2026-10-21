@@ -1,0 +1,10 @@
+[Unit]
+Description=ZR recorder health check every 5 minutes
+
+[Timer]
+OnCalendar=*-*-* *:00/5:00 UTC
+AccuracySec=30s
+Unit=zr-healthcheck.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 每天新加坡时间 09:00 从 VPS 同步数据。
+     安装：
+       sed "s#__REPO__#$PWD#g" deploy/launchd/com.zr.sync-from-vps.plist > ~/Library/LaunchAgents/com.zr.sync-from-vps.plist
+       launchctl load ~/Library/LaunchAgents/com.zr.sync-from-vps.plist
+     launchd 按本机时区取 Hour/Minute；本机须设为 Asia/Singapore。 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.zr.sync-from-vps</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__REPO__/deploy/sync_from_vps.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+        <key>ZR_DATA_ROOT</key>
+        <string>__REPO__/data_store</string>
+    </dict>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/tmp/zr-sync.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/zr-sync.log</string>
+</dict>
+</plist>
