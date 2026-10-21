@@ -24,7 +24,8 @@ VPS：AWS Lightsail 悉尼（ap-southeast-2），Ubuntu 24.04，2 GB，SSH 别�
 ssh zr 'bash -s' < deploy/vps_bootstrap.sh          # 可加分支名参数，默认 feat/deploy
 scp .env zr:/home/ubuntu/ZR_Capital/.env            # 唯一允许复制密钥的命令
 ssh zr 'chmod 600 ~/ZR_Capital/.env'
-ssh zr 'cd ZR_Capital && ~/.local/bin/uv run python -m zr.ops.api_facts'   # 验证连通
+ssh zr 'cd ZR_Capital && ZR_DATA_ROOT=~/zr_data ~/.local/bin/uv run python -m zr.ops.api_facts'   # 验证连通，输出 ~/zr_data/reports/API_FACTS.md
+scp zr:zr_data/reports/API_FACTS.md docs/API_FACTS.md && uv run python -m zr.ops.redact_api_facts docs/API_FACTS.md   # 脱敏后再 commit
 ssh zr 'sudo systemctl start zr-recorder.timer zr-universe.timer zr-healthcheck.timer'
 ssh zr 'systemctl list-timers --all | grep zr-'
 ```
@@ -69,6 +70,8 @@ ssh zr 'cd ZR_Capital && ZR_DATA_ROOT=~/zr_data ~/.local/bin/uv run python -m zr
 | `~/Library/LaunchAgents/com.zr.socks.plist` | launchd 常驻 | `ssh -N -D 127.0.0.1:1080 zr`，KeepAlive 断线自动重连；日志 `/tmp/zr-socks.log` |
 | `~/.ssh/config` → `Host github.com` | `ProxyJump zr` | git 走 SSH 经 VPS；仓库远程为 `git@github.com:ZhuoranHuang/ZR_Capital.git` |
 | `~/.zshrc` → `zrproxy` 函数 | `zrproxy <命令>` | 注入 `ALL_PROXY/HTTPS_PROXY/HTTP_PROXY=socks5h://127.0.0.1:1080`，给 uv / pip / curl / 长桥 SDK 的 HTTP 调用用 |
+
+前提：`~/.ssh/id_ed25519.pub` 必须加到 GitHub 账号（Settings → SSH and GPG keys），否则 `git ls-remote` 报 `Permission denied (publickey)`；加之前可用 `zrproxy git push https://github.com/ZhuoranHuang/ZR_Capital.git <branch>` 走 HTTPS + keychain。
 
 规则：
 - 本机需要外网的命令一律加 `zrproxy` 前缀：`zrproxy uv sync`、`zrproxy curl -I https://pypi.org`、`zrproxy uv run python -c "import longport"`。

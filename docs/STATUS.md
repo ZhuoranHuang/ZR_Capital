@@ -1,6 +1,6 @@
 # 状态
 
-更新：2026-10-21 15:35 ET · 分支 `feat/w1-analysis`（VPS 已检出同一分支，录制器进程仍是上午的代码，16:05 ET 退出后下次 timer 用新代码）
+更新：2026-10-21 15:55 ET · 分支 `feat/w1-analysis`（VPS 已检出同一分支；录制器进程仍是 18:46 UTC 启动的旧代码，16:05 ET 退出后 deploy）
 
 ## 阶段
 
@@ -39,13 +39,16 @@ W1 数据层收尾。费用模型已用真实成交逐项验证为精确；交�
 
 ## 录制与同步
 
-- 10-21 录制器 14:46 ET 起跑（含路径修复后的重启），16:05 ET 退出后生成 `~/zr_data/recorder_qa/2026-10-21.md`——**本次更新时尚未到点，QA 数字待下次补**
+- 10-21 录制器 14:46 ET 起一直是同一进程（NRestarts=0），**全程写到 `~/ZR_Capital/data_store/`**：18:52 的 deploy 因 VPS 工作区脏文件静默失败，新 unit 没装上（DEPLOY_LOG 有更正）。已手动装好新 unit 并验证环境变量生效；16:05 ET 收盘后把 `data_store/recorder*` 并入 `~/zr_data/`，QA 数字随后补
+- 录制器新增静默看门狗：盘中 120 秒无推送则清空本地订阅状态强制全量重订，次数写入 QA
+- `deploy.sh` 改为 checkout 前自动 stash、每步显式报错；`api_facts` 默认输出改到 `ZR_DATA_ROOT/reports/`
 - `deploy/sync_from_vps.sh`：11.5 秒、426 个文件、7.3 MB（第一次全量）；journal 二次同步 <5 秒
-- launchd 每日同步任务：待负责人确认后安装（本机时区是 US/Pacific，不是新加坡；09:00 local = 新加坡 00:00，需决定改 Hour 还是改系统时区）
+- 本机网络已改为经 VPS 跳板（负责人确认）：SOCKS 常驻 ✓、`zrproxy` ✓（PyPI 200、import longport ok）、launchd 每日同步已装并手动触发成功（4 文件 13.8 MB）。**GitHub SSH 还差一步**：公钥 `zr-lightsail` 未加到 GitHub 账号，`git ls-remote` 报 publickey；加之前 push 走 `zrproxy git push https://…`
+- launchd 同步 Hour=9 按本机时区 US/Pacific 触发（= 新加坡 00:00/01:00），等负责人定
 
 ## 待确认
 
-1. 本机网络三处修改（SOCKS 常驻、ssh config github ProxyJump、zshrc zrproxy）+ launchd 同步任务：内容已打印，等"确认"
+1. 把 `~/.ssh/id_ed25519.pub`（zr-lightsail）加到 GitHub 账号；launchd 同步 Hour 取 9（太平洋）还是改系统时区
 2. 1 分钟 K 只能回溯到 2023-10：是否接受，或为 2023-01～09 另找数据源
 3. 账户净资产 ≈ 0（上轮）
 4. D-001 保证金规则人工客服确认；D-008 蒙特卡洛脚本未入库

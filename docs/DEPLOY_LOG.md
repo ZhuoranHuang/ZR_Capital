@@ -31,6 +31,12 @@
 - 18:45 UTC 启动三个 timer；`universe` 手动跑一次 → `~/zr_data/universe/universe_2026-10-21.json`（308 订阅）；`healthcheck` 手动跑一次正确报警（当时录制器未启动）。
 - 18:46 UTC `systemctl start zr-recorder.service`，跑到 16:05 ET 自动退出。
 - 内存：bootstrap 后 used 466 MB / 1906，swap 2 GB 基本未用。
-- 18:47–18:55 UTC 录制器启动后 `~/zr_data/recorder` 无文件、healthcheck 报警。诊断：标准脚本订阅 308×3 在 10 秒收到 5545 条，说明推送正常；真实原因是 systemd `EnvironmentFile`（.env 的 `ZR_DATA_ROOT=./data_store`）覆盖了 `Environment=ZR_DATA_ROOT`，数据写到了 `~/ZR_Capital/data_store/recorder/`（8 分钟 300 个文件 5.6 MB）。修复：unit 改为 `ExecStart=/usr/bin/env ZR_DATA_ROOT=... uv run ...`；重新 deploy 后 rsync 旧文件到 `~/zr_data/recorder/`（原文件保留）。
+- 18:47–18:55 UTC 录制器启动后 `~/zr_data/recorder` 无文件、healthcheck 报警。诊断：标准脚本订阅 308×3 在 10 秒收到 5545 条，说明推送正常；真实原因是 systemd `EnvironmentFile`（.env 的 `ZR_DATA_ROOT=./data_store`）覆盖了 `Environment=ZR_DATA_ROOT`，数据写到了 `~/ZR_Capital/data_store/recorder/`（8 分钟 300 个文件 5.6 MB）。修复：unit 改为 `ExecStart=/usr/bin/env ZR_DATA_ROOT=... uv run ...`。**更正（19:50 UTC）**：18:52 的 `deploy.sh` 实际因 VPS 工作区 `docs/API_FACTS.md` 被脚本改过而在 `git checkout` 处静默退出（输出被 grep 吞掉），新 unit 当时没装上、服务没重启；录制器自 18:46:51 起一直是同一个进程（NRestarts=0），全程写 `data_store/`。19:48 手动安装新 unit + daemon-reload，并用 `systemd-run` 同样 EnvironmentFile 验证 `ZR_DATA_ROOT=/home/ubuntu/zr_data` 生效；本场录完后把 `data_store/recorder*` rsync 到 `~/zr_data/`。deploy.sh 已改为 checkout 前自动 stash 并显式报错；api_facts 默认输出改到 `ZR_DATA_ROOT/reports/`。
 - 诊断中发现：一分钟内重复订阅大量期权触发 `OpenApiException code=301607 Too many option securities request within one minute`；录制器每 5 分钟只订阅差集，正常不会触发。
 - 录制器进程 RSS 约 183 MB。
+
+## 2026-10-21 本机网络改为经 VPS 跳板（负责人确认后写入）
+
+- 备份：`~/.ssh/config.bak-20261021`、`~/.zshrc.bak-20261021`。
+- 写入：`~/Library/LaunchAgents/com.zr.socks.plist`（常驻 `ssh -N -D 127.0.0.1:1080 zr`，KeepAlive）；`~/.ssh/config` 追加 `Host github.com` + `ProxyJump zr`；`~/.zshrc` 追加 `zrproxy`；`~/Library/LaunchAgents/com.zr.sync-from-vps.plist`（Hour=9，本机时区 US/Pacific，待负责人决定）；`git remote set-url origin git@github.com:ZhuoranHuang/ZR_Capital.git`。
+- 验证：SOCKS 监听 127.0.0.1:1080 ✓；`zrproxy curl -I https://pypi.org` → HTTP/2 200 ✓；`zrproxy uv run python -c "import longport"` ✓；GitHub HTTPS 经代理 200 ✓；`git ls-remote`（SSH 经 ProxyJump）到达 github.com 但 `Permission denied (publickey)` —— 公钥 `zr-lightsail` 尚未加到 GitHub 账号。`launchctl start com.zr.sync-from-vps` 手动触发一次正常。

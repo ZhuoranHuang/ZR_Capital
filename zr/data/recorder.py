@@ -243,12 +243,14 @@ def write_qa_report(
     reconnects: int,
     callback_errors: int,
     sink: ParquetSink,
+    forced_resubscribes: int = 0,
 ) -> None:
     lines = [
         f"# 录制器 QA {date.isoformat()}",
         "",
         f"- 重连次数（近似，见模块说明）：{reconnects}",
         f"- 回调异常次数：{callback_errors}",
+        f"- 静默强制重订阅次数：{forced_resubscribes}",
         f"- 落盘文件：{sink.files_written}，行：{sink.rows_written}，"
         f"去重丢弃：{sink.rows_dropped_dup}",
         "",
@@ -286,9 +288,7 @@ def session_action(
     if t >= end:
         return "done", 0.0
     if t < start:
-        target = now_et.replace(
-            hour=start.hour, minute=start.minute, second=0, microsecond=0
-        )
+        target = now_et.replace(hour=start.hour, minute=start.minute, second=0, microsecond=0)
         return "wait", (target - now_et).total_seconds()
     return "run", 0.0
 
@@ -325,6 +325,9 @@ class Recorder:
         self.stats: dict[str, SymbolStats] = defaultdict(SymbolStats)
         self.reconnects = 0
         self.callback_errors = 0
+        self.forced_resubscribes = 0
+        self.silence_s = 120.0
+        self._last_forced: float | None = None
         self._lock = threading.Lock()
         self._last_any_recv: float | None = None
 
@@ -394,6 +397,18 @@ class Recorder:
             now_et = now_fn()
             if now_et.time() >= until_et:
                 break
+            # 静默看门狗：盘中超过 silence_s 没有任何推送，清空本地订阅状态强制全量重订
+            with self._lock:
+                last_recv = self._last_any_recv
+            silent = last_recv is not None and time.monotonic() - last_recv > self.silence_s
+            if silent and (
+                self._last_forced is None or time.monotonic() - self._last_forced > self.silence_s
+            ):
+                log.warning("超过 %.0fs 无推送，强制全量重订阅", self.silence_s)
+                self.forced_resubscribes += 1
+                self._last_forced = time.monotonic()
+                self.current = set()
+                last_resub = None
             if last_resub is None or time.monotonic() - last_resub >= self.resub_interval_s:
                 try:
                     self.resubscribe(today)
@@ -411,6 +426,7 @@ class Recorder:
                 self.reconnects,
                 self.callback_errors,
                 self.sink,
+                self.forced_resubscribes,
             )
 
 

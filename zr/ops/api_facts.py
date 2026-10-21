@@ -268,7 +268,8 @@ def run_trade_checks(report: Report, tctx: Any, atm: dict[str, Any] | None) -> N
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="长桥 API 只读核验")
-    parser.add_argument("--out", default="docs/API_FACTS.md")
+    # 默认写到数据目录而不是仓库，避免 VPS 工作区被生成文件弄脏；入库前 scp 回本机再脱敏
+    parser.add_argument("--out", default=None, help="默认 ZR_DATA_ROOT/reports/API_FACTS.md")
     parser.add_argument("--skip-trade", action="store_true", help="不创建 TradeContext")
     parser.add_argument("--skip-bars", action="store_true", help="跳过 1 分钟 bar 翻页")
     args = parser.parse_args(argv)
@@ -276,12 +277,13 @@ def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
     report = Report()
     symbols = settings.symbols
+    out_path = Path(args.out) if args.out else settings.zr_data_root / "reports" / "API_FACTS.md"
 
     try:
         from zr.broker.longport_client import make_quote_ctx, make_trade_ctx
     except ImportError as exc:
         report.fail("import longport", exc)
-        report.write(Path(args.out))
+        report.write(out_path)
         return 1
 
     qctx = _run(report, "make_quote_ctx", make_quote_ctx)
@@ -301,8 +303,8 @@ def main(argv: list[str] | None = None) -> int:
             except Exception as exc:  # noqa: BLE001
                 report.fail("run_trade_checks 外层", exc)
 
-    report.write(Path(args.out))
-    print(f"写入 {args.out}")
+    report.write(out_path)
+    print(f"写入 {out_path}")
     return 0
 
 

@@ -18,11 +18,16 @@ rollback() {
     exit 1
 }
 
-git fetch -q --tags --prune origin
+git fetch -q --tags --prune origin || rollback "git fetch"
+# 工作区若有改动（脚本生成的文档等），先 stash，避免 checkout 静默失败
+if [ -n "$(git status --porcelain)" ]; then
+    git stash push -q -u -m "deploy $(date -u +%FT%TZ)"
+    log "工作区有改动，已 stash（git stash list 可查）"
+fi
 if git show-ref -q --verify "refs/remotes/origin/$REF"; then
-    git checkout -q -B "$REF" "origin/$REF"
+    git checkout -q -B "$REF" "origin/$REF" || rollback "git checkout $REF"
 else
-    git checkout -q "$REF"   # tag 或 commit
+    git checkout -q "$REF" || rollback "git checkout $REF"   # tag 或 commit
 fi
 log "checkout $REF -> $(git rev-parse --short HEAD)"
 
