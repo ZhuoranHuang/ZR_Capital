@@ -60,6 +60,32 @@ def test_to_py_converts_decimal_enum_and_objects():
     assert to_py(_Obj(), datetime_as_str=True)["at"] == "2026-05-01T00:00:00+00:00"
 
 
+def test_to_py_handles_pyo3_style_enum_without_recursion():
+    """模拟 pyo3 枚举：成员作为同类型类属性挂在实例上。"""
+
+    class FakeEnum:
+        pass
+
+    FakeEnum.US = FakeEnum()
+    FakeEnum.HK = FakeEnum()
+    FakeEnum.__repr__ = lambda self: "FakeEnum.US" if self is FakeEnum.US else "FakeEnum.HK"
+
+    class Holder:
+        market = FakeEnum.US
+
+    assert to_py(Holder()) == {"market": "US"}
+
+
+def test_to_py_real_longport_enums():
+    import longport.openapi as o
+
+    assert to_py([o.Market.US, o.TradeSession.Intraday, o.OrderSide.Buy]) == [
+        "US",
+        "Intraday",
+        "Buy",
+    ]
+
+
 def test_flatten_charges():
     class Fee:
         def __init__(self, code, amount):
