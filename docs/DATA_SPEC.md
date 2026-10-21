@@ -31,7 +31,14 @@
 - `journal/orders.parquet`、`journal/executions.parquet`、`journal/charges.parquet`
 - Decimal → float64；枚举 → 名称字符串；时间保留原时区
 
-## 5. 命名
+## 5. 长桥 SDK 时间与期权链（2026-10-21 实测）
+
+- SDK 返回的 `timestamp` 为 naive datetime，值是 UTC；落盘前统一加 `tzinfo=UTC`。
+- 1 分钟 K 含 Pre / Post 时段，`trade_session` 字段区分；回溯深度 ≥ 30000 根（上限未探）。
+- `option_chain_expiry_date_list` 含已过期日期，使用方负责过滤。
+- 期权 `depth()` 只有 1 档，`order_num` 恒为 0。
+
+## 6. 命名
 
 - 时间列统一 `ts`，UTC；展示层再转美东
 - 期权代码沿用长桥格式 `^[A-Z.\-]+\d{6}[CP]\d+\.US$`

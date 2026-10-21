@@ -38,3 +38,14 @@ uv run pytest -q
 - `history_candlesticks_by_offset(symbol, Period, AdjustType, forward, count, time, TradeSessions)`。
 - `option_chain_expiry_date_list(symbol)`；`option_chain_info_by_date(symbol, date)` 返回 [price, call_symbol, put_symbol]。
 - 未列在此处的 API 用法，在代码注释里标「未验证」。
+
+2026-10-21 在 VPS 实测补充（`docs/API_FACTS.md`）：
+- `depth(期权代码)` 返回 1 档 bid/ask；`SubType.Depth` 推送对期权同样有效 → 期权盘口来源 = depth。
+- `option_chain_expiry_date_list` 包含已过期日期，使用前必须过滤 `>= 今日`。
+- SDK 返回的 datetime 为 naive，值是 UTC。
+- `trading_days(Market.US, begin, end)` 返回 `MarketTradingDays{trading_days, half_trading_days}`。
+- 期权 1 分钟 K：`candlesticks` 与 `history_candlesticks_by_offset` 都可用。
+
+## 运行环境
+
+长桥 API 相关任务（核验、录制、交易史）只在 VPS `zr` 上跑；本机网络对 longportapp.com 有 DNS 污染。部署见 `docs/DEPLOY.md`。
