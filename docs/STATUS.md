@@ -44,11 +44,10 @@ W1 数据层收尾。费用模型已用真实成交逐项验证为精确；交�
 - `deploy.sh` 改为 checkout 前自动 stash、每步显式报错；`api_facts` 默认输出改到 `ZR_DATA_ROOT/reports/`
 - `deploy/sync_from_vps.sh`：11.5 秒、426 个文件、7.3 MB（第一次全量）；journal 二次同步 <5 秒
 - 本机网络已改为经 VPS 跳板（负责人确认）：SOCKS 常驻 ✓、`zrproxy` ✓（PyPI 200、import longport ok）、launchd 每日同步已装并手动触发成功（4 文件 13.8 MB）。**GitHub SSH 还差一步**：公钥 `zr-lightsail` 未加到 GitHub 账号，`git ls-remote` 报 publickey；加之前 push 走 `zrproxy git push https://…`
-- launchd 同步 Hour=9 按本机时区 US/Pacific 触发（= 新加坡 00:00/01:00），等负责人定
+- launchd 同步改为每小时触发 + 脚本按 `TZ=Asia/Singapore` 判 09 点、`$ZR_DATA_ROOT/.last_sync` 防重复（本机系统时区锁定 US/Pacific，不再依赖）；GitHub SSH 已通，push 走 `git@`
 
 ## 待确认
 
-1. 把 `~/.ssh/id_ed25519.pub`（zr-lightsail）加到 GitHub 账号；launchd 同步 Hour 取 9（太平洋）还是改系统时区
 2. 1 分钟 K 只能回溯到 2023-10：是否接受，或为 2023-01～09 另找数据源
 3. 账户净资产 ≈ 0（上轮）
 4. D-001 保证金规则人工客服确认；D-008 蒙特卡洛脚本未入库
@@ -56,5 +55,4 @@ W1 数据层收尾。费用模型已用真实成交逐项验证为精确；交�
 ## 下一步
 
 1. 读 `ssh zr 'cat ~/zr_data/logs/post_close_2026-10-21.log'`，把 QA（每标的消息数、最大间隔、缺口）与 deploy 结果写进 STATUS；确认 10-22 13:20 UTC timer 启动的录制器写到 `~/zr_data/`
-2. 公钥加到 GitHub 后验证 `git ls-remote`
 3. Task 1.4 成本报告（费用公式 + 录制器 spread）；Task 1.5 ThetaData

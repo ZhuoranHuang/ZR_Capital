@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- 每天新加坡时间 09:00 从 VPS 同步数据。
+<!-- 每小时触发一次 deploy/sync_from_vps.sh；脚本自己用 TZ=Asia/Singapore 判断是否为 09 点且当天未同步。
+     不依赖本机系统时区（本机被锁定为 US/Pacific）。
      安装：
        sed "s#__REPO__#$PWD#g" deploy/launchd/com.zr.sync-from-vps.plist > ~/Library/LaunchAgents/com.zr.sync-from-vps.plist
-       launchctl load ~/Library/LaunchAgents/com.zr.sync-from-vps.plist
-     launchd 按本机时区取 Hour/Minute；本机须设为 Asia/Singapore。 -->
+       launchctl unload ~/Library/LaunchAgents/com.zr.sync-from-vps.plist 2>/dev/null; launchctl load ~/Library/LaunchAgents/com.zr.sync-from-vps.plist
+     手动立即同步：bash deploy/sync_from_vps.sh --now -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -23,13 +24,10 @@
         <key>ZR_DATA_ROOT</key>
         <string>__REPO__/data_store</string>
     </dict>
-    <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>9</integer>
-        <key>Minute</key>
-        <integer>0</integer>
-    </dict>
+    <key>StartInterval</key>
+    <integer>3600</integer>
+    <key>RunAtLoad</key>
+    <true/>
     <key>StandardOutPath</key>
     <string>/tmp/zr-sync.log</string>
     <key>StandardErrorPath</key>

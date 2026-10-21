@@ -41,7 +41,7 @@ if [ -d "$REPO/data_store/recorder" ]; then
     log "已合并 data_store → zr_data"
 fi
 log "recorder parquet 文件数：$(find "$DATA/recorder" -name '*.parquet' | wc -l)，大小：$(du -sh "$DATA/recorder" | cut -f1)"
-log "当日 alerts："; cat "$DATA/alerts/$(date -u +%F).jsonl" 2>/dev/null | tail -5 || true
+log "当日 alerts（美东日期）："; cat "$DATA/alerts/$DAY.jsonl" 2>/dev/null | tail -5 || true
 
 # 3. deploy（录制器已退出，不会打断会话）
 if systemctl is-active --quiet zr-recorder.service; then

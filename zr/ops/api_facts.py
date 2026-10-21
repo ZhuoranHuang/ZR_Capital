@@ -175,7 +175,7 @@ def run_quote_checks(
     _run(report, "quote_level", qctx.quote_level)  # 未验证：返回结构
     _run(report, "quote_package_details", qctx.quote_package_details)  # 未验证
     _run(report, "trading_session", qctx.trading_session)  # 未验证
-    today = dt.date.today()
+    today = dt.datetime.now(ET).date()  # 显式美东日期，不用系统时区
     _run(
         report,
         "trading_days(US, 近 20 天)",

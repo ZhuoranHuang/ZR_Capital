@@ -40,3 +40,4 @@
 - 备份：`~/.ssh/config.bak-20261021`、`~/.zshrc.bak-20261021`。
 - 写入：`~/Library/LaunchAgents/com.zr.socks.plist`（常驻 `ssh -N -D 127.0.0.1:1080 zr`，KeepAlive）；`~/.ssh/config` 追加 `Host github.com` + `ProxyJump zr`；`~/.zshrc` 追加 `zrproxy`；`~/Library/LaunchAgents/com.zr.sync-from-vps.plist`（Hour=9，本机时区 US/Pacific，待负责人决定）；`git remote set-url origin git@github.com:ZhuoranHuang/ZR_Capital.git`。
 - 验证：SOCKS 监听 127.0.0.1:1080 ✓；`zrproxy curl -I https://pypi.org` → HTTP/2 200 ✓；`zrproxy uv run python -c "import longport"` ✓；GitHub HTTPS 经代理 200 ✓；`git ls-remote`（SSH 经 ProxyJump）到达 github.com 但 `Permission denied (publickey)` —— 公钥 `zr-lightsail` 尚未加到 GitHub 账号。`launchctl start com.zr.sync-from-vps` 手动触发一次正常。
+- 20:05 UTC：GitHub 公钥已加，`git ls-remote` 经 `git@`+ProxyJump 通过。本机系统时区锁定 US/Pacific → launchd 同步改为 `StartInterval=3600`，脚本按 `TZ=Asia/Singapore` 判 09 点 + `$ZR_DATA_ROOT/.last_sync`；`run_recorder.sh`、`post_close.sh`、`api_facts.py` 的日期全部显式时区。

@@ -14,7 +14,7 @@ VPS：AWS Lightsail 悉尼（ap-southeast-2），Ubuntu 24.04，2 GB，SSH 别�
 | `deploy/systemd/zr-universe.{service,timer}` | VPS | 每周五 21:30 UTC 写 universe 快照到 `~/zr_data/universe/` |
 | `deploy/systemd/zr-healthcheck.{service,timer}` | VPS | 每 5 分钟；盘中无进程或 5 分钟无新文件 → `~/zr_data/alerts/` + journald |
 | `deploy/sync_from_vps.sh` | Mac | rsync `~/zr_data/`（排除 logs）到 `$ZR_DATA_ROOT` |
-| `deploy/launchd/com.zr.sync-from-vps.plist` | Mac | 每天新加坡 09:00 跑上面的同步 |
+| `deploy/launchd/com.zr.sync-from-vps.plist` | Mac | 每小时调用同步脚本；脚本用 `TZ=Asia/Singapore` 判断 09 点且当天未同步才执行（`$ZR_DATA_ROOT/.last_sync`） |
 
 数据目录 `/home/ubuntu/zr_data/`：`recorder/`（Parquet）、`recorder_qa/`、`universe/`、`journal/`、`alerts/`、`logs/`、`raw/`。
 
@@ -76,7 +76,8 @@ ssh zr 'cd ZR_Capital && ZR_DATA_ROOT=~/zr_data ~/.local/bin/uv run python -m zr
 规则：
 - 本机需要外网的命令一律加 `zrproxy` 前缀：`zrproxy uv sync`、`zrproxy curl -I https://pypi.org`、`zrproxy uv run python -c "import longport"`。
 - 长桥 WebSocket 实时订阅（录制器、api_facts 的订阅测试）一律在 VPS 跑，不在本机经代理跑。
-- `deploy/sync_from_vps.sh` 走 ssh，不需要代理。
+- `deploy/sync_from_vps.sh` 走 ssh，不需要代理；手动立即同步用 `bash deploy/sync_from_vps.sh --now`。
+- **时区规则**：本机系统时区被锁定为 US/Pacific，仓库内任何脚本/文档不得依赖系统默认时区；shell 用 `TZ=Asia/Singapore date` 或 `TZ=America/New_York date`，Python 用 `ZoneInfo`，systemd 用 `UTC`。
 
 验证：
 ```bash
