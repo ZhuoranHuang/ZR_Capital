@@ -21,7 +21,7 @@ ZR Capital：美股分钟级期权交易系统。代码在 `zr/`，测试在 `te
 
 - `docs/DECISIONS.md` 决策记录（只追加）；`docs/STRATEGY_V1.md` 策略定稿；`docs/DATA_SPEC.md` 数据规范
 - `docs/PLAN_W1.md` 当周任务；`docs/STATUS.md` 当前状态与待确认；`docs/RESEARCH_LOG.md` 假设登记
-- `docs/API_FACTS.md` 由 `zr/ops/api_facts.py` 生成，不手改
+- `docs/API_FACTS.md` 由 `zr/ops/api_facts.py` 生成，不手改（末尾「补充」小节除外，须注明来源脚本）；`docs/DATA_INVENTORY.md` 由 `zr/data/backfill_bars.py --inventory` 生成
 
 ## 常用命令
 

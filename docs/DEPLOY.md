@@ -60,6 +60,31 @@ ssh zr 'cd ZR_Capital && ZR_DATA_ROOT=~/zr_data ~/.local/bin/uv run python -m zr
 ssh zr 'cd ZR_Capital && ZR_DATA_ROOT=~/zr_data ~/.local/bin/uv run python -m zr.data.universe'
 ```
 
+## 网络（Mac 侧）
+
+公司 VPN 下本机对 github.com、PyPI、longportapp.com 不稳定（DNS 污染，见 DEPLOY_LOG），统一经 VPS `zr` 中转；claude.ai 流量不经过跳板。
+
+| 组件 | 位置 | 作用 |
+|---|---|---|
+| `~/Library/LaunchAgents/com.zr.socks.plist` | launchd 常驻 | `ssh -N -D 127.0.0.1:1080 zr`，KeepAlive 断线自动重连；日志 `/tmp/zr-socks.log` |
+| `~/.ssh/config` → `Host github.com` | `ProxyJump zr` | git 走 SSH 经 VPS；仓库远程为 `git@github.com:ZhuoranHuang/ZR_Capital.git` |
+| `~/.zshrc` → `zrproxy` 函数 | `zrproxy <命令>` | 注入 `ALL_PROXY/HTTPS_PROXY/HTTP_PROXY=socks5h://127.0.0.1:1080`，给 uv / pip / curl / 长桥 SDK 的 HTTP 调用用 |
+
+规则：
+- 本机需要外网的命令一律加 `zrproxy` 前缀：`zrproxy uv sync`、`zrproxy curl -I https://pypi.org`、`zrproxy uv run python -c "import longport"`。
+- 长桥 WebSocket 实时订阅（录制器、api_facts 的订阅测试）一律在 VPS 跑，不在本机经代理跑。
+- `deploy/sync_from_vps.sh` 走 ssh，不需要代理。
+
+验证：
+```bash
+launchctl list | grep com.zr.socks          # PID 非 "-"
+git ls-remote --heads origin | head -3
+zrproxy curl -sI https://pypi.org | head -1
+zrproxy uv run python -c "import longport; print('ok')"
+```
+
+恢复：`launchctl unload ~/Library/LaunchAgents/com.zr.socks.plist`；删掉 ssh config 的 `Host github.com` 块；`git remote set-url origin https://github.com/ZhuoranHuang/ZR_Capital.git`。
+
 ## 迁移到新加坡（ap-southeast-1）
 
 1. Lightsail 控制台 → 实例 → 快照 → 创建快照。

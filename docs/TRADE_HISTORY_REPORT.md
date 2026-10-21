@@ -1,6 +1,6 @@
 # 交易史报告
 
-生成：2026-10-21T19:14:35+00:00 UTC · 数据：data_store/journal
+生成：2026-10-21T19:29:35+00:00 UTC · 数据：data_store/journal
 订单 331，成交 288 笔，FIFO 往返 157 笔，未配对单边 37 笔（不计入统计）。
 费用：`fees_actual` 为订单实际费用按张摊到往返；`fees_formula` 为 `zr/costs/fees.py` 公式。
 
@@ -153,30 +153,31 @@
 
 16 笔；到期日 11:00 ET 之后：2 笔；DTE=0：2 笔。
 
-| time_et | symbol | side | quantity | dte | after_11_on_expiry | msg |
+| time_et | symbol | side | quantity | dte | after_11_on_expiry | reason |
 |---|---|---|---|---|---|---|
-| 2026-06-10 15:26:04 | MU270115C1000000.US | Buy | 1 | 219 | False |  |
-| 2026-06-10 15:27:55 | NVDA270115C230000.US | Buy | 1 | 219 | False |  |
-| 2026-06-10 15:28:36 | NVDA270115C230000.US | Buy | 1 | 219 | False |  |
-| 2026-06-10 15:34:17 | NVDA270115C230000.US | Buy | 1 | 219 | False |  |
-| 2026-06-16 07:44:23 | DRAM270115C80000.US | Buy | 1 | 213 | False |  |
-| 2026-06-23 09:30:37 | DRAM270115C75000.US | Buy | 4 | 206 | False |  |
-| 2026-06-26 14:34:17 | DRAM260821C75000.US | Buy | 11 | 56 | False |  |
-| 2026-07-02 10:25:18 | DRAM260717C75000.US | Sell | 1 | 15 | False |  |
-| 2026-07-07 02:40:17 | DRAM260717P60000.US | Buy | 8 | 10 | False |  |
-| 2026-07-07 09:38:09 | DRAM270115P60000.US | Sell | 3 | 192 | False |  |
-| 2026-07-17 11:15:25 | MU260722P850000.US | Buy | 4 | 5 | False |  |
-| 2026-07-22 14:48:45 | MU260724P960000.US | Sell | 1 | 2 | False |  |
-| 2026-07-27 14:31:24 | MU260727P885000.US | Buy | 1 | 0 | True |  |
-| 2026-07-27 14:45:47 | MU260727P880000.US | Buy | 1 | 0 | True |  |
-| 2026-08-13 10:31:55 | MU260814P935000.US | Sell | 2 | 1 | False |  |
-| 2026-08-18 10:28:54 | QQQ260819C725000.US | Buy | 21 | 1 | False |  |
+| 2026-06-10 15:26:04 | MU270115C1000000.US | Buy | 1 | 219 | False | The order amount exceeds the maximum buying power |
+| 2026-06-10 15:27:55 | NVDA270115C230000.US | Buy | 1 | 219 | False | The order amount exceeds the maximum buying power |
+| 2026-06-10 15:28:36 | NVDA270115C230000.US | Buy | 1 | 219 | False | The order amount exceeds the maximum buying power |
+| 2026-06-10 15:34:17 | NVDA270115C230000.US | Buy | 1 | 219 | False | The order amount exceeds the maximum buying power |
+| 2026-06-16 07:44:23 | DRAM270115C80000.US | Buy | 1 | 213 | False | The order amount exceeds the maximum buying power |
+| 2026-06-23 09:30:37 | DRAM270115C75000.US | Buy | 4 | 206 | False | The order amount exceeds the maximum buying power |
+| 2026-06-26 14:34:17 | DRAM260821C75000.US | Buy | 11 | 56 | False | The order amount exceeds the maximum buying power |
+| 2026-07-02 10:25:18 | DRAM260717C75000.US | Sell | 1 | 15 | False | Insufficient holdings, please check if there are pending orders occupying available positions |
+| 2026-07-07 02:40:17 | DRAM260717P60000.US | Buy | 8 | 10 | False | The order amount exceeds the maximum buying power |
+| 2026-07-07 09:38:09 | DRAM270115P60000.US | Sell | 3 | 192 | False | Insufficient holdings, please check if there are pending orders occupying available positions |
+| 2026-07-17 11:15:25 | MU260722P850000.US | Buy | 4 | 5 | False | The order amount exceeds the maximum buying power |
+| 2026-07-22 14:48:45 | MU260724P960000.US | Sell | 1 | 2 | False | Insufficient holdings, please check if there are pending orders occupying available positions |
+| 2026-07-27 14:31:24 | MU260727P885000.US | Buy | 1 | 0 | True | The order amount exceeds the maximum buying power |
+| 2026-07-27 14:45:47 | MU260727P880000.US | Buy | 1 | 0 | True | The order amount exceeds the maximum buying power |
+| 2026-08-13 10:31:55 | MU260814P935000.US | Sell | 2 | 1 | False | Insufficient holdings, please check if there are pending orders occupying available positions |
+| 2026-08-18 10:28:54 | QQQ260819C725000.US | Buy | 21 | 1 | False | The order amount exceeds the maximum buying power |
 
 ### 拒绝原因计数
 
-| msg | count |
+| reason | count |
 |---|---|
-|  | 16 |
+| The order amount exceeds the maximum buying power | 12 |
+| Insufficient holdings, please check if there are pending orders occupying available positions | 4 |
 
 ## 撤销订单按时段（ET，30 分钟桶）
 

@@ -5,10 +5,11 @@
 ## 1. 正股 1 分钟 bar
 
 - 标的：`config/universe.yaml`（见 `docs/UNIVERSE_SPEC.md`），`ZR_SYMBOLS` 只能选其子集
-- 范围：2023-01-01 至今
+- 范围：2023-10-02 至今（长桥 1 分钟 K 实测最早 2023-10-02，见 API_FACTS 补充；2023-01～09 需另找数据源）
 - 来源：长桥 `history_candlesticks_by_offset(symbol, Period.Min_1, AdjustType.NoAdjust, forward, count, time, TradeSessions)`；实际可回溯深度由 `zr/ops/api_facts.py` 核验后写入 `docs/API_FACTS.md`
-- 路径：`bars_1m/underlying=XXX/date=YYYY-MM-DD/*.parquet`
-- 列：`ts`(UTC, ns) · `open` `high` `low` `close`(float64) · `volume`(int64) · `turnover`(float64) · `session`(str: pre/regular/post)
+- 路径：`bars_1m/underlying=XXX/year=YYYY/bars.parquet`（`zr/data/backfill_bars.py`，按 (ts, symbol) 去重）
+- 列：`ts`(UTC, tz-aware) · `symbol` · `open` `high` `low` `close`(float64) · `volume`(int64) · `turnover`(float64) · `session`(Pre/Intraday/Post/Overnight)
+- 2 / 5 分钟 K 从 1 分钟聚合，不单独拉取
 
 ## 2. 期权 NBBO（ThetaData Options Standard）
 

@@ -1,66 +1,57 @@
 # 状态
 
-更新：2026-10-21 14:50 ET · 分支 `feat/deploy`（VPS 已部署同一 commit）
+更新：2026-10-21 15:35 ET · 分支 `feat/w1-analysis`（VPS 已检出同一分支，录制器进程仍是上午的代码，16:05 ET 退出后下次 timer 用新代码）
 
 ## 阶段
 
-W1 数据层。VPS 上线，长桥 API 全部核验通过，交易史已导出。录制器今日 14:46 ET 手动启动跑到 16:05，明日起由 timer 接管。首次启动因 systemd 环境变量优先级问题写错目录（已修复，见 DEPLOY_LOG），数据已并入 `~/zr_data/recorder/`。
+W1 数据层收尾。费用模型已用真实成交逐项验证为精确；交易史往返分析出炉；正股 1 分钟 K 回填 SPY 完成、其余运行中。
 
-## 完成项
+## 完成项（本轮）
 
-- 部署：`deploy/`（bootstrap、deploy/rollback、systemd ×3、sync、launchd）、`docs/DEPLOY.md`、`docs/DEPLOY_LOG.md`
-- 录制器时段逻辑（trading_days 判交易日、9:25 ET 订阅、16:05 ET 退出）、`zr/ops/healthcheck.py`、`zr.data.universe` 周快照 CLI、`zr/ops/redact_api_facts.py`
-- Task 1.1 API 核验：`docs/API_FACTS.md`（脱敏后入库，28 项全部成功）
-- Task 1.3 交易史：VPS `~/zr_data/journal/{orders,executions,charges}.parquet`
-- `.env`：本机与 VPS 各一份（600），从未入库
-- 测试 39 个，ruff 通过
+- `legacy/` 已删除（负责人确认），审计记录 `docs/AUDIT.md`，commit 4a2c1f5 之前可恢复
+- `zr/costs/fees.py` + `validate_fees.py` → `docs/FEE_VALIDATION.md`，D-013
+- `zr/journal/analyze_history.py` → `docs/TRADE_HISTORY_REPORT.md`；`trade_history.py` 现在从 `order_detail` 取拒绝原因
+- `zr/data/backfill_bars.py`（断点续传、按年 parquet）；`docs/DATA_INVENTORY.md`
+- `deploy/sync_from_vps.sh` 修复 macOS rsync 参数；`docs/DEPLOY.md` 增「网络」一节
+- 测试 48 个，ruff 通过
 
-## Task 1.1 关键结论（2026-10-21 14:43 ET 盘中，VPS 运行）
+## 费用公式验证（`docs/FEE_VALIDATION.md`）
 
-| 问题 | 结论 | 依据（API_FACTS.md 小节） |
-|---|---|---|
-| 期权行情权限 | **生效**。`quote_package_details` 含 "OPRA US options real-time quotes with best bid and offer, for OpenAPI only"（US_OPRA…，有效期至 2026-11-19）；`quote_level` 中 USOP=LV1 | quote_package_details / quote_level |
-| depth() 对期权是否返回 bid/ask | **是，1 档**。SPY261021C774000.US：bid 0.81×232，ask 0.82×235，`order_num`=0 | depth(SPY261021C774000.US) |
-| Depth 推送对期权 | **是**。订阅 SubType.Depth 收到该合约 bid 0.81 / ask 0.82 | subscribe 20s → depth_sample |
-| 20 秒订阅计数（SPY + 1 张 0DTE call） | quote 117 / depth 99 / trade 115 | subscribe 20s |
-| 正股 1 分钟 K 回溯 | 4 标的各翻 30 页 × 1000 根 = 30000 根，到 2026-09-09 仍有数据，**上限未探到**；含 Pre/Post 时段 | earliest_minute_bar(*)（第一次运行，`--skip-bars` 前） |
-| 期权 1 分钟 K | `candlesticks(Min_1,100)` 返回 100 根；`history_by_offset(Min_1,1000)` 返回 1000 根，最早 2026-10-19 15:34 UTC（合约挂牌后全程可取） | candlesticks / history_candlesticks_by_offset |
-| MU/AMD 到期日 | **周一 / 周三 / 周五都有**：10-16 五、10-19 一、10-21 三、10-23 五、10-26 一、10-28 三。SPY/QQQ 每个交易日 | option_chain_expiry_date_list |
-| 账户类型 | **真实账户**：2026-06-09～08-19 有 218 笔真实成交，费用项含 CAT/OCC/SFC 等监管费。当前净资产数量级 10^-1 HKD、持仓空、近 30 天无成交——**账户基本为空，请负责人确认是否为预期账户** | account_balance（脱敏）/ stock_positions / history_executions |
-| 新发现 | `option_chain_expiry_date_list` **包含已过期日期**，必须过滤；SDK 时间戳为无时区 naive，值为 UTC（quote timestamp 18:43:49 = VPS UTC 时间） | nearest_atm_call 第一次误选 10-15；option_quote.timestamp |
+218 笔有成交订单、8 个费用项、逐项残差 **全部为 0**（按订单计最低收费与四舍五入，H1）。按成交笔数各自计最低收费（H2）在 41 笔多笔成交订单上残差绝对值和 77.71 USD，最大单笔 5.29。**结论：最低收费按订单计，不按成交笔数。** 往返分析里公式费用与实际费用合计同为 903.59 USD。
 
-## Task 1.3 交易史（`--since 2026-05-01 --options-only`）
+## 交易史分析（`docs/TRADE_HISTORY_REPORT.md`，2026-06-09 ～ 08-19）
 
-由 VPS 上 pandas 统计（命令见 DEPLOY_LOG）：
+- FIFO 往返 157 笔 / 425 张；未配对单边另列不计入
+- **胜率 0.57，盈亏比 0.73**（平均盈利 442.87 / 平均亏损 −603.45），平均每笔 −10.32，合计 **−1619.59 USD**（扣费后）
+- 按标的：MU 125 笔 +1820.31（胜率 0.59，盈亏比 0.73）；DRAM 24 笔 −2698.49；QQQ 3 笔 −985.79；其余零星
+- 按 DTE：0DTE 23 笔 +6572.61（胜率 0.48，盈亏比 2.1）；**1DTE 73 笔 −8402.90（胜率 0.59，盈亏比 0.41）**
+- 按持仓：≤30 分钟三档合计 +11,837；**30–60 分钟 12 笔 −11,398（胜率 0.25）**；>4h 29 笔 −1373
+- 被拒 16 笔：原因 12 笔 "The order amount exceeds the maximum buying power"、4 笔 "Insufficient holdings…"；DTE=0 且 11:00 ET 后只有 2 笔（7-27 14:31、14:45）——**不集中在到期日 11:00 后**，主要是资金不足
+- 撤销 92 笔：09:30–11:30 ET 共 40 笔（10:00 桶 15 笔最多），盘前 02:30–09:00 共 14 笔
 
-- 订单 331：Filled 218 / Canceled 92 / Rejected 16 / Expired 5
-- 成交 288 笔，974 张，日期 2026-06-09 ～ 2026-08-19
-- 按标的（成交笔数 / 张数）：MU 232 / 730，DRAM 39 / 116，QQQ 9 / 102，NVDA 3 / 4，TQQQ 3 / 20，META 2 / 2。**预期"MU 最多其次 QQQ"：MU 对，第二是 DRAM 不是 QQQ**
-- 费用合计 1039.86 USD（218 笔有成交订单的 `charge_detail.total_amount` 之和）
-  - 佣金 504.05、平台费 292.20、交易所费 175.32、清算费 24.94、监管费 23.39、SFC 15.69、CAT 2.18、TAF 2.09
-  - **实测全部费用 1.0676 USD/张/单边**（1039.86 / 974）；佣金 0.5175/张；平台费 0.30/张（与 D-006 官网费率一致）。D-006 的 0.98 估计偏低约 9%
+这些数字是历史手工交易的描述，不是策略结论；进入策略的只有费用公式（D-013）和"1DTE 盈亏比 0.41 / 30–60 分钟持仓亏损集中"两个待验证线索（登记 RESEARCH_LOG R-003）。
 
-## 定时器（VPS，UTC）
+## 正股 1 分钟 K 回填（VPS，`zr/data/backfill_bars.py`）
 
-| timer | 下次触发 |
-|---|---|
-| zr-healthcheck | 每 5 分钟（18:50 UTC 起） |
-| zr-recorder | Thu 2026-10-22 13:20 UTC |
-| zr-universe | Fri 2026-10-23 21:30 UTC |
+- **SPY 最早 2023-10-02 08:00 UTC**（04:00 ET 盘前）；780 页 779,200 根，去重后 747,019 行（2023: 62,400 / 2024: 251,460 / 2025: 239,460 / 2026: 193,699）；约 9.5 分钟
+- 服务端在此之前不再返回数据（`stop_reason=no_progress`），即长桥 1 分钟 K 回溯约 2 年；DATA_SPEC 的"2023-01 至今"改为"2023-10 至今"，2023-01～09 若需要只能靠其他数据源
+- QQQ / MU / AMD 排队运行中（19:28 UTC 起），完成后重新生成 `docs/DATA_INVENTORY.md`
 
-universe 快照手动跑过一次：真实期权链解析出 308 个订阅，与 dry-run 一致。
+## 录制与同步
+
+- 10-21 录制器 14:46 ET 起跑（含路径修复后的重启），16:05 ET 退出后生成 `~/zr_data/recorder_qa/2026-10-21.md`——**本次更新时尚未到点，QA 数字待下次补**
+- `deploy/sync_from_vps.sh`：11.5 秒、426 个文件、7.3 MB（第一次全量）；journal 二次同步 <5 秒
+- launchd 每日同步任务：待负责人确认后安装（本机时区是 US/Pacific，不是新加坡；09:00 local = 新加坡 00:00，需决定改 Hour 还是改系统时区）
 
 ## 待确认
 
-1. 账户：API key 对应账户净资产 ≈ 0、无持仓；是否为准备实盘的账户？
-2. 正股 1 分钟 K 回溯上限：需要专门回填脚本一次性翻到头（预计数百页），是否现在做？
-3. `legacy/` 是否删除。
-4. D-001 保证金规则需人工客服确认。
-5. D-008 蒙特卡洛脚本未入库（R-002）。
-6. 本机网络：DNS 污染（见 DEPLOY_LOG）；API 相关工作一律在 VPS 跑。
+1. 本机网络三处修改（SOCKS 常驻、ssh config github ProxyJump、zshrc zrproxy）+ launchd 同步任务：内容已打印，等"确认"
+2. 1 分钟 K 只能回溯到 2023-10：是否接受，或为 2023-01～09 另找数据源
+3. 账户净资产 ≈ 0（上轮）
+4. D-001 保证金规则人工客服确认；D-008 蒙特卡洛脚本未入库
 
 ## 下一步
 
-1. 明日看 `~/zr_data/recorder_qa/2026-10-22.md` 与 alerts，确认 timer 全流程。
-2. Task 1.4 成本报告：用 journal 的 974 张实测费用 + 录制器 spread 数据。
-3. Task 1.5 ThetaData loader。
+1. 网络配置写入并验证；装 launchd 同步
+2. 等 QQQ/MU/AMD 回填完成 → DATA_INVENTORY；10-21 QA 报告写入 STATUS
+3. Task 1.4 成本报告（费用公式 + 录制器 spread）；Task 1.5 ThetaData

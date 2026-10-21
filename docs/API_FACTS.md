@@ -233,3 +233,8 @@ OptionQuote 无 bid/ask（已核实）。
 ```json
 {"cash_max_qty": [REDACTED], "margin_max_qty": [REDACTED]}
 ```
+
+## 补充：正股 1 分钟 K 回溯起点（来源：`zr/data/backfill_bars.py` 2026-10-21 VPS 运行日志，非本脚本生成）
+
+- SPY.US：翻页 780 页、779,200 根后服务端不再返回更早数据，最早一根 **2023-10-02 08:00 UTC**（04:00 ET，Pre）。即 `history_candlesticks_by_offset(Min_1)` 回溯深度约 2 年零 3 周。
+- 其余标的见 `docs/DATA_INVENTORY.md`。
