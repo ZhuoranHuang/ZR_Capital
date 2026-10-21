@@ -14,6 +14,14 @@ ZR Capital：美股分钟级期权交易系统。代码在 `zr/`，测试在 `te
 7. 不硬编码到期日、交易日历、行权价间距；一律从数据源查询。
 8. 需要负责人决策时，写入 `docs/STATUS.md` 的「待确认」，然后停止。
 9. 每个任务结束时运行 `uv run ruff check .` 和 `uv run pytest -q`，并更新 `docs/STATUS.md`。
+10. 负责人提出反驳时，先独立评估并给出自己的判断和依据，再决定是否调整计划；不自动把负责人的说法当作新基准。
+11. 实验中的持仓时长、到期日选择、事件阈值一律是待测参数，不写死；任何数字结论必须来自仓库内可复现的脚本。
+
+## 文档
+
+- `docs/DECISIONS.md` 决策记录（只追加）；`docs/STRATEGY_V1.md` 策略定稿；`docs/DATA_SPEC.md` 数据规范
+- `docs/PLAN_W1.md` 当周任务；`docs/STATUS.md` 当前状态与待确认；`docs/RESEARCH_LOG.md` 假设登记
+- `docs/API_FACTS.md` 由 `zr/ops/api_facts.py` 生成，不手改
 
 ## 常用命令
 
