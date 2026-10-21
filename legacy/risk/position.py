@@ -1,1 +1,0 @@
-"""Position management with pyramid scaling-in / scaling-out. Adds to winners in tranches as the thesis confirms; trims progressively at target levels. Position size is a continuous function of signal strength and risk."""
