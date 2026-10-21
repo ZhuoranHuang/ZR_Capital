@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     # 实盘总开关；实盘下单还需命令行 --live，见 CLAUDE.md
     zr_live: bool = False
     # 逗号分隔，例如 SPY.US,QQQ.US
-    zr_symbols: str = "SPY.US,QQQ.US,MU.US,AMD.US"
+    zr_symbols: str = "SPY.US,QQQ.US,MU.US"  # AMD 暂停（D-016）
 
     @property
     def symbols(self) -> list[str]:

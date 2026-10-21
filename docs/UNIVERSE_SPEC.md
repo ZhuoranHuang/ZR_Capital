@@ -19,12 +19,12 @@
 | SPY.US | 2 | 10 | 3% | 5 |
 | QQQ.US | 2 | 10 | 3% | 5 |
 | MU.US | 2 | 8 | 8% | 5 |
-| AMD.US | 2 | 8 | 8% | 5 |
+| AMD.US（暂停，D-016） | 2 | 8 | 8% | 5 |
 
 `subscription_cap` = 450。
 
 ## 规则
 
-- `.env` 的 `ZR_SYMBOLS` 是运行时过滤器，只能选 universe 的子集；出现 universe 没有的代码时加载报错。
+- `.env` 的 `ZR_SYMBOLS` 是运行时过滤器，只能选 universe 的子集；出现 universe 没有的代码时加载报错。当前默认 `SPY.US,QQQ.US,MU.US`。
 - 到期日、行权价间距一律来自期权链 API（D-005），universe 只定义"取多少"，不定义"是哪些"。
 - 改 universe 值要在 `docs/DECISIONS.md` 追加一条。MU/AMD 是否留在 v0 看 D-009。

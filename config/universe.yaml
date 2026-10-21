@@ -1,4 +1,5 @@
-# 标的池。规范见 docs/UNIVERSE_SPEC.md；改值需在 docs/DECISIONS.md 追加记录。
+# 标的池（候选池）。规范见 docs/UNIVERSE_SPEC.md；改值需在 docs/DECISIONS.md 追加记录。
+# 默认启用集合由 ZR_SYMBOLS（zr/config.py 默认 SPY.US,QQQ.US,MU.US）决定；AMD 保留在候选池但暂停（D-016）。
 subscription_cap: 450
 
 underlyings:

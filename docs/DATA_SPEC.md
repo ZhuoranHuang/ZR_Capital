@@ -4,7 +4,7 @@
 
 ## 1. 正股 1 分钟 bar
 
-- 标的：`config/universe.yaml`（见 `docs/UNIVERSE_SPEC.md`），`ZR_SYMBOLS` 只能选其子集
+- 标的：`config/universe.yaml`（见 `docs/UNIVERSE_SPEC.md`），`ZR_SYMBOLS` 只能选其子集；当前 SPY/QQQ/MU，AMD 暂停（D-016）
 - 范围：2023-10-02 至今（长桥 1 分钟 K 实测最早 2023-10-02，见 API_FACTS 补充；2023-01～09 需另找数据源）
 - 来源：长桥 `history_candlesticks_by_offset(symbol, Period.Min_1, AdjustType.NoAdjust, forward, count, time, TradeSessions)`；实际可回溯深度由 `zr/ops/api_facts.py` 核验后写入 `docs/API_FACTS.md`
 - 路径：`bars_1m/underlying=XXX/year=YYYY/bars.parquet`（`zr/data/backfill_bars.py`，按 (ts, symbol) 去重）
