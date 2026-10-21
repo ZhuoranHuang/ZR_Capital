@@ -1,30 +1,17 @@
+# 密钥
+.env
+
 # Python
+.venv/
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
 
-# Virtual environments
-.venv/
-venv/
-env/
+# 数据（不入库）
+data_store/
+*.parquet
 
-# Claude Code local config
+# 本地工具 / 系统
 .claude/
-
-# Editor / OS
-.vscode/
-.idea/
 .DS_Store
-Thumbs.db
-
-# Data & logs (do not commit market data or runtime logs)
-data/cache/
-data/*.csv
-data/*.parquet
-data/*.feather
-*.log
-
-# Notebooks checkpoints
 .ipynb_checkpoints/
+*.log
