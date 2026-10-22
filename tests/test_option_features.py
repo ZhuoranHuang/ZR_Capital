@@ -154,3 +154,34 @@ def test_missing_file_day_is_skipped(tmp_path, missing):
             v.to_parquet(p / f"{k}.parquet", index=False)
     f = of.compute_option_features(tmp_path, "SPY", s)
     assert f.isna().all().all()
+
+
+def test_oi_chg_same_tenor_not_same_contract(tmp_path):
+    """D-019：比较同 DTE 的不同合约，而非同一合约（同一合约随到期临近的增长不计）。"""
+    d0, d1 = dt.date(2024, 3, 4), dt.date(2024, 3, 5)
+    rows = {
+        # 昨日：DTE 1（3/5 到期）OI 100，DTE 2（3/6 到期）OI 40
+        d0: [(dt.date(2024, 3, 5), 100), (dt.date(2024, 3, 6), 40)],
+        # 今日：3/6 合约（DTE 1）OI 涨到 150（同一合约 +275%），新的 DTE 2（3/7）OI 60
+        d1: [(dt.date(2024, 3, 6), 150), (dt.date(2024, 3, 7), 60)],
+    }
+    for d, lst in rows.items():
+        p = tmp_path / "options_1m/underlying=MU" / f"date={d.isoformat()}"
+        p.mkdir(parents=True)
+        pd.DataFrame(
+            [
+                {
+                    "symbol": f"X{e}",
+                    "expiry": e,
+                    "strike": 100.0,
+                    "right": "call",
+                    "open_interest": v,
+                }
+                for e, v in lst
+            ]
+        ).to_parquet(p / "oi.parquet", index=False)
+    t = of.oi_daily(tmp_path, "MU", [d0, d1])
+    assert np.isnan(t.loc[d0, "opt_oi_chg"])
+    # DTE 1：150 vs 100；DTE 2：60 vs 40 → (150+60)/(100+40) − 1 = 0.5
+    assert np.isclose(t.loc[d1, "opt_oi_chg"], 0.5)
+    assert t.loc[d1, "opt_oi_n_dte"] == 2

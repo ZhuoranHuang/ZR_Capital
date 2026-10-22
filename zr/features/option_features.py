@@ -16,7 +16,10 @@ ATM 用正股 bar t 的收盘价；「近端」= 当日仍未到期的最近到�
 - opt_near_vol_ratio20：opt_near_vol ÷ 前 20 个交易日同一分钟均值（至少 5 天）
 - opt_cp_lr_near / opt_cp_lr_all：log((call 量+1)/(put 量+1))，近端 ATM±2 / 全部已拉取合约
 - opt_atm_iv：近端 ATM call/put 中间价 BS 反推 IV 均值；opt_atm_iv_chg5 / chg15：日内 5、15 分钟变化
-- opt_oi_chg：在带宽内、两日都存在的合约，OI 合计的日变化率；opt_pc_oi：put/call OI 比
+- opt_oi_chg（D-019 同期限对比）：今日 DTE=d 的合约 OI 合计 ÷ 昨日 DTE=d 的合约 OI 合计 − 1，
+  d 为两日都出现的日历日 DTE，只计两日已拉取行权价区间的交集；无共同 DTE 时 NaN
+  （周度到期只有周五的标的，相邻交易日 DTE 集合不重叠，此列基本为 NaN）；
+  opt_oi_n_dte：参与对比的 DTE 个数；opt_pc_oi：put/call OI 比
 - opt_front_dte：近端到期日距今天数
 未包含：净 gamma 近似（GEX）——等 OI 全量到位后另加（PLAN_W3 线 a）。
 """
@@ -48,6 +51,7 @@ OPTION_FEATURE_COLUMNS = [
     "opt_atm_iv_chg5",
     "opt_atm_iv_chg15",
     "opt_oi_chg",
+    "opt_oi_n_dte",
     "opt_pc_oi",
     "opt_front_dte",
 ]
@@ -192,7 +196,7 @@ def day_features(stock: pd.DataFrame, opt: dict[str, pd.DataFrame], day: dt.date
 
 
 def oi_daily(root: Path, und: str, days: list[dt.date]) -> pd.DataFrame:
-    """每日 OI 特征：同时存在于前一日的合约 OI 合计变化率、put/call OI 比。"""
+    """每日 OI 特征（D-019）：同 DTE（日历日）桶的 OI 合计日变化率、put/call OI 比。"""
     rows, prev = [], None
     for day in days:
         d = root / "options_1m" / f"underlying={und}" / f"date={day.isoformat()}" / "oi.parquet"
@@ -203,23 +207,36 @@ def oi_daily(root: Path, und: str, days: list[dt.date]) -> pd.DataFrame:
         if oi.empty:
             prev = None
             continue
-        cur = oi.groupby("symbol")["open_interest"].sum()
+        dte = (pd.to_datetime(oi["expiry"]) - pd.Timestamp(day)).dt.days
+        cur = pd.DataFrame(
+            {"dte": dte.to_numpy(), "strike": oi["strike"], "oi": oi["open_interest"]}
+        )
+        cur = cur[cur["dte"] >= 0]
         calls = oi.loc[oi["right"] == "call", "open_interest"].sum()
         puts = oi.loc[oi["right"] == "put", "open_interest"].sum()
-        chg = np.nan
-        if prev is not None:
-            common = cur.index.intersection(prev.index)
-            base = prev[common].sum()
-            if len(common) and base > 0:
-                chg = cur[common].sum() / base - 1
+        chg, n_dte = np.nan, 0
+        if prev is not None and len(cur) and len(prev):
+            lo = max(cur["strike"].min(), prev["strike"].min())
+            hi = min(cur["strike"].max(), prev["strike"].max())
+            a = cur[cur["strike"].between(lo, hi)].groupby("dte")["oi"].sum()
+            b = prev[prev["strike"].between(lo, hi)].groupby("dte")["oi"].sum()
+            common = a.index.intersection(b.index)
+            n_dte = len(common)
+            if n_dte and b[common].sum() > 0:
+                chg = a[common].sum() / b[common].sum() - 1
         rows.append(
-            {"date": day, "opt_oi_chg": chg, "opt_pc_oi": puts / calls if calls > 0 else np.nan}
+            {
+                "date": day,
+                "opt_oi_chg": chg,
+                "opt_oi_n_dte": n_dte,
+                "opt_pc_oi": puts / calls if calls > 0 else np.nan,
+            }
         )
         prev = cur
     return (
         pd.DataFrame(rows).set_index("date")
         if rows
-        else pd.DataFrame(columns=["opt_oi_chg", "opt_pc_oi"])
+        else pd.DataFrame(columns=["opt_oi_chg", "opt_oi_n_dte", "opt_pc_oi"])
     )
 
 
@@ -252,6 +269,6 @@ def compute_option_features(root: Path, und: str, stock: pd.DataFrame) -> pd.Dat
             / base.stack(future_stack=True).reindex(key).to_numpy()
         )
         daily = oi_daily(root, und, loaded)
-        for c in ("opt_oi_chg", "opt_pc_oi"):
+        for c in ("opt_oi_chg", "opt_oi_n_dte", "opt_pc_oi"):
             out[c] = sday.map(daily[c]).to_numpy(dtype=float) if len(daily) else np.nan
     return out
