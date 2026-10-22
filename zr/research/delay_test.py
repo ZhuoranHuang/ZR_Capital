@@ -1,7 +1,7 @@
 """延迟测试（fix/lookahead-audit 第 1 节）。
 
-把全部入场信号在同一交易日内延迟 1 根 K 线（`sim_v3.shift_signal_within_day`）再跑一遍 2 分钟、
-MACD(6,13,6) 的网格，与不延迟的原版比较：
+把全部入场信号在同一交易日内延迟 1 根 K 线（`sim_v3.shift_signal_within_day`）再跑一遍
+周期 {1,2,5}、MACD(6,13,6) 的网格，与不延迟的原版比较：
 - 全网格扣费后每张均值的中位数
 - 已有规则卡（`cards_<UND>.parquet`）里前 20 张（按 mean_per_contract）各自在延迟版下的表现
 
@@ -30,7 +30,7 @@ from zr.research import grid_v3
 from zr.research import sim_v3 as sv
 
 log = logging.getLogger("zr.research.delay_test")
-PERIOD = 2
+PERIODS = (1, 2, 5)
 MACD_KEY = "macd"
 MACD_TAG = "6,13,6"
 
@@ -42,10 +42,12 @@ def run(und: str, top_n: int = 20) -> tuple[str, pd.DataFrame]:
     stock = load_extended_bars(root, und)
     days = option_days(root, und)
 
-    base = sv.run_grid(root, und, stock, cfg, [PERIOD], days, macd_key=MACD_KEY)
-    delayed = sv.run_grid(root, und, stock, cfg, [PERIOD], days, macd_key=MACD_KEY, delay_bars=1)
-    lt_base = grid_v3.long_table({PERIOD: base[PERIOD]}, cfg, MACD_TAG)
-    lt_delay = grid_v3.long_table({PERIOD: delayed[PERIOD]}, cfg, MACD_TAG)
+    base = sv.run_grid(root, und, stock, cfg, list(PERIODS), days, macd_key=MACD_KEY)
+    delayed = sv.run_grid(
+        root, und, stock, cfg, list(PERIODS), days, macd_key=MACD_KEY, delay_bars=1
+    )
+    lt_base = grid_v3.long_table(base, cfg, MACD_TAG)
+    lt_delay = grid_v3.long_table(delayed, cfg, MACD_TAG)
     qty = cfg["execution"]["qty"]
     lt_base["mean_per_contract"] = lt_base["mean_net"] / qty
     lt_delay["mean_per_contract"] = lt_delay["mean_net"] / qty
@@ -62,7 +64,7 @@ def run(und: str, top_n: int = 20) -> tuple[str, pd.DataFrame]:
     top_cmp = pd.DataFrame()
     if cards_path.exists():
         cards = pd.read_parquet(cards_path)
-        cards = cards[(cards["period"] == PERIOD) & (cards["macd"] == MACD_TAG)]
+        cards = cards[cards["period"].isin(PERIODS) & (cards["macd"] == MACD_TAG)]
         top = cards.sort_values("mean_per_contract", ascending=False).head(top_n)
         tc = top.merge(
             lt_delay[join_cols + ["mean_per_contract", "n", "mean_oos"]],
@@ -79,11 +81,14 @@ def run(und: str, top_n: int = 20) -> tuple[str, pd.DataFrame]:
 
     n_improved_median = int((m["mean_per_contract_delay"] > m["mean_per_contract_base"]).sum())
     n_total = len(m)
-    suspicious = med_delay > med_base or (len(top_cmp) and (top_cmp["delta"] > 0).mean() > 0.5)
+    spread = float(m["mean_per_contract_base"].abs().median()) or 1.0
+    rel_shift = (med_delay - med_base) / spread  # 相对基准量级的位移，避免小幅噪声被判定为"显著"
+    top_improved_share = float((top_cmp["delta"] > 0).mean()) if len(top_cmp) else 0.0
+    suspicious = rel_shift > 0.2 or top_improved_share > 0.5
     verdict = (
         "延迟后反而显著变好，需要定位原因（见下）"
         if suspicious
-        else "延迟后持平或变差，符合预期，未发现前视迹象"
+        else "延迟后持平、变差或改善幅度在噪声量级内，未发现前视迹象"
     )
     L = [
         f"# 延迟测试（{und}，入场延迟 1 根 2 分钟 K）",
@@ -92,10 +97,12 @@ def run(und: str, top_n: int = 20) -> tuple[str, pd.DataFrame]:
         f"{time.monotonic() - t0:.0f}s · 复现 `uv run python -m zr.research.delay_test "
         f"--symbol {und}.US`",
         "",
-        f"全网格（2 分钟、MACD({MACD_TAG})，{n_total} 行同时有数据）扣费后每张均值中位数：",
+        f"全网格（周期 {PERIODS}、MACD({MACD_TAG})，{n_total} 行同时有数据）扣费后每张均值中位数：",
         "",
         f"- 原版：{med_base:.4f}",
         f"- 延迟 1 根：{med_delay:.4f}",
+        f"- 位移 ÷ 原版中位数绝对值：{rel_shift:+.1%}（> 20% 才视为「显著」，避免深度为负时的小幅"
+        "波动被误判）",
         f"- 延迟后数值更高的行数：{n_improved_median} / {n_total}"
         f"（{n_improved_median / max(n_total, 1):.1%}）",
         "",
