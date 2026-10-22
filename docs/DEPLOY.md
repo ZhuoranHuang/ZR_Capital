@@ -20,6 +20,18 @@ VPS：AWS Lightsail 悉尼（ap-southeast-2），Ubuntu 24.04，2 GB，SSH 别�
 
 数据目录 `/home/ubuntu/zr_data/`：`recorder/`（Parquet）、`recorder_qa/`、`universe/`、`journal/`、`alerts/`、`logs/`、`raw/`。
 
+## 长桥 token（实盘 / 模拟盘，2026-10-22）
+
+`.env` 里 App Key / App Secret 两种模式共用，access_token 分两个字段：
+
+| 字段 | 用途 | 默认 mode |
+|---|---|---|
+| `LONGPORT_LIVE_ACCESS_TOKEN` | 实盘 | 行情与只读脚本（`api_facts`、`recorder`、`trade_history`、`backfill_bars`、`universe`）不传 `mode` 即用这个 |
+| `LONGPORT_PAPER_ACCESS_TOKEN` | 模拟盘 | 只有模拟盘下单脚本（paper_runner，尚未实现）需要显式 `mode="paper"` |
+| `LONGPORT_ACCESS_TOKEN` | 旧字段名，`LONGPORT_LIVE_ACCESS_TOKEN` 的兼容别名 | 仍可用；`zr.broker.longport_client.make_config` 检测到只有这个旧字段时会在连接时打印改名提示（不打印 token 值），建议尽快改成新字段名 |
+
+`make_config(mode="live"|"paper")` 连接时会解码 access_token 的 JWT payload（不验签，只读 `ac` 字段做客户端自检，**未验证**：JWT 格式与 `ac` 字段来自负责人说法，未独立核实长桥官方文档）：paper 模式要求 `ac == "lb_papertrading"`，live 模式要求 `ac != "lb_papertrading"`，不符则抛 `LongportModeMismatchError` 拒绝连接——防止模拟盘代码连到实盘账户、或反过来。
+
 ## 首次部署
 
 ```bash
