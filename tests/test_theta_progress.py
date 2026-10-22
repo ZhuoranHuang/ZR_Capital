@@ -36,17 +36,17 @@ def test_month_summary_uses_latest_record_per_day(tmp_path):
         d / "quotes.parquet", index=False
     )  # 真实 parquet（覆盖检查会读它）；约 0.5 MB
     s = month_summary(tmp_path, "SPY", dt.date(2023, 10, 1), dt.date(2023, 10, 31))
-    # 没有正股 K → 覆盖未知（不计入 covered/uncovered）
-    assert s == {
+    # 没有正股 K → 覆盖未知（不计入 covered/uncovered）；mb 取决于 parquet 实际大小，只验 > 0
+    assert {k: v for k, v in s.items() if k != "mb"} == {
         "days": 2,
         "failed": 1,
         "quotes": 15,
         "ohlc": 14,
         "oi": 3,
-        "mb": 1.0,
         "covered": 0,
         "uncovered": 0,
     }
+    assert s["mb"] > 0
 
 
 def test_append_row_creates_table_once_and_appends_in_order(tmp_path):
