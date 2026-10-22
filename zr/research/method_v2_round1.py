@@ -1,6 +1,6 @@
 """方法论 v2 第一轮报告（METHOD_V2 规格 11）→ docs/research/METHOD_V2_ROUND1.md。
 
-顺序：覆盖矩阵 → 回放结果 → E1 回踩遍历（D-022）→ 四条基线 → 标签与分层（R-018～R-022）
+顺序：覆盖矩阵 → 回放（D-022 网格为主、收紧版 E1 对照）→ 四条基线 → 标签与分层（R-018～R-022）
 → 模型 → 决策模拟 → 审计 → 秒级。
 每节附边界声明（CLAUDE.md 规则 12）。前置：
   uv run python -m zr.research.outcomes --symbol MU.US
@@ -242,17 +242,10 @@ def main(argv: list[str] | None = None) -> int:
         "",
         f"边界：{bound}。QQQ / SPY 期权未到位的月份不参与任何结论。",
         "",
-        "## 1. 规则直接回放（规格 2，R-017）",
+        "## 1. 规则直接回放（规格 2；主结果 = D-022 回踩深度网格，R-029；"
+        "对照 = 原收紧版 E1，R-017）",
         "",
-        f"完整表见 `docs/research/REPLAY_RULE_{und}.md`（DTE、时段、星期、D-001、DTE 0–1 时代、"
-        "通道三步）。16 组汇总：",
-        summ.strip(),
-        "",
-        f"边界：{bound}；随机对照 = 同日同笔数、同方向同持仓上限的随机决策分钟，{a.n_random} 次。",
-        "",
-    ]
-    L += [
-        "## 1b. E1 回踩深度遍历（D-022，R-029）",
+        "### 1.1 主结果：D-022 网格（144 个定义 × 方向 × 持仓上限 = 576 行）",
         "",
         f"完整表见 `docs/research/E1_PULLBACK_SWEEP_{und}.md`（事件表 + 回放全表）。网格 "
         "config/e1_sweep.yaml；试验计数与 Bonferroni 门槛见要点表。",
@@ -267,7 +260,16 @@ def main(argv: list[str] | None = None) -> int:
         L += [f"待 {und} 全量（无期权数据）。", ""]
     L += [
         f"边界：{bound}；回踩信号定义见 zr/features/pullback.py（深度 %b / ε 二选一、"
-        "至少 n 根同日回调后收阳、布林值取信号 bar）；随机对照同第 1 节。",
+        "至少 n 根同日回调后收阳、布林值取信号 bar）；随机对照 = 全天随机分钟（real_pctile）"
+        f"与同日 ±15 分钟时段匹配（real_pctile_local），各 {a.n_random} 次。",
+        "",
+        "### 1.2 对照行：原收紧版 E1（ε 0.05%、确认 1 根、BB20 × 通道 A/F，16 组）",
+        "",
+        f"DTE、时段、星期、D-001、DTE 0–1 时代、通道三步等分层只对这一版做，见 "
+        f"`docs/research/REPLAY_RULE_{und}.md`。16 组汇总：",
+        summ.strip(),
+        "",
+        f"边界：{bound}；随机对照同 1.1。",
         "",
         "## 2. 四条基线（规格 8，R-025）",
         "",
