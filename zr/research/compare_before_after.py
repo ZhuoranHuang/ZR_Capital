@@ -52,9 +52,14 @@ def _model_auc(text: str | None) -> dict:
 
 
 def _classification(text: str | None) -> pd.DataFrame:
+    """只解析「157 笔按状态分类」表格本身，不扫描整份文档（避免匹配到其他同形状的表）。"""
     if text is None:
         return pd.DataFrame()
-    rows = re.findall(r"\| ([^|]+) \| (\d+) \| ([\d.]+) \| ([-\d.]+) \| ([-\d.]+) \|", text)
+    m = re.search(r"## 157 笔按状态分类.*?\n\n(.*?)\n\n", text, re.S)
+    if not m:
+        return pd.DataFrame()
+    rows = re.findall(r"\| ([^|]+) \| (\d+) \| ([\d.]+) \| ([-\d.]+) \| ([-\d.]+) \|", m[1])
+    rows = [r for r in rows if r[0] not in ("state", "---")]
     return pd.DataFrame(rows, columns=["state", "n", "win_rate", "sum_pnl", "mean_pnl"])
 
 
