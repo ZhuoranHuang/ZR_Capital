@@ -20,6 +20,7 @@ import yaml
 from zr.config import get_settings
 from zr.features.bars import load_bars
 from zr.features.features import FEATURE_COLUMNS, compute_features
+from zr.features.option_features import OPTION_FEATURE_COLUMNS, compute_option_features
 from zr.research.events import detect_events, load_config
 from zr.research.labels import rolling_sigma, triple_barrier
 from zr.research.run import fee_adjusted_pnl
@@ -93,6 +94,12 @@ def build_symbol(symbol: str, root: Path, det_cfg: dict, cfg: dict) -> pd.DataFr
     # 事件所在分钟的上一分钟斜率（无前视）
     prev_min = out["ts"].dt.floor("min") - pd.Timedelta(minutes=1)
     out["quote_slope_1"] = qs.reindex(prev_min).to_numpy() if len(qs) else float("nan")
+    # 期权特征（PLAN_W3 线 a）：只在有 ThetaData 的交易日有值，其余 NaN
+    if cfg.get("with_options", True):
+        of = compute_option_features(root, und, df)
+        ofe = of.reindex(events["ts"])
+        for c in OPTION_FEATURE_COLUMNS:
+            out[c] = ofe[c].to_numpy(dtype=float)
     return out
 
 
@@ -100,9 +107,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="config/research_w2.yaml")
     parser.add_argument("--symbols", default=None)
+    parser.add_argument("--start", default=None, help="覆盖配置的起始日")
+    parser.add_argument("--end", default=None, help="覆盖配置的结束日")
+    parser.add_argument("--out", default=None, help="默认 ZR_DATA_ROOT/research/w2/dataset.parquet")
+    parser.add_argument("--no-options", action="store_true")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+    if args.start:
+        cfg["start"] = args.start
+    if args.end:
+        cfg["end"] = args.end
+    cfg["with_options"] = not args.no_options
     det_cfg = load_config(Path(cfg["detectors_config"]))
     root = get_settings().zr_data_root
     symbols = args.symbols.split(",") if args.symbols else cfg["symbols"]
@@ -114,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         parts.append(d)
     ds = pd.concat(parts, ignore_index=True)
-    out = root / "research" / "w2" / "dataset.parquet"
+    out = Path(args.out) if args.out else root / "research" / "w2" / "dataset.parquet"
     out.parent.mkdir(parents=True, exist_ok=True)
     ds.to_parquet(out, index=False)
     log.info("写入 %s：%d 行 × %d 列", out, len(ds), ds.shape[1])

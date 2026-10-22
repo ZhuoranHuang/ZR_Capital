@@ -6,6 +6,7 @@
 - 基线（--baseline）：不经事件，对所有 K 线（每 5 根抽 1 根控制规模）用同一特征集
   预测未来 5/15 分钟方向，
   报告月度 Spearman IC 的均值、正月占比。
+缺失值（quote_slope_1、期权特征在无数据日期）原样传入：两个后端都原生支持 NaN，不做 0 填充。
 后端：LightGBM 可用时用 LightGBM，否则 scikit-learn HistGradientBoosting（同为直方图 GBDT；
 本机无 libomp 时自动回退，报告里注明）。
 运行：uv run python -m zr.research.meta_model [--H 5] [--baseline]
@@ -29,6 +30,7 @@ from sklearn.metrics import roc_auc_score
 from zr.config import get_settings
 from zr.features.bars import load_bars
 from zr.features.features import FEATURE_COLUMNS, compute_features
+from zr.features.option_features import OPTION_FEATURE_COLUMNS
 from zr.ops.markdown import df_to_md
 
 log = logging.getLogger("zr.research.meta_model")
@@ -65,7 +67,8 @@ def make_model():
 
 
 def design_matrix(ds: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
-    X = ds[FEATURE_COLUMNS + ["quote_slope_1"]].copy()
+    opt_cols = [c for c in OPTION_FEATURE_COLUMNS if c in ds and ds[c].notna().any()]
+    X = ds[FEATURE_COLUMNS + ["quote_slope_1"] + opt_cols].copy()
     X["direction"] = ds["direction"].astype(float)
     for d in sorted(ds["detector"].unique()):
         X[f"det_{d}"] = (ds["detector"] == d).astype(float)
@@ -96,8 +99,8 @@ def walk_forward(
         if train_mask.sum() < 500 or test_mask.sum() < 50:
             continue
         backend, model = make_model()
-        model.fit(X[train_mask].fillna(0.0), y[train_mask])
-        p = model.predict_proba(X[test_mask].fillna(0.0))[:, 1]
+        model.fit(X[train_mask], y[train_mask])
+        p = model.predict_proba(X[test_mask])[:, 1]
         oos[test_mask] = p
         auc = roc_auc_score(y[test_mask], p) if y[test_mask].nunique() == 2 else np.nan
         folds.append(
@@ -162,7 +165,7 @@ def run_meta(ds: pd.DataFrame, H: int, out_dir: Path) -> list[str]:
     if model is not None:
         r = permutation_importance(
             model,
-            X.loc[test_idx].fillna(0.0),
+            X.loc[test_idx],
             y.loc[test_idx],
             scoring="roc_auc",
             n_repeats=5,
