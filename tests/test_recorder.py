@@ -66,6 +66,7 @@ def test_subscription_set_cap_trims_farthest():
     capped = build_subscription_set(chains, spots, TODAY, rules, cap=100)
     assert len(capped) == 100
     assert capped[:2] == ["SPY.US", "QQQ.US"]
+
     # 留下的都是离 ATM 最近的
     def rel_dist(s: str) -> float:
         spot = spots[f"{_SYM_RE.match(s).group('base')}.US"]

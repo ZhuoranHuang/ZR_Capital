@@ -174,12 +174,55 @@ def test_bulk_day_filters_strikes_writes_parquet_and_resumes(tmp_path):
     assert len(oi) == 1 and oi["open_interest"].iloc[0] == 1234
     assert (tmp_path / "options_1m/manifest.jsonl").exists()
     n_calls = len(calls)
-    # 断点续传：已完成的日期不再请求
+    # 断点续传：已完成且到期日齐全的日期不再请求数据（只拉一次到期日列表用于核对）
     assert (
         td.bulk_quotes_1m(client, tmp_path, "SPY", [day], px_fn=lambda d: (640.0, 638.0, 642.0))
         == []
     )
-    assert len(calls) == n_calls
+    assert len(calls) == n_calls + 1 and calls[-1].split("?")[0].endswith(
+        "/option/list/expirations"
+    )
+
+
+def test_select_expirations_nearest_two_plus_dte5():
+    exps = [dt.date(2024, 3, 1), dt.date(2024, 3, 8), dt.date(2024, 3, 15)]
+    # 周五 03-01：DTE≤5 只有当日；加上最近两个 → 03-01 与 03-08（DTE 7）
+    assert td.select_expirations(exps, dt.date(2024, 3, 1)) == [
+        dt.date(2024, 3, 1),
+        dt.date(2024, 3, 8),
+    ]
+    daily = [dt.date(2026, 9, 1) + dt.timedelta(days=i) for i in range(8)]
+    assert td.select_expirations(daily, dt.date(2026, 9, 1)) == daily[:6]
+
+
+def test_bulk_supplements_missing_expiration_and_merges(tmp_path):
+    calls: list[str] = []
+    client = td.ThetaClient(getter=_fake_getter(calls), concurrency=1)
+    day = dt.date(2026, 9, 1)
+    # 先按旧规则只拉了 09-01、09-02（manifest 只记这两个）
+    rec = td.fetch_day(
+        client,
+        tmp_path,
+        "SPY",
+        day,
+        [],
+        (640.0, 638.0, 642.0),
+        only=[dt.date(2026, 9, 1), dt.date(2026, 9, 2)],
+    )
+    d = tmp_path / "options_1m/underlying=SPY/date=2026-09-01"
+    n_before = len(pd.read_parquet(d / "quotes.parquet"))
+    assert rec["supplement"] is True
+    out = td.bulk_quotes_1m(client, tmp_path, "SPY", [day], px_fn=lambda x: (640.0, 638.0, 642.0))
+    assert (
+        len(out) == 1 and out[0]["expirations"] == ["2026-09-03"] and out[0]["supplement"] is True
+    )
+    q = pd.read_parquet(d / "quotes.parquet")
+    assert len(q) == n_before + 3 * 2 and q.duplicated(["ts", "symbol"]).sum() == 0
+    # 再跑一次：齐全，不再拉
+    assert (
+        td.bulk_quotes_1m(client, tmp_path, "SPY", [day], px_fn=lambda x: (640.0, 638.0, 642.0))
+        == []
+    )
 
 
 def test_http_error_raises_and_no_data_is_empty():

@@ -41,3 +41,15 @@ def test_after_end_is_done():
 
 def test_defaults():
     assert SUBSCRIBE_AT == dt.time(9, 25) and SESSION_END == dt.time(16, 5)
+
+
+def test_recorder_trading_day_uses_exchange_calendar_without_api():
+    from zr.data.recorder import is_trading_day
+
+    class NoApi:
+        def trading_days(self, *a):
+            raise AssertionError("日历覆盖的年份不应调用长桥")
+
+    assert is_trading_day(NoApi(), dt.date(2024, 6, 19)) is False  # Juneteenth
+    assert is_trading_day(NoApi(), dt.date(2024, 6, 20)) is True
+    assert is_trading_day(NoApi(), dt.date(2026, 11, 26)) is False  # Thanksgiving 2026

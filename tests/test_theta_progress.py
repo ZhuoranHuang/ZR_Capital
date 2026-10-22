@@ -30,19 +30,21 @@ def test_month_summary_uses_latest_record_per_day(tmp_path):
     m.write_text("\n".join(json.dumps(r) for r in recs) + "\n", encoding="utf-8")
     d = tmp_path / "options_1m/underlying=SPY/date=2023-10-02"
     d.mkdir(parents=True)
+    import numpy as np
     import pandas as pd
 
-    pd.DataFrame({"strike": [630.0] * 60_000, "bid": [1.0] * 60_000}).to_parquet(
+    rng = np.random.default_rng(0)
+    pd.DataFrame({"strike": [630.0] * 60_000, "bid": rng.random(60_000)}).to_parquet(
         d / "quotes.parquet", index=False
     )  # 真实 parquet（覆盖检查会读它）；约 0.5 MB
     s = month_summary(tmp_path, "SPY", dt.date(2023, 10, 1), dt.date(2023, 10, 31))
-    # 没有正股 K → 覆盖未知（不计入 covered/uncovered）；mb 取决于 parquet 实际大小，只验 > 0
+    # 天数/失败按 manifest 最后一条；行数从 parquet 元数据读（只有 10-02 有文件，60,000 行 quotes）
     assert {k: v for k, v in s.items() if k != "mb"} == {
         "days": 2,
         "failed": 1,
-        "quotes": 15,
-        "ohlc": 14,
-        "oi": 3,
+        "quotes": 60_000,
+        "ohlc": 0,
+        "oi": 0,
         "covered": 0,
         "uncovered": 0,
     }

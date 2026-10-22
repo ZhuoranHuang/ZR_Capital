@@ -42,6 +42,9 @@ fi
 
 log "开始 symbols=[$SYMBOLS] $START ~ $END 并发 $CONC 数据根 $ZR_DATA_ROOT"
 for sym in $SYMBOLS; do
+    # 先清理：休市日目录 + 行权价覆盖不足的日期（按当日 RTH 高低点 ± 带宽判定），随后月循环自动重拉
+    (cd "$REPO" && "$UV" run --no-sync python -m zr.data.thetadata \
+        --symbols "$sym" --start "$START" --end "$END" --repull-uncovered --coverage-check)
     # 月份列表（美东自然月）
     months="$(cd "$REPO" && "$UV" run --no-sync python - "$START" "$END" <<'PY'
 import sys, datetime as dt

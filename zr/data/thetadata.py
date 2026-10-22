@@ -276,9 +276,17 @@ def _frame(rows: list[dict], und: str, trade_date: dt.date) -> pd.DataFrame:
 
 
 def select_expirations(
-    expirations: Iterable[dt.date], day: dt.date, max_dte: int = MAX_DTE
+    expirations: Iterable[dt.date], day: dt.date, max_dte: int = MAX_DTE, n_nearest: int = 2
 ) -> list[dt.date]:
-    return sorted(e for e in expirations if 0 <= (e - day).days <= max_dte)
+    """当日要拉的到期日 = 最近 n_nearest 个（≥ 当日，不论 DTE）∪ DTE ≤ max_dte 的全部。
+
+    MU 在 2026-07 之前只有周五到期：周五 10:45 后（D-001）只能用下周五（DTE 7）的合约，
+    只取 DTE ≤ 5 会导致回放找不到可买合约（负责人 2026-10-22 指令）。
+    """
+    fut = sorted(e for e in set(expirations) if e >= day)
+    near = set(fut[:n_nearest])
+    within = {e for e in fut if (e - day).days <= max_dte}
+    return sorted(near | within)
 
 
 def band_bounds(px_range: tuple[float, float, float], band: float) -> tuple[float, float]:
@@ -298,16 +306,26 @@ def strike_filter(df: pd.DataFrame, lo: float, hi: float) -> pd.DataFrame:
 
 
 def day_price_range(root: Path, und: str, day: dt.date) -> tuple[float, float, float] | None:
-    """当日盘中 (开盘价, 最低价, 最高价)，来自长桥 bars_1m；没有正股 K 的日期返回 None。"""
+    """当日 RTH (开盘价, 最低价, 最高价)，来自长桥 bars_1m；按交易日历过滤，
+    wick_spike（疑似坏成交影线）收回到实体后再取高低点（zr/data/bar_quality.py）。"""
+    from zr.data.bar_quality import clean_wicks
+    from zr.data.calendar import rth_mask
+
     f = root / "bars_1m" / f"underlying={und}" / f"year={day.year}" / "bars.parquet"
     if not f.exists():
         return None
-    bars = pd.read_parquet(f, columns=["ts", "open", "high", "low", "session"])
-    t = bars["ts"].dt.tz_convert(ET)
-    sel = bars[(t.dt.date == day) & (bars["session"] == "Intraday")]
-    if sel.empty:
+    bars = pd.read_parquet(f, columns=["ts", "open", "high", "low", "close", "volume", "session"])
+    bars = bars[bars["session"] == "Intraday"].set_index("ts").sort_index()
+    bars = bars[rth_mask(bars.index)]
+    t = bars.index.tz_convert(ET)
+    # 前一日的 bar 一起送进去，让 ATR 有历史
+    sel_mask = t.date == day
+    if not sel_mask.any():
         return None
-    sel = sel.sort_values("ts")
+    first = int(np.argmax(sel_mask))
+    window = bars.iloc[max(0, first - 400) : first + int(sel_mask.sum())]
+    clean = clean_wicks(window)
+    sel = clean[window.index.tz_convert(ET).date == day]
     return float(sel["open"].iloc[0]), float(sel["low"].min()), float(sel["high"].max())
 
 
@@ -318,18 +336,46 @@ def day_dir(root: Path, kind: str, und: str, day: dt.date) -> Path:
     return root / kind / f"underlying={und}" / f"date={day.isoformat()}"
 
 
+def requested_expirations(root: Path, und: str) -> dict[str, set[str]]:
+    """manifest 中每个日期已请求过的到期日（所有成功记录的并集；含没有数据的到期日）。"""
+    out: dict[str, set[str]] = {}
+    mf = root / "options_1m" / "manifest.jsonl"
+    if not mf.exists():
+        return out
+    for line in mf.read_text(encoding="utf-8").splitlines():
+        r = json.loads(line)
+        if r.get("underlying") != und or "error" in r:
+            continue
+        out.setdefault(str(r["date"]), set()).update(r.get("expirations", []))
+    return out
+
+
 def day_done(root: Path, und: str, day: dt.date) -> bool:
     d = day_dir(root, "options_1m", und, day)
     return all((d / f"{n}.parquet").exists() for n in ("quotes", "ohlc", "oi"))
 
 
 def write_day(
-    root: Path, und: str, day: dt.date, quotes: pd.DataFrame, ohlc: pd.DataFrame, oi: pd.DataFrame
+    root: Path,
+    und: str,
+    day: dt.date,
+    quotes: pd.DataFrame,
+    ohlc: pd.DataFrame,
+    oi: pd.DataFrame,
+    merge: bool = False,
 ) -> None:
+    """落盘；merge=True 时与已有文件合并去重（补拉缺失到期日用）。"""
     d = day_dir(root, "options_1m", und, day)
     d.mkdir(parents=True, exist_ok=True)
+    keys = {"quotes": ["ts", "symbol"], "ohlc": ["ts", "symbol"], "oi": ["symbol"]}
     for name, df in (("quotes", quotes), ("ohlc", ohlc), ("oi", oi)):
-        df.to_parquet(d / f"{name}.parquet", index=False)
+        p = d / f"{name}.parquet"
+        if merge and p.exists():
+            old = pd.read_parquet(p)
+            if len(old) and "symbol" in old.columns:
+                df = pd.concat([old, df], ignore_index=True) if len(df) else old
+                df = df.drop_duplicates(keys[name], keep="last").reset_index(drop=True)
+        df.to_parquet(p, index=False)
 
 
 def _append_manifest(root: Path, record: dict) -> None:
@@ -349,9 +395,11 @@ def fetch_day(
     day: dt.date,
     expirations: list[dt.date],
     px_range: tuple[float, float, float] | None,
+    only: list[dt.date] | None = None,
 ) -> dict:
+    """拉一天；only 给定时只拉这些到期日并与已有文件合并（补拉）。"""
     t0 = time.monotonic()
-    exps = select_expirations(expirations, day)
+    exps = sorted(only) if only is not None else select_expirations(expirations, day)
     band = STRIKE_BAND.get(und, 0.05)
     bounds = band_bounds(px_range, band) if px_range else None
     quotes, ohlc = [], []
@@ -387,7 +435,7 @@ def fetch_day(
             strike_filter(o, *bounds),
             strike_filter(oi, *bounds),
         )
-    write_day(root, und, day, q, o, oi)
+    write_day(root, und, day, q, o, oi, merge=only is not None)
     rec = {
         "underlying": und,
         "date": day,
@@ -406,6 +454,7 @@ def fetch_day(
         "rows_ohlc": len(o),
         "rows_oi": len(oi),
         "seconds": round(time.monotonic() - t0, 1),
+        "supplement": only is not None,
     }
     _append_manifest(root, rec)
     return rec
@@ -419,15 +468,25 @@ def bulk_quotes_1m(
     *,
     px_fn: Callable[[dt.date], tuple[float, float, float] | None] | None = None,
 ) -> list[dict]:
-    pending = [d for d in days if not day_done(root, und, d)]
-    if not pending:
+    days = list(days)
+    if not days:
         return []
     expirations = client.list_expirations(und)
+    requested = requested_expirations(root, und)
     out = []
-    for day in pending:
+    for day in days:
+        need = select_expirations(expirations, day)
+        if day_done(root, und, day):
+            have = requested.get(day.isoformat(), set())
+            missing = [e for e in need if e.isoformat() not in have]
+            if not missing:
+                continue
+            only: list[dt.date] | None = missing
+        else:
+            only = None
         px_range = px_fn(day) if px_fn else day_price_range(root, und, day)
         try:
-            rec = fetch_day(client, root, und, day, expirations, px_range)
+            rec = fetch_day(client, root, und, day, expirations, px_range, only=only)
         except ThetaError as e:
             rec = {"underlying": und, "date": day, "error": str(e)}
             _append_manifest(root, rec)
@@ -438,13 +497,18 @@ def bulk_quotes_1m(
 
 
 def trading_days_from_bars(root: Path, und: str, start: dt.date, end: dt.date) -> list[dt.date]:
-    """用长桥 1 分钟 K 的日期集合作交易日历（不硬编码）。"""
+    """交易日 = 交易日历（zr/data/calendar.py）∩ 长桥 1 分钟 K 有数据的日期。
+
+    长桥 K 线在全天休市日也有零成交记录，不能单独作日历（2026-10-22 实测）。
+    """
+    from zr.data.calendar import is_trading_day
+
     days: set[dt.date] = set()
     for f in sorted((root / "bars_1m" / f"underlying={und}").glob("year=*/bars.parquet")):
         ts = pd.read_parquet(f, columns=["ts", "session"])
         ts = ts[ts["session"] == "Intraday"]["ts"].dt.tz_convert(ET).dt.date
         days.update(d for d in ts.unique() if start <= d <= end)
-    return sorted(days)
+    return sorted(d for d in days if is_trading_day(d))
 
 
 # ---------- 覆盖检查 ----------
@@ -585,8 +649,25 @@ def main(argv: list[str] | None = None) -> int:
                 len(bad),
                 [d.isoformat() for d in bad][:20],
             )
-            if args.repull_uncovered and bad:
-                log.info("%s 删除 %d 天以便重拉", und, drop_days(root, und, bad))
+            if args.repull_uncovered:
+                from zr.data.calendar import is_trading_day
+
+                base = root / "options_1m" / f"underlying={und}"
+                stored = (
+                    [dt.date.fromisoformat(p.name[5:]) for p in base.glob("date=*")]
+                    if base.is_dir()
+                    else []
+                )
+                non_trading = [d for d in stored if start <= d <= end and not is_trading_day(d)]
+                if non_trading:
+                    log.info(
+                        "%s 删除休市日目录 %d 个：%s",
+                        und,
+                        drop_days(root, und, non_trading),
+                        [d.isoformat() for d in non_trading],
+                    )
+                if bad:
+                    log.info("%s 删除覆盖不足 %d 天以便重拉", und, drop_days(root, und, bad))
             if args.coverage_check:
                 continue
         log.info("%s 交易日 %d 个（%s ~ %s）", und, len(days), start, end)
