@@ -17,7 +17,6 @@ import pandas as pd
 
 from zr.config import get_settings
 from zr.ops.markdown import df_to_md
-from zr.research import intraday_single_leg as isl
 from zr.research import v4_decisive as v4d
 from zr.research import v4_rules_test as rt
 
@@ -108,7 +107,7 @@ def exit_mix(trades: pd.DataFrame) -> pd.DataFrame:
     return out.reset_index()
 
 
-# ---------------- H4（D-029：只用日内单腿样本） ----------------
+# ---------------- H4（D-030：只用日内单腿清单的入选样本） ----------------
 
 
 def old_table() -> pd.DataFrame:
@@ -125,13 +124,13 @@ def old_table() -> pd.DataFrame:
 
 def h4_table(root: Path) -> pd.DataFrame:
     t = pd.read_parquet(root / "research" / "v4" / "owner_intraday_review.parquet")
-    pos = isl.positions(t)
+    pos = t  # D-030：每行即一个持仓段
     parts = {"旧 157 行（D-026）": old_table().set_index("state")}
     for conv in ("A", "C"):
         g = pos.groupby(f"{conv}_state")
-        parts[f"D-029 口径 {conv}"] = pd.DataFrame(
+        parts[f"D-030 口径 {conv}"] = pd.DataFrame(
             {
-                "入场": g.size(),
+                "持仓段": g.size(),
                 "FIFO 行": g["lots"].sum(),
                 "胜率": g["pnl_net"].apply(lambda s: round(float((s > 0).mean()), 2)),
                 "合计": g["pnl_net"].sum().round(0),
@@ -329,12 +328,12 @@ def main(argv: list[str] | None = None) -> int:
         "",
         df_to_md(main_table(cs, fdr=not partial)),
         "",
-        "## 6. H4：负责人交易按新口径重做状态分类（D-029：只用日内单腿样本）",
+        "## 6. H4：负责人交易按新口径重做状态分类（D-030：只用日内单腿清单的入选样本）",
         "",
-        "按负责人指令，H4 以 `docs/research/INTRADAY_SINGLE_LEG.md` 为准：157 个 FIFO 行中只保留"
-        "日内单腿 89 行（= 54 次入场，全部 MU），按入场决策统计。决策 K = 入场前最后一根已完成的 "
-        "2 分钟 K；「同向 / 反向」= 状态方向与所买 call / put 是否一致；盈亏为实际成交扣费后 USD。"
-        "旧表是 157 行全样本、D-026 口径（含分箱 bug），只作对照。",
+        "按负责人指令（D-030），H4 只用 `docs/research/INTRADAY_SINGLE_LEG_LIST.md` 的入选样本，"
+        "以持仓段为单位（分批建仓 / 卖出已合并）。决策 K = 入场前最后一根已完成的 2 分钟 K；"
+        "「同向 / 反向」= 状态方向与所买 call / put 是否一致；盈亏为实际成交扣费后 USD。"
+        "旧表是 157 个 FIFO 行全样本、D-026 口径（含分箱 bug），只作对照。",
         "",
         df_to_md(h4_table(root)),
         "",

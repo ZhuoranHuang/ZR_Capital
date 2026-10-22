@@ -25,8 +25,8 @@ REPO = Path(__file__).resolve().parents[2]
 CONFIG = REPO / "config" / "v4_rules_test.yaml"
 
 
-def load_spec() -> tuple[dict, list[dict]]:
-    spec = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+def load_spec(path: Path = CONFIG) -> tuple[dict, list[dict]]:
+    spec = yaml.safe_load(path.read_text(encoding="utf-8"))
     rules = yaml.safe_load((REPO / spec["rules_file"]).read_text(encoding="utf-8"))["rules"]
     return spec, rules
 
@@ -35,8 +35,13 @@ def make_sig_fn(rules: list[dict], v4: dict):
     def sig_fn(df, x, reg, cfg, conv):
         f = isl.bar_features(df, x, reg, reset=conv["reset"])
         arr = {d: isl.oriented_arrays(f, d) for d in (1, -1)}
-        return {r["id"]: (isl.rule_mask(arr[1], r["conditions"]),
-                          isl.rule_mask(arr[-1], r["conditions"])) for r in rules}
+        return {
+            r["id"]: (
+                isl.rule_mask(arr[1], r["conditions"]),
+                isl.rule_mask(arr[-1], r["conditions"]),
+            )
+            for r in rules
+        }
 
     return sig_fn
 
@@ -56,26 +61,41 @@ def make_days_fn(spec: dict, v4: dict, part: str):
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-pull", action="store_true")
+    ap.add_argument(
+        "--spec", default=str(CONFIG), help="R-035：v4_rules_test.yaml；R-037：v4_rules37_test.yaml"
+    )
+    ap.add_argument("--tag", default="rules", help="输出文件前缀（R-035 rules，R-037 rules37）")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     root = get_settings().zr_data_root
     v4 = v4d.load_v4()
-    spec, rules = load_spec()
+    spec, rules = load_spec(Path(args.spec))
     ids = tuple(r["id"] for r in rules)
     exit_map = {k: dict.fromkeys(ids, rule) for k, rule in spec["exits"].items()}
     out = root / "research" / "v4"
     out.mkdir(parents=True, exist_ok=True)
     for part in ("main", "extract"):
         for conv in (spec["base"], spec["contrast"]):
-            res = v4d.run_conv(root, conv, v4, pull=not args.no_pull,
-                               sig_fn=make_sig_fn(rules, v4), hyps=ids, exit_map=exit_map,
-                               days_fn=make_days_fn(spec, v4, part), unds=spec["underlyings"])
-            res["cells"].to_parquet(out / f"rules_cells_{conv}_{part}.parquet", index=False)
+            res = v4d.run_conv(
+                root,
+                conv,
+                v4,
+                pull=not args.no_pull,
+                sig_fn=make_sig_fn(rules, v4),
+                hyps=ids,
+                exit_map=exit_map,
+                days_fn=make_days_fn(spec, v4, part),
+                unds=spec["underlyings"],
+            )
+            res["cells"].to_parquet(out / f"{args.tag}_cells_{conv}_{part}.parquet", index=False)
             if len(res["trades"]):
-                res["trades"].to_parquet(out / f"rules_trades_{conv}_{part}.parquet", index=False)
+                res["trades"].to_parquet(
+                    out / f"{args.tag}_trades_{conv}_{part}.parquet", index=False
+                )
             pd.Series({"pull": res["pull"], "info": res["info"]}).to_json(
-                out / f"rules_run_{conv}_{part}.json", default_handler=str)
-            log.info("R-035 %s %s 完成：%d 格", part, conv, len(res["cells"]))
+                out / f"{args.tag}_run_{conv}_{part}.json", default_handler=str
+            )
+            log.info("%s %s %s 完成：%d 格", args.tag, part, conv, len(res["cells"]))
     return 0
 
 
