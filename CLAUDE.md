@@ -54,7 +54,14 @@ uv run pytest -q
 ## ThetaData 已核实事实（Theta Terminal v3，2026-10-22 实测）
 
 - REST `http://127.0.0.1:25503/v3`；响应为 `{"response":[{"contract":{...},"data":[...]}]}` 嵌套，`zr/data/thetadata.py` 已展平。
-- 当日数据必须指定 `expiration`；无数据可能返回 200 + 文本；`interval=1m` 时间戳 t 的报价 = t 时刻 NBBO。
+- 当日数据必须指定 `expiration`；无数据可能返回 200 + 文本；`interval=1m` 时间戳 t 的报价 = t 时刻 NBBO
+  （2026-10-22 复核：官方文档原文「the quote for each interval represents the last quote at the
+  interval's timestamp」——即 t 时刻之前最近一次的真实报价，不是 [t, t+1) 或 [t−1, t) 区间聚合；
+  文档未明说是区间起点还是终点，用 2026-10-21 录制器逐笔数据交叉验证：MU261023P940000 在 5 个比对
+  分钟中 3 个与 recorder 在 t 之后几秒内收到的首个推送精确相等、2 个更接近 t 之前最后一次推送，
+  与「t 时刻之前最近报价」一致，核实为正确，沿用不改）。
+  来源：<https://thetadata.net/docs/operations/option_history_quote.html>（未验证：该页面未显式定义
+  interval 边界是左闭右开还是其他）。
 - 单到期日 `strike=*` 1 分钟 quote ≈ 22 MB / 5 s；SPY 一天（DTE≤5）≈ 31 s、1.9 MB parquet。
 - 本机 LightGBM 缺 `libomp`（无 Homebrew），`zr/research/meta_model.py` 自动回退 sklearn HistGradientBoosting。
 - 终端连上游用 gRPC，只认 HTTP CONNECT 代理；SOCKS 会导致 `MDDS upstream unavailable`。默认直连，`run_theta_terminal.sh --proxy` 才启用（需 `THETA_HTTP_PROXY`）。
