@@ -137,10 +137,9 @@ def test_compute_option_features_multi_day_ratio_and_oi(tmp_path):
     # 前 5 天没有足够历史 → ratio NaN；第 6 天起有值
     assert f.loc[day == days[0], "opt_near_vol_ratio20"].isna().all()
     assert f.loc[day == days[5], "opt_near_vol_ratio20"].notna().all()
-    # OI：第一天无前值；第二天变化 = 1.1/1.0 − 1
-    assert f.loc[day == days[0], "opt_oi_chg"].isna().all()
-    assert np.allclose(f.loc[day == days[1], "opt_oi_chg"], 0.1)
-    assert np.allclose(f["opt_pc_oi"], 0.5)
+    # OI 水平：call 100 / put 50 → 2；21 个行权价 OI 相同 → ATM±3 占 7/21
+    assert np.allclose(f["opt_cp_oi"], 2.0)
+    assert np.allclose(f["opt_atm3_oi_share"], 7 / 21)
 
 
 @pytest.mark.parametrize("missing", ["quotes", "ohlc", "oi"])
@@ -156,32 +155,45 @@ def test_missing_file_day_is_skipped(tmp_path, missing):
     assert f.isna().all().all()
 
 
-def test_oi_chg_same_tenor_not_same_contract(tmp_path):
-    """D-019：比较同 DTE 的不同合约，而非同一合约（同一合约随到期临近的增长不计）。"""
-    d0, d1 = dt.date(2024, 3, 4), dt.date(2024, 3, 5)
-    rows = {
-        # 昨日：DTE 1（3/5 到期）OI 100，DTE 2（3/6 到期）OI 40
-        d0: [(dt.date(2024, 3, 5), 100), (dt.date(2024, 3, 6), 40)],
-        # 今日：3/6 合约（DTE 1）OI 涨到 150（同一合约 +275%），新的 DTE 2（3/7）OI 60
-        d1: [(dt.date(2024, 3, 6), 150), (dt.date(2024, 3, 7), 60)],
-    }
-    for d, lst in rows.items():
-        p = tmp_path / "options_1m/underlying=MU" / f"date={d.isoformat()}"
-        p.mkdir(parents=True)
-        pd.DataFrame(
-            [
-                {
-                    "symbol": f"X{e}",
-                    "expiry": e,
-                    "strike": 100.0,
-                    "right": "call",
-                    "open_interest": v,
-                }
-                for e, v in lst
-            ]
-        ).to_parquet(p / "oi.parquet", index=False)
-    t = of.oi_daily(tmp_path, "MU", [d0, d1])
-    assert np.isnan(t.loc[d0, "opt_oi_chg"])
-    # DTE 1：150 vs 100；DTE 2：60 vs 40 → (150+60)/(100+40) − 1 = 0.5
-    assert np.isclose(t.loc[d1, "opt_oi_chg"], 0.5)
-    assert t.loc[d1, "opt_oi_n_dte"] == 2
+def _oi(rows):
+    return pd.DataFrame(
+        [
+            {"symbol": f"{e}{r}{k}", "expiry": e, "strike": k, "right": r, "open_interest": v}
+            for e, k, r, v in rows
+        ]
+    )
+
+
+def test_oi_level_features_values():
+    """D-021：最大 OI 行权价距离按间距归一、ATM±3 占比、call/put 比。"""
+    stock = _stock(DAY, spot=100.0, n=3)
+    stock["close"] = [100.0, 101.0, 103.0]
+    rows = [(DAY, k, r, 10) for k in np.arange(95.0, 106.0, 1.0) for r in ("call", "put")]
+    rows.append((DAY, 98.0, "put", 500))  # 最大 OI 在 98
+    oi = _oi(rows)
+    f = of.oi_level_features(oi, stock["close"], 100.0, 0.08, DAY)
+    assert np.allclose(f["opt_maxoi_dist"], [2.0, 3.0, 5.0])
+    total = 22 * 10 + 500
+    assert np.isclose(f["opt_atm3_oi_share"].iloc[0], (14 * 10 + 500) / total)  # 97–103 含 98
+    assert np.isclose(f["opt_atm3_oi_share"].iloc[2], 12 * 10 / total)  # 100–105（上端截断）
+    assert np.allclose(f["opt_cp_oi"], 110 / 610)
+
+
+def test_oi_level_features_ignore_strikes_outside_open_window():
+    """拉取带宽随当日高低点变化；开盘价 ±b 之外的合约不影响特征（无前视）。"""
+    stock = _stock(DAY, spot=100.0, n=3)
+    base_rows = [(DAY, k, r, 10) for k in np.arange(95.0, 106.0, 1.0) for r in ("call", "put")]
+    a = of.oi_level_features(_oi(base_rows), stock["close"], 100.0, 0.08, DAY)
+    far = base_rows + [(DAY, 120.0, "call", 10_000), (DAY, 80.0, "put", 10_000)]
+    b = of.oi_level_features(_oi(far), stock["close"], 100.0, 0.08, DAY)
+    pd.testing.assert_frame_equal(a, b)
+    # 已到期合约也不计
+    old = base_rows + [(DAY - dt.timedelta(days=1), 100.0, "call", 10_000)]
+    c = of.oi_level_features(_oi(old), stock["close"], 100.0, 0.08, DAY)
+    pd.testing.assert_frame_equal(a, c)
+
+
+def test_strike_spacing_from_data():
+    ks = np.r_[np.arange(90.0, 100.0, 0.5), np.arange(100.0, 130.0, 2.5)]
+    assert of.strike_spacing(ks, 95.0) == 0.5
+    assert of.strike_spacing(ks, 120.0) == 2.5
