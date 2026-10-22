@@ -206,6 +206,7 @@ def test_client_waits_through_terminal_restart_then_succeeds():
     calls = []
     seq = [
         (599, "refused"),
+        (503, "io exception"),
         (571, "SERVER_STARTING"),
         (474, "DISCONNECTED"),
         (200, json.dumps({"response": [{"symbol": "SPY", "expiration": "2026-09-02"}]})),
@@ -218,7 +219,7 @@ def test_client_waits_through_terminal_restart_then_succeeds():
     slept = []
     c = td.ThetaClient(getter=getter, outage_wait_s=60, outage_poll_s=10, sleep=slept.append)
     assert c.list_expirations("SPY") == [dt.date(2026, 9, 2)]
-    assert len(calls) == 4 and slept == [10, 10, 10]
+    assert len(calls) == 5 and slept == [10, 10, 10, 10]
 
 
 def test_client_gives_up_after_outage_budget():

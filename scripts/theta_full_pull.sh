@@ -63,7 +63,7 @@ PY
         (cd "$REPO" && "$UV" run --no-sync python -m zr.data.theta_progress \
             --underlying "${sym%%.US}" --start "$m_start" --end "$m_end" --seconds "$secs" --rc "$rc")
         if [ "$rc" -ne 0 ]; then
-            log "$sym $m_start 失败 rc=$rc，停止（重跑本脚本续传）"
+            log "${sym} ${m_start} 失败 rc=${rc}，停止（重跑本脚本续传）"
             exit "$rc"
         fi
     done <<< "$months"

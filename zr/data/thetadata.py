@@ -57,7 +57,9 @@ _CONTRACT_RE = re.compile(r"^(?P<und>[A-Z.\-]+?)(?P<exp>\d{6})(?P<right>[CP])(?P
 
 
 CONNECT_ERROR = 599  # 伪状态码：连接失败
-OUTAGE_STATUSES = (CONNECT_ERROR, 474, 571)  # 不可达 / DISCONNECTED / SERVER_STARTING
+# 不可达 / DISCONNECTED / SERVER_STARTING / 503「MDDS upstream unavailable: io exception」
+# （2026-10-22 实测：终端与上游断开时返回 503，恢复后自动可用）
+OUTAGE_STATUSES = (CONNECT_ERROR, 474, 503, 571)
 
 
 class ThetaError(RuntimeError):

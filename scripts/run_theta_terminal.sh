@@ -32,7 +32,7 @@ JDK_BIN="$(find "$THETA_DIR/jdk" -type d -name bin -path '*Home/bin' 2>/dev/null
 [ -n "$JDK_BIN" ] && [ -x "$JDK_BIN/java" ] || { echo "找不到 JDK：$THETA_DIR/jdk 下无 bin/java"; exit 1; }
 export JAVA_HOME="${JDK_BIN%/bin}"
 export PATH="$JDK_BIN:$PATH"
-[ -f "$JAR" ] || { echo "找不到 $JAR（下载：https://downloads.thetadata.us/ThetaTerminalv3.jar）"; exit 1; }
+[ -f "$JAR" ] || { echo "找不到 ${JAR}（下载：https://downloads.thetadata.us/ThetaTerminalv3.jar）"; exit 1; }
 echo "JAVA_HOME=$JAVA_HOME"
 java -version 2>&1 | head -1
 
