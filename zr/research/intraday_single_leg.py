@@ -36,7 +36,7 @@ from zr.research import v4_decisive as v4d
 log = logging.getLogger("zr.research.intraday_single_leg")
 REPO = Path(__file__).resolve().parents[2]
 OUT = REPO / "docs" / "research" / "INTRADAY_SINGLE_LEG.md"
-RULES_OUT = REPO / "config" / "v4_rules.yaml"
+RULES_OUT = REPO / "config" / "v4_rules_d030.yaml"  # R-035（D-029 样本）的规则保留在 v4_rules.yaml
 NEAR = pd.Timedelta(minutes=5)
 MAX_DTE = 7
 # 决策树可用的 K 线特征（方向化：多头原样、空头镜像），入场前可知
@@ -63,6 +63,34 @@ TREE_FEATURES = [
 
 
 # ---------------- 1. 筛选 ----------------
+
+
+def d030_sample(root: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """D-030 入选样本（持仓段为单位）→ 复盘所需列；另返回全部持仓段（含分类）供报告引用。"""
+    from zr.journal.intraday_list import build
+
+    ep = build(root)
+    s = ep[ep["category"] == "入选"].copy()
+    out = pd.DataFrame(
+        {
+            "und": s["und"],
+            "symbol": s["symbol"],
+            "entry_ts": s["open_ts"].dt.tz_convert("UTC"),
+            "exit_ts": s["close_ts"].dt.tz_convert("UTC"),
+            "dir": np.where(s["right"] == "C", 1, -1),
+            "right": s["right"],
+            "strike": s["strike"],
+            "expiry": s["expiry"],
+            "dte": s["dte"],
+            "qty": s["qty"],
+            "hold_min": s["hold_min"],
+            "pnl_net": s["pnl_net"],
+            "entry_px": s["entry_px"],
+            "exit_px": s["exit_px"],
+            "lots": s["lots"],
+        }
+    )
+    return out.reset_index(drop=True), ep
 
 
 def round_trips(root: Path) -> pd.DataFrame:
@@ -221,7 +249,7 @@ def trade_ticks(client, root: Path, r) -> pd.DataFrame | None:
         / "diag"
         / "owner_ticks"
         / f"date={d.isoformat()}"
-        / f"{r['symbol']}_{r['entry_ts'].value}.parquet"
+        / f"{r['symbol']}_{r['entry_ts'].value}_{r['exit_ts'].value}.parquet"
     )
     if p.exists():
         return pd.read_parquet(p)
@@ -296,6 +324,7 @@ def review(root: Path, sel: pd.DataFrame, v4: dict, pull: bool) -> pd.DataFrame:
             "pnl_net": round(float(r["pnl_net"]), 2),
             "pnl_pct": round(float(r["pnl_net"] / (r["entry_px"] * 100 * r["qty"]) * 100), 2),
             "before_first_bar": bool(r["entry_ts"].tz_convert(ET).time() < dt.time(9, 32)),
+            "lots": int(r.get("lots", 1)),
         }
         for conv in ("A", "C"):
             if (conv, r["und"]) not in state:
@@ -480,16 +509,15 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     root = get_settings().zr_data_root
     v4 = v4d.load_v4()
-    rt = screen(round_trips(root))
-    sel, rej = rt[rt["selected"]], rt[~rt["selected"]]
+    sel, ep = d030_sample(root)
     t = review(root, sel, v4, pull=not args.no_pull)
-    pos = positions(t)
+    pos = t  # D-030 的单位已是持仓段（分批建仓 / 卖出已合并），不再按 FIFO 行聚合
     cov = pos[pos["A_state"].notna()] if "A_state" in pos else pos.iloc[0:0]
     rules = extract_rules(cov) if len(cov) >= 10 else []
     RULES_OUT.write_text(
         yaml.safe_dump(
             {
-                "source": "zr/research/intraday_single_leg.py（口径 A，入选日内单腿样本）",
+                "source": "zr/research/intraday_single_leg.py（口径 A，D-030 入选日内单腿持仓段）",
                 "rules": [{"id": f"R{i + 1}", **r} for i, r in enumerate(rules)],
             },
             allow_unicode=True,
@@ -497,46 +525,21 @@ def main(argv: list[str] | None = None) -> int:
         ),
         encoding="utf-8",
     )
-    rej_tab = rej.assign(entry=rej["entry_ts"].dt.tz_convert(ET).dt.strftime("%Y-%m-%d %H:%M:%S"))
+    cnt = ep["category"].value_counts().to_dict()
     L = [
-        "# 负责人交易史：日内单腿样本（D-029）",
+        "# 负责人交易史：日内单腿复盘与规律（D-030 样本）",
         "",
         f"生成：{dt.datetime.now(dt.UTC).isoformat(timespec='seconds')} UTC · 复现 "
         "`uv run python -m zr.research.intraday_single_leg`",
         "",
-        "## 1. 筛选",
+        "## 1. 样本",
         "",
-        f"全部 {len(rt)} 笔（FIFO 配对；一次入场分批平仓拆成多行），**入选 {len(sel)} 笔、剔除 "
-        f"{len(rej)} 笔**。入选条件（同时满足）：同一交易日开平；单腿（每单一个合约，且 ±5 分钟内"
-        "同标的没有反向腿）；持仓期间及入场前后 5 分钟内同标的无反方向期权持仓；DTE ≤ 7。",
-        "",
-        df_to_md(
-            rej["primary_reason"]
-            .value_counts()
-            .rename_axis("主要原因")
-            .reset_index()
-            .rename(columns={"count": "笔数"})
-        ),
-        "",
-        "剔除清单（供负责人核对；一笔可有多个原因，"
-        "按 过夜 / 长期合约 / 疑似跨式 / 对冲 顺序列出）：",
-        "",
-        df_to_md(
-            rej_tab[["entry", "symbol", "qty", "dte", "pnl_net", "reasons"]].rename(
-                columns={
-                    "entry": "入场（ET）",
-                    "symbol": "合约",
-                    "qty": "张",
-                    "dte": "DTE",
-                    "pnl_net": "扣费后 USD",
-                    "reasons": "原因",
-                }
-            )
-        ),
-        "",
-        f"入选样本按标的：{sel['und'].value_counts().to_dict()}；合计扣费后 "
-        f"{sel['pnl_net'].sum():.2f} USD（剔除部分 {rej['pnl_net'].sum():.2f} USD，"
-        "不计入任何策略战绩）。",
+        "按负责人指令（D-030），只用 `docs/research/INTRADAY_SINGLE_LEG_LIST.md` 的入选样本"
+        f"（持仓段为单位）：全部 {len(ep)} 段，入选 {cnt.get('入选', 0)}、剔除 "
+        f"{cnt.get('剔除', 0)}、反手重叠（待确认）{cnt.get('待确认', 0)}、"
+        f"其他 {cnt.get('其他', 0)}。入选按标的：{sel['und'].value_counts().to_dict()}，"
+        f"合计扣费后 {sel['pnl_net'].sum():.2f} USD。"
+        "此前 D-029 版本（FIFO 行为单位、DTE ≤ 7）已被取代，见 git 历史。",
         "",
         "## 2. 逐笔复盘（口径 A = D-027；C = 含盘前盘后连续口径对照）",
         "",
@@ -549,8 +552,7 @@ def main(argv: list[str] | None = None) -> int:
         "",
         "## 3. 规律",
         "",
-        "以下第 3 节按**入场决策**统计（同一合约同一入场时刻的分批平仓合并为一次入场，盈亏相加）："
-        f"入选 {len(t)} 个 FIFO 行 = {len(pos)} 次入场。",
+        f"以下按持仓段统计（{len(pos)} 段；「FIFO 行数」= 该段包含的分批卖出配对行）。",
         "",
         "### 按状态 × 顺逆 × 形态（口径 A）",
         "",
@@ -588,7 +590,7 @@ def main(argv: list[str] | None = None) -> int:
         else "无胜率 > 0.5 的叶子。",
         "",
         "这些规则是在同一批样本上拟合出来的描述，样本内胜率必然偏高；已冻结到 "
-        "`config/v4_rules.yaml`，在两年 MU 数据上的独立回放见 V4_DECISIVE.md（R-035）。",
+        "`config/v4_rules_d030.yaml`，在两年 MU 数据上的独立回放见 V4_DECISIVE.md（R-037）。",
         "",
         "### 护栏证据（入选样本，口径 A）",
         "",
@@ -611,7 +613,7 @@ def main(argv: list[str] | None = None) -> int:
     store = root / "research" / "v4"
     store.mkdir(parents=True, exist_ok=True)
     t.to_parquet(store / "owner_intraday_review.parquet", index=False)
-    print(f"入选 {len(sel)}、剔除 {len(rej)}；规则 {len(rules)} 条")
+    print(f"D-030 入选 {len(sel)} 段（可复盘 {len(cov)}）；规则 {len(rules)} 条")
     return 0
 
 

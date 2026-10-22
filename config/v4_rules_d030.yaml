@@ -1,0 +1,19 @@
+source: zr/research/intraday_single_leg.py（口径 A，D-030 入选日内单腿持仓段）
+rules:
+- id: R1
+  conditions:
+  - - pb_mid_hw
+    - <=
+    - 0.434868723154068
+  - - vol_ratio
+    - '>'
+    - 0.6954894959926605
+  - - hist_n
+    - '>'
+    - -0.0005681762850144878
+  n: 28
+  lots: 44
+  days: 13
+  n_nan: 4
+  win_rate: 0.964
+  sum_usd: 18496.49
