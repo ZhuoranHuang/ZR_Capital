@@ -119,12 +119,23 @@ Options Standard 档：tick 级，2016 起，账户并发 4（本项目用 2）�
 `~/thetadata/config.toml` 的 `host` 已改为 `127.0.0.1`，**但实测不限制监听**（2026-10-22 更正此前「改 host 即限制在本机」的说法——那是未经验证的推断）：
 - 终端日志写 `Starting server at: http://127.0.0.1:25503/`，实际 `netstat` 为 `tcp46 *.25503 LISTEN`；
 - 从本机局域网地址访问：`http://192.168.8.121:25503/mcp/sse` → **200**，REST → 有响应；
-- macOS 应用防火墙为关闭状态（`socketfilterfw --getglobalstate` → disabled）。
-即同一网络内的任何人都能访问 REST 和 MCP（使用本账户的数据权限）。config.toml 与 jar 内置模板都没有关闭 MCP 的键（未验证是否有命令行开关）。
-需要负责人决定的系统级措施（需 sudo，未执行）：
-1. 打开 macOS 防火墙并阻止 java 入站：`sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on` 与 `--blockapp ~/thetadata/jdk/Contents/Home/bin/java`；或
-2. 用 pf 只放行回环：在 `/etc/pf.conf` 加 `block in quick on ! lo0 proto tcp to any port 25503` 后 `sudo pfctl -f /etc/pf.conf -e`；或
-3. 向 ThetaData 支持确认 v3 终端的监听地址 / 关闭 MCP 的正式方法。
+- 当时 macOS 应用防火墙为关闭状态（`socketfilterfw --getglobalstate` → disabled）。
+即当时同一网络内的任何人都能访问 REST 和 MCP（使用本账户的数据权限）。config.toml 与 jar 内置模板都没有关闭 MCP 的键（未验证是否有命令行开关）。
+**已处理（2026-10-22，负责人执行）**：macOS 应用防火墙开启，ThetaData 自带 JDK 的 java 设为阻止入站。
+监听仍是 `*:25503`，防护靠防火墙，不靠 config.toml。验证命令（终端升级或 JDK 路径变化后须重跑）：
+
+```bash
+/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate
+# 期望：Firewall is enabled. (State = 1)
+/usr/libexec/ApplicationFirewall/socketfilterfw --listapps | grep -A1 "thetadata/jdk"
+# 期望：~/thetadata/jdk/Contents/Home/bin/java 下一行为 (Block incoming connections)
+```
+
+- 从本机访问自身局域网 IP 不经过应用防火墙，返回 200 不说明问题；端到端验证要从同网段的另一台设备访问
+  `http://<Mac 局域网 IP>:25503/mcp/sse`，期望连接超时或被拒（截至 2026-10-22 未做）。
+- 若 jar 升级后自带 JDK 路径改变，新的 java 需重新设为阻止：
+  `sudo /usr/libexec/ApplicationFirewall/socketfilterfw --blockapp <新 java 路径>`。
+- 备选（未采用）：pf 只放行回环 `block in quick on ! lo0 proto tcp to any port 25503`。
 
 首次使用：负责人在自己的终端里运行 `bash scripts/run_theta_terminal.sh` 并按提示登录（或 `--api-key`）；之后 `curl "http://127.0.0.1:25503/v3/option/list/expirations?symbol=SPY&format=json" | head -c 200` 有返回即可。macOS Gatekeeper 若拦截 jar，按文档在「隐私与安全性」里 Open Anyway。
 

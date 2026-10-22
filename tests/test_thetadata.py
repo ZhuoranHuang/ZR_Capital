@@ -161,21 +161,68 @@ def test_bulk_day_filters_strikes_writes_parquet_and_resumes(tmp_path):
     calls: list[str] = []
     client = td.ThetaClient(getter=_fake_getter(calls), concurrency=2)
     day = dt.date(2026, 9, 1)
-    recs = td.bulk_quotes_1m(client, tmp_path, "SPY", [day], open_px_fn=lambda d: 640.0)
+    recs = td.bulk_quotes_1m(client, tmp_path, "SPY", [day], px_fn=lambda d: (640.0, 638.0, 642.0))
     assert len(recs) == 1 and "error" not in recs[0]
     assert recs[0]["expirations"] == ["2026-09-01", "2026-09-02", "2026-09-03"]  # 09-30 超过 DTE 5
     d = tmp_path / "options_1m/underlying=SPY/date=2026-09-01"
     q = pd.read_parquet(d / "quotes.parquet")
-    # ±3%：640*0.97=620.8 ~ 659.2 → 只剩 630/640/650，三个到期日 × 3 档 × call+put
+    # 带宽按当日高低点：[638×0.97, 642×1.03] = [618.9, 661.3] → 只剩 630/640/650，
+    # 三个到期日 × 3 档 × call+put
     assert sorted(q["strike"].unique()) == [630.0, 640.0, 650.0]
     assert len(q) == 3 * 3 * 2
     oi = pd.read_parquet(d / "oi.parquet")
     assert len(oi) == 1 and oi["open_interest"].iloc[0] == 1234
     assert (tmp_path / "options_1m/manifest.jsonl").exists()
     n_calls = len(calls)
-    # 断点续传：已完成的日期不再请求
-    assert td.bulk_quotes_1m(client, tmp_path, "SPY", [day], open_px_fn=lambda d: 640.0) == []
-    assert len(calls) == n_calls
+    # 断点续传：已完成且到期日齐全的日期不再请求数据（只拉一次到期日列表用于核对）
+    assert (
+        td.bulk_quotes_1m(client, tmp_path, "SPY", [day], px_fn=lambda d: (640.0, 638.0, 642.0))
+        == []
+    )
+    assert len(calls) == n_calls + 1 and calls[-1].split("?")[0].endswith(
+        "/option/list/expirations"
+    )
+
+
+def test_select_expirations_nearest_two_plus_dte5():
+    exps = [dt.date(2024, 3, 1), dt.date(2024, 3, 8), dt.date(2024, 3, 15)]
+    # 周五 03-01：DTE≤5 只有当日；加上最近两个 → 03-01 与 03-08（DTE 7）
+    assert td.select_expirations(exps, dt.date(2024, 3, 1)) == [
+        dt.date(2024, 3, 1),
+        dt.date(2024, 3, 8),
+    ]
+    daily = [dt.date(2026, 9, 1) + dt.timedelta(days=i) for i in range(8)]
+    assert td.select_expirations(daily, dt.date(2026, 9, 1)) == daily[:6]
+
+
+def test_bulk_supplements_missing_expiration_and_merges(tmp_path):
+    calls: list[str] = []
+    client = td.ThetaClient(getter=_fake_getter(calls), concurrency=1)
+    day = dt.date(2026, 9, 1)
+    # 先按旧规则只拉了 09-01、09-02（manifest 只记这两个）
+    rec = td.fetch_day(
+        client,
+        tmp_path,
+        "SPY",
+        day,
+        [],
+        (640.0, 638.0, 642.0),
+        only=[dt.date(2026, 9, 1), dt.date(2026, 9, 2)],
+    )
+    d = tmp_path / "options_1m/underlying=SPY/date=2026-09-01"
+    n_before = len(pd.read_parquet(d / "quotes.parquet"))
+    assert rec["supplement"] is True
+    out = td.bulk_quotes_1m(client, tmp_path, "SPY", [day], px_fn=lambda x: (640.0, 638.0, 642.0))
+    assert (
+        len(out) == 1 and out[0]["expirations"] == ["2026-09-03"] and out[0]["supplement"] is True
+    )
+    q = pd.read_parquet(d / "quotes.parquet")
+    assert len(q) == n_before + 3 * 2 and q.duplicated(["ts", "symbol"]).sum() == 0
+    # 再跑一次：齐全，不再拉
+    assert (
+        td.bulk_quotes_1m(client, tmp_path, "SPY", [day], px_fn=lambda x: (640.0, 638.0, 642.0))
+        == []
+    )
 
 
 def test_http_error_raises_and_no_data_is_empty():
@@ -232,3 +279,55 @@ def test_client_gives_up_after_outage_budget():
     with pytest.raises(td.ThetaError) as e:
         c.list_expirations("SPY")
     assert e.value.status == 599
+
+
+def test_coverage_report_flags_days_filtered_too_narrow(tmp_path, monkeypatch):
+    day = dt.date(2026, 9, 1)
+    d = tmp_path / "options_1m/underlying=SPY/date=2026-09-01"
+    d.mkdir(parents=True)
+    pd.DataFrame({"strike": [630.0, 640.0, 650.0]}).to_parquet(d / "quotes.parquet", index=False)
+    # 当日最低 600 → 需要 582 起；最高 642 → 需要到 661.3；存的只有 630–650 → 不覆盖
+    monkeypatch.setattr(td, "day_price_range", lambda root, und, day: (640.0, 600.0, 642.0))
+    cov = td.coverage_report(tmp_path, "SPY", [day])
+    assert cov.loc[0, "covered"] is False or cov.loc[0, "covered"] == False  # noqa: E712
+    # 需要 [620.3, 659.7]，存的 630–650，一档容差 10 → 覆盖
+    monkeypatch.setattr(td, "day_price_range", lambda root, und, day: (640.0, 639.5, 640.5))
+    cov = td.coverage_report(tmp_path, "SPY", [day])
+    assert bool(cov.loc[0, "covered"]) is True
+    assert td.drop_days(tmp_path, "SPY", [day]) == 1 and not d.exists()
+
+
+def test_coverage_uses_edge_spacing_and_chain_extent(tmp_path, monkeypatch):
+    day = dt.date(2026, 9, 1)
+    d = tmp_path / "options_1m/underlying=MU/date=2026-09-01"
+    d.mkdir(parents=True)
+    # 近 ATM 0.5 档，远端 1 档：存 62–74
+    pd.DataFrame({"strike": [62.0, 63.0, 67.5, 68.0, 68.5, 73.0, 74.0]}).to_parquet(
+        d / "quotes.parquet", index=False
+    )
+    # 需要 [61.7, 74.81]：低侧 62 ≤ 61.7+1 ✓，高侧 74 ≥ 74.81−1 ✓ → 覆盖（全局最小档距 0.5 会误判）
+    monkeypatch.setattr(td, "day_price_range", lambda r, u, dd: (68.0, 67.06, 69.27))
+    assert bool(td.coverage_report(tmp_path, "MU", [day]).loc[0, "covered"]) is True
+    # 需要高到 80：存的只到 74 → 不覆盖；但若 manifest 说链本来就只到 74 → 覆盖
+    monkeypatch.setattr(td, "day_price_range", lambda r, u, dd: (68.0, 67.06, 74.0))
+    assert bool(td.coverage_report(tmp_path, "MU", [day]).loc[0, "covered"]) is False
+    (tmp_path / "options_1m/manifest.jsonl").write_text(
+        json.dumps({"underlying": "MU", "date": "2026-09-01", "chain_min": 62.0, "chain_max": 74.0})
+        + "\n",
+        encoding="utf-8",
+    )
+    assert bool(td.coverage_report(tmp_path, "MU", [day]).loc[0, "covered"]) is True
+
+
+def test_429_exponential_backoff_then_success():
+    seq = [(429, "OS_LIMIT")] * 3 + [(200, json.dumps({"response": []}))]
+    calls = []
+
+    def getter(url):
+        calls.append(url)
+        return seq[len(calls) - 1]
+
+    slept = []
+    c = td.ThetaClient(getter=getter, sleep=slept.append)
+    assert c.get_json("/option/list/expirations", symbol="SPY") == []
+    assert slept == [1.0, 2.0, 4.0]

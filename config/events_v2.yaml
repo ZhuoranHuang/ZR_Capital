@@ -1,0 +1,46 @@
+# 方法论 v2 检测器参数（METHOD_V2 规格 3）。v1 的 config/events.yaml 保持不变以便复现 W2 报告。
+# 差异：E1T（收紧版 ε=0.05%、确认 1、通道 A）+ E9；E1 原版保留作对照。
+detectors:
+  E1:   # 通道回踩
+    enabled: true
+    eps: 0.001            # |low − 中轨| / 中轨
+  E2:   # 开盘区间突破
+    enabled: true
+    range_min: 30         # 也测 15
+  E3:   # VWAP 失而复得
+    enabled: true
+    min_bars: 5           # 站回前至少在另一侧的 bar 数
+  E4:   # 长均线 + RSI 顺势交叉
+    enabled: true
+    ma_n: 120
+    slope_n: 10
+    rsi_n: 14
+    rsi_low: 30
+    rsi_high: 70
+  E5:   # CUSUM
+    enabled: true
+    k: 3.0
+    sigma_window: 60
+  E6:   # 布林带挤压后扩张
+    enabled: true
+    lookback_days: 20
+    low_pct: 0.1
+    expand: 0.05
+  E7:   # 日内动量
+    enabled: true
+    entry_minute: 930     # 15:30 ET = 15*60+30
+    min_abs_ret: 0.0
+  E8:   # VWAP 均值回归
+    enabled: true
+    k: 2.0
+    require_gex: false    # 无期权 OI 数据时不门控，结果标注 ungated
+  E1T:  # E1 收紧版（METHOD_V2 规格 2）
+    enabled: true
+    eps: 0.0005
+    confirm: 1
+    channel: A
+  E9:   # BinHV45 式抄底（扫描 R-009 中 MU 最显著的一组）
+    enabled: true
+    body_ratio: 0.2
+    drawdown: 0.01
+    lookback: 20

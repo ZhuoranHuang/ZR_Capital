@@ -1,6 +1,6 @@
 # 状态
 
-更新：2026-10-22 08:50 SGT · main
+更新：2026-10-22 04:58 PT · feat/method-v2 → main
 
 ## 阶段
 
@@ -22,7 +22,8 @@
 
 ## 进行中
 
-- **ThetaData 全量拉取**：2026-10-22 08:45 SGT 启动（`nohup caffeinate -i bash scripts/theta_full_pull.sh`），SPY→QQQ→MU，2023-10-02～2026-10-21，进度逐月写进 `docs/DATA_INVENTORY.md`；日志 `$ZR_DATA_ROOT/logs/theta_pull.log`。开头几天 ≈23 s/天。终端重启时客户端最多等 10 分钟后继续；超时或其他错误则停在当月，重跑脚本续传。
+- **ThetaData 全量拉取**：MU、QQQ 完成（各 767 个交易日，2023-10-02～2026-10-21）；**SPY 按负责人指令暂停于 2024-07-30**（208 天，保留），续拉命令见 DATA_INVENTORY。拉取进程已全部停止；脚本单实例锁改为 noclobber 原子创建。
+- **方法论 v2 第一轮已完成**：MU 主报告 `docs/research/METHOD_V2_ROUND1.md`，QQQ 对照 `docs/research/METHOD_V2_ROUND1_QQQ.md`；回放主结果为 D-022 网格（`E1_PULLBACK_SWEEP_{MU,QQQ}.md`），收紧版 E1 作对照；结果登记在 RESEARCH_LOG R-017～R-027、R-029。
 - **数据根已迁到外接 SSD**（APFS）：`/Volumes/ZHITAI TiPlus9100 2TB Media/zr_data`，4,141 个文件 / 345,158,096 字节核对一致；`.env` 只改了 `ZR_DATA_ROOT` 一行；同步、录制、全量拉取脚本经 `scripts/lib/data_root.sh` 解析，盘未挂载时报错退出。
 - 录制器：VPS 10-22 13:20 UTC 起按 timer 运行（SPY/QQQ/MU，239 订阅）。
 
@@ -30,13 +31,15 @@
 
 1. **2026-10-25（SGT）删除旧数据目录** `./data_store`（确认 SSD 上数据完好、同步与拉取都写到 SSD 后）。
 2. **全量拉取已停在 2024-01**（2026-10-21 18:11 PT）：负责人 18:12 重启终端时用的是旧版脚本（默认 SOCKS），子 JVM 带 `-DsocksProxyHost=127.0.0.1:1080`，gRPC 上游全部 `503 io exception`。脚本已改为默认直连（`--proxy` 才用 HTTP CONNECT）。**请负责人用新脚本重启终端**：`bash scripts/run_theta_terminal.sh`，确认 `curl http://127.0.0.1:25503/v3/option/list/expirations?symbol=SPY` 返回 200 后告诉我，我重跑 `scripts/theta_full_pull.sh` 续传（2023-12 的 4 个失败日会自动重拉）。
-2b. **安全：Theta 终端的 REST/MCP 对局域网开放**——`host=127.0.0.1` 不限制监听（实测 `*.25503`，局域网 IP 访问 `/mcp/sse` 返回 200），macOS 防火墙关闭。三种处理方式见 DEPLOY.md「ThetaData」小节，均需 sudo，待负责人决定。
 3. 全量到位后：在 2 年期权数据上重跑元标签（加期权特征），报告同样指标（PLAN_W3 线 a）。
 
 ## 待确认
+
+0. **QQQ 期权结果表疑似伪影（阻塞 QQQ 期权结论）**：`research/v2/outcomes/underlying=QQQ` 在 2025、2026 年**多空两个方向**在所有决策分钟的 cap30 均值都为正（2025 put +4.14 / call +2.67，2026 +5.75 / +4.90 USD/2 张），随机入场也为正；MU 同期为 −17～−29。真实市场里同时做多做空的随机期权不应扣费后为正，怀疑 2025 起 QQQ 报价数据或出场规则（+20% 减半、中轨止损、15:55 按 bid 平仓）在 0DTE 上的伪影。QQQ 报告中所有期权盈亏结论暂不可用；正股标签、模型 AUC、审计不受影响。是否排查请负责人决定。
 
 1. **10-21 定稿的「门」的具体条件写进 DECISIONS**——仓库里没有书面记录，D-017 只引用了 W2 数字；请负责人给出原文，我补一条 D-018。
 2. 账户净资产 ≈ 0，实盘前需入金（实盘已推后，不阻塞）。
 3. 1 分钟 K 只能回溯到 2023-10-02；2023-01～09 若需要另找源。
 4. D-008 蒙特卡洛脚本未入库（R-002）。
 5. Mac 合盖或电池模式仍会睡眠；全量拉取期间请接电源、不合盖（`caffeinate -i` 只防空闲睡眠）。
+6. ~~D-019 覆盖率 0%~~ → 负责人 10-22 改为 D-021（OI 水平特征），已实现。**可选**：「ATM±3 占比」的分母现在是开盘价 ±b 内的已拉取合约，不是全链；若要全链，需另拉 OI（每日每到期日 1 次请求，须等全量拉取结束，账户并发上限 4）。

@@ -14,9 +14,19 @@ ATM 用正股 bar t 的收盘价；「近端」= 当日仍未到期的最近到�
 特征（列名均以 opt_ 开头）：
 - opt_near_vol：近端到期 ATM±2 档（5 个行权价）call+put 1 分钟成交量
 - opt_near_vol_ratio20：opt_near_vol ÷ 前 20 个交易日同一分钟均值（至少 5 天）
-- opt_cp_lr_near / opt_cp_lr_all：log((call 量+1)/(put 量+1))，近端 ATM±2 / 全部已拉取合约
+- opt_cp_lr_near / opt_cp_lr_all：log((call 量+1)/(put 量+1))，
+  近端 ATM±2 / 开盘价 ±b 内全部已拉取合约
 - opt_atm_iv：近端 ATM call/put 中间价 BS 反推 IV 均值；opt_atm_iv_chg5 / chg15：日内 5、15 分钟变化
-- opt_oi_chg：在带宽内、两日都存在的合约，OI 合计的日变化率；opt_pc_oi：put/call OI 比
+- OI 水平（D-021，取代 D-019 的日变化）：oi.parquet 为当日 06:30 ET 发布的
+  前一交易日收盘 OI，开盘前已知。
+  合约集合 = 当日已拉取到期日中行权价在 开盘价 × (1 ± b) 内的合约
+  （b = 拉取带宽，SPY/QQQ 3%、MU 8%）；
+  开盘价 09:30 已知，且拉取带宽 [日低×(1−b), 日高×(1+b)] 必然包含该区间，
+  所以集合不依赖当日后续走势。
+  opt_cp_oi：call OI ÷ put OI；opt_maxoi_dist：(现价 − 最大 OI 行权价) ÷ 行权价间距
+  （按行权价汇总 call+put；间距 = 离开盘价最近 11 个行权价的相邻差中位数，从数据取）；
+  opt_atm3_oi_share：离现价最近行权价 ±3 档（共 7 个）的 OI ÷ 集合内全部 OI。
+  未用全链：拉取时 OI 已按带宽过滤，全链 OI 需另行拉取
 - opt_front_dte：近端到期日距今天数
 未包含：净 gamma 近似（GEX）——等 OI 全量到位后另加（PLAN_W3 线 a）。
 """
@@ -36,6 +46,8 @@ from scipy.stats import norm
 ET = ZoneInfo("America/New_York")
 R = 0.04  # 无风险利率假设（对 0–5DTE 影响可忽略）
 N_EACH_SIDE = 2
+OI_ATM_EACH_SIDE = 3
+SPACING_N = 11
 VOL_LOOKBACK_DAYS = 20
 VOL_MIN_DAYS = 5
 
@@ -47,8 +59,9 @@ OPTION_FEATURE_COLUMNS = [
     "opt_atm_iv",
     "opt_atm_iv_chg5",
     "opt_atm_iv_chg15",
-    "opt_oi_chg",
-    "opt_pc_oi",
+    "opt_cp_oi",
+    "opt_maxoi_dist",
+    "opt_atm3_oi_share",
     "opt_front_dte",
 ]
 
@@ -121,10 +134,65 @@ def _near_strikes(strikes: np.ndarray, spot: np.ndarray, n_each: int) -> np.ndar
     return mask
 
 
-def day_features(stock: pd.DataFrame, opt: dict[str, pd.DataFrame], day: dt.date) -> pd.DataFrame:
-    """stock：当日正股 1 分钟 K（索引 ts UTC，含 close）。返回以 stock.index 为索引的期权特征。"""
+def open_window(strikes: pd.Series, open_px: float, band: float) -> pd.Series:
+    """行权价是否在 开盘价 × (1 ± band) 内（09:30 已知，不依赖当日后续走势）。"""
+    return strikes.between(open_px * (1 - band), open_px * (1 + band))
+
+
+def strike_spacing(strikes: np.ndarray, ref: float, n: int = SPACING_N) -> float:
+    """离 ref 最近 n 个行权价的相邻差中位数（行权价间距从数据取，CLAUDE.md 规则 7）。"""
+    ks = np.unique(strikes)
+    if len(ks) < 2:
+        return float("nan")
+    near = np.sort(ks[np.argsort(np.abs(ks - ref))[:n]])
+    d = np.diff(near)
+    d = d[d > 0]
+    return float(np.median(d)) if len(d) else float("nan")
+
+
+def oi_level_features(
+    oi: pd.DataFrame, spot: pd.Series, open_px: float, band: float, day: dt.date
+) -> pd.DataFrame:
+    """D-021 OI 水平特征（每分钟；OI 全天常数，随现价变化的是距离与 ATM 占比）。"""
+    out = pd.DataFrame(
+        index=spot.index, columns=["opt_cp_oi", "opt_maxoi_dist", "opt_atm3_oi_share"], dtype=float
+    )
+    if oi is None or oi.empty or not np.isfinite(open_px):
+        return out
+    exp = pd.to_datetime(oi["expiry"]).dt.date
+    x = oi[(exp >= day).to_numpy() & open_window(oi["strike"], open_px, band).to_numpy()]
+    if x.empty:
+        return out
+    calls = float(x.loc[x["right"] == "call", "open_interest"].sum())
+    puts = float(x.loc[x["right"] == "put", "open_interest"].sum())
+    out["opt_cp_oi"] = calls / puts if puts > 0 else np.nan
+    per_k = x.groupby("strike")["open_interest"].sum().sort_index()
+    total = float(per_k.sum())
+    if total <= 0:
+        return out
+    ks, v = per_k.index.to_numpy(float), per_k.to_numpy(float)
+    spacing = strike_spacing(ks, open_px)
+    k_max = ks[int(np.argmax(v))]
+    s = spot.to_numpy(float)
+    out["opt_maxoi_dist"] = (s - k_max) / spacing if spacing > 0 else np.nan
+    i = np.abs(ks[None, :] - s[:, None]).argmin(axis=1)
+    csum = np.r_[0.0, np.cumsum(v)]
+    lo = np.maximum(i - OI_ATM_EACH_SIDE, 0)
+    hi = np.minimum(i + OI_ATM_EACH_SIDE + 1, len(ks))
+    out["opt_atm3_oi_share"] = (csum[hi] - csum[lo]) / total
+    return out
+
+
+def day_features(
+    stock: pd.DataFrame, opt: dict[str, pd.DataFrame], day: dt.date, band: float = 0.05
+) -> pd.DataFrame:
+    """stock：当日正股 1 分钟 K（索引 ts UTC，含 open/close）。返回以 stock.index 为索引的期权特征。
+
+    band：该标的的拉取带宽（zr/data/thetadata.py 的 STRIKE_BAND），决定「开盘价 ±b」合约集合。
+    """
     out = pd.DataFrame(index=stock.index)
     spot = stock["close"]
+    open_px = float(stock["open"].iloc[0]) if "open" in stock and len(stock) else float("nan")
     quotes, ohlc = opt["quotes"], opt["ohlc"]
     expiries = list(ohlc["expiry"].unique()) + list(quotes["expiry"].unique())
     front = _front_expiry(expiries, day)
@@ -134,8 +202,9 @@ def day_features(stock: pd.DataFrame, opt: dict[str, pd.DataFrame], day: dt.date
     if not ohlc.empty and front is not None:
         v = ohlc[["ts", "strike", "right", "expiry", "volume"]].copy()
         v["volume"] = v["volume"].fillna(0).astype(float)
-        call_all = v[v["right"] == "call"].groupby("ts")["volume"].sum()
-        put_all = v[v["right"] == "put"].groupby("ts")["volume"].sum()
+        va = v[open_window(v["strike"], open_px, band)] if np.isfinite(open_px) else v
+        call_all = va[va["right"] == "call"].groupby("ts")["volume"].sum()
+        put_all = va[va["right"] == "put"].groupby("ts")["volume"].sum()
         out["opt_cp_lr_all"] = np.log(
             (call_all.reindex(out.index).fillna(0) + 1) / (put_all.reindex(out.index).fillna(0) + 1)
         )
@@ -188,43 +257,16 @@ def day_features(stock: pd.DataFrame, opt: dict[str, pd.DataFrame], day: dt.date
             out["opt_atm_iv"] = iv
             out["opt_atm_iv_chg5"] = iv - iv.shift(5)
             out["opt_atm_iv_chg15"] = iv - iv.shift(15)
+    lv = oi_level_features(opt.get("oi"), spot, open_px, band, day)
+    out[lv.columns] = lv
     return out
-
-
-def oi_daily(root: Path, und: str, days: list[dt.date]) -> pd.DataFrame:
-    """每日 OI 特征：同时存在于前一日的合约 OI 合计变化率、put/call OI 比。"""
-    rows, prev = [], None
-    for day in days:
-        d = root / "options_1m" / f"underlying={und}" / f"date={day.isoformat()}" / "oi.parquet"
-        if not d.exists():
-            prev = None
-            continue
-        oi = pd.read_parquet(d)
-        if oi.empty:
-            prev = None
-            continue
-        cur = oi.groupby("symbol")["open_interest"].sum()
-        calls = oi.loc[oi["right"] == "call", "open_interest"].sum()
-        puts = oi.loc[oi["right"] == "put", "open_interest"].sum()
-        chg = np.nan
-        if prev is not None:
-            common = cur.index.intersection(prev.index)
-            base = prev[common].sum()
-            if len(common) and base > 0:
-                chg = cur[common].sum() / base - 1
-        rows.append(
-            {"date": day, "opt_oi_chg": chg, "opt_pc_oi": puts / calls if calls > 0 else np.nan}
-        )
-        prev = cur
-    return (
-        pd.DataFrame(rows).set_index("date")
-        if rows
-        else pd.DataFrame(columns=["opt_oi_chg", "opt_pc_oi"])
-    )
 
 
 def compute_option_features(root: Path, und: str, stock: pd.DataFrame) -> pd.DataFrame:
     """对 stock（多日，索引 ts UTC）中有期权数据的交易日计算特征；无数据的日期为 NaN。"""
+    from zr.data.thetadata import STRIKE_BAND
+
+    band = STRIKE_BAND.get(und, 0.05)
     out = pd.DataFrame(index=stock.index, columns=OPTION_FEATURE_COLUMNS, dtype=float)
     sday = pd.Series(stock.index.tz_convert(ET).date, index=stock.index)
     days = [d for d in option_days(root, und) if d in set(sday.unique())]
@@ -235,7 +277,7 @@ def compute_option_features(root: Path, und: str, stock: pd.DataFrame) -> pd.Dat
             continue
         loaded.append(day)
         idx = sday.index[sday == day]
-        f = day_features(stock.loc[idx], opt, day)
+        f = day_features(stock.loc[idx], opt, day, band)
         out.loc[idx, f.columns] = f.to_numpy(dtype=float)
     # 同时段 20 日均量（只用之前的交易日）
     if loaded:
@@ -251,7 +293,4 @@ def compute_option_features(root: Path, und: str, stock: pd.DataFrame) -> pd.Dat
             out["opt_near_vol"].to_numpy(dtype=float)
             / base.stack(future_stack=True).reindex(key).to_numpy()
         )
-        daily = oi_daily(root, und, loaded)
-        for c in ("opt_oi_chg", "opt_pc_oi"):
-            out[c] = sday.map(daily[c]).to_numpy(dtype=float) if len(daily) else np.nan
     return out

@@ -1,0 +1,50 @@
+# 定时发布与财报日历（METHOD_V2 规格 4 日历特征）。只收录有来源的条目；无来源的标 pending。
+# 时间均为美东（America/New_York）。读取：zr/features/calendar_features.py
+# 生成：2026-10-22T02:59:22+00:00 UTC（经 VPS 跳板抓取官方页面）
+sources:
+  fomc: "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm（2026-10-22 读取；声明日 = 会议最后一天；* = 含经济预测）"
+  fomc_time: "14:00 ET 声明发布为惯例时间，该页未写明时间——未验证"
+  pce: "https://www.bea.gov/news/schedule/full（2026-10-22 读取；该页只列 2026 年）"
+pending:
+  cpi: "BLS 发布日程：bls.gov 对脚本访问返回 403，ALFRED 不可达——待接入（2023-10～2026-10 全部）"
+  nfp: "BLS Employment Situation 发布日程：同上，待接入"
+  pce_before_2026: "BEA 当前页只列 2026；2023-10～2025-12 待接入"
+  earnings_mu: "Micron 财报日：未接入来源（IR 页面 / 数据商），待接入"
+events:
+  - {date: 2026-01-28, time: "14:00", kind: fomc, sep: false, source: fomc}
+  - {date: 2026-03-18, time: "14:00", kind: fomc, sep: true, source: fomc}
+  - {date: 2026-04-29, time: "14:00", kind: fomc, sep: false, source: fomc}
+  - {date: 2026-06-17, time: "14:00", kind: fomc, sep: true, source: fomc}
+  - {date: 2026-07-29, time: "14:00", kind: fomc, sep: false, source: fomc}
+  - {date: 2026-09-16, time: "14:00", kind: fomc, sep: true, source: fomc}
+  - {date: 2026-10-28, time: "14:00", kind: fomc, sep: false, source: fomc}
+  - {date: 2026-12-09, time: "14:00", kind: fomc, sep: true, source: fomc}
+  - {date: 2025-01-29, time: "14:00", kind: fomc, sep: false, source: fomc}
+  - {date: 2025-03-19, time: "14:00", kind: fomc, sep: true, source: fomc}
+  - {date: 2025-05-07, time: "14:00", kind: fomc, sep: false, source: fomc}
+  - {date: 2025-06-18, time: "14:00", kind: fomc, sep: true, source: fomc}
+  - {date: 2025-07-30, time: "14:00", kind: fomc, sep: false, source: fomc}
+  - {date: 2025-09-17, time: "14:00", kind: fomc, sep: true, source: fomc}
+  - {date: 2025-10-29, time: "14:00", kind: fomc, sep: false, source: fomc}
+  - {date: 2025-12-10, time: "14:00", kind: fomc, sep: true, source: fomc}
+  - {date: 2024-01-31, time: "14:00", kind: fomc, sep: false, source: fomc}
+  - {date: 2024-03-20, time: "14:00", kind: fomc, sep: true, source: fomc}
+  - {date: 2024-05-01, time: "14:00", kind: fomc, sep: false, source: fomc}
+  - {date: 2024-06-12, time: "14:00", kind: fomc, sep: true, source: fomc}
+  - {date: 2024-07-31, time: "14:00", kind: fomc, sep: false, source: fomc}
+  - {date: 2024-09-18, time: "14:00", kind: fomc, sep: true, source: fomc}
+  - {date: 2024-11-07, time: "14:00", kind: fomc, sep: false, source: fomc}
+  - {date: 2024-12-18, time: "14:00", kind: fomc, sep: true, source: fomc}
+  - {date: 2023-11-01, time: "14:00", kind: fomc, sep: false, source: fomc}
+  - {date: 2023-12-13, time: "14:00", kind: fomc, sep: true, source: fomc}
+  - {date: 2026-01-22, time: "10:00", kind: pce, period: "October and November 2025", source: pce}
+  - {date: 2026-02-20, time: "08:30", kind: pce, period: "December 2025", source: pce}
+  - {date: 2026-03-13, time: "08:30", kind: pce, period: "January 2026", source: pce}
+  - {date: 2026-04-09, time: "08:30", kind: pce, period: "February 2026", source: pce}
+  - {date: 2026-04-30, time: "08:30", kind: pce, period: "March 2026", source: pce}
+  - {date: 2026-05-28, time: "08:30", kind: pce, period: "April 2026", source: pce}
+  - {date: 2026-06-25, time: "08:30", kind: pce, period: "May 2026", source: pce}
+  - {date: 2026-07-30, time: "08:30", kind: pce, period: "June 2026", source: pce}
+  - {date: 2026-08-26, time: "08:30", kind: pce, period: "July 2026", source: pce}
+  - {date: 2026-09-30, time: "08:30", kind: pce, period: "August 2026", source: pce}
+earnings: {}  # 待接入

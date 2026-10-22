@@ -25,10 +25,13 @@ def load_bars(
     start: dt.date | None = None,
     end: dt.date | None = None,
     intraday_only: bool = True,
+    rth_only: bool = True,
 ) -> pd.DataFrame:
     """读取 bars_1m/underlying=XXX/year=*/bars.parquet。
 
     返回以 ts(UTC) 为索引的升序 DataFrame。
+    rth_only（默认）：只保留交易日历上的交易日、[09:30, 收盘) 内的 bar（提前收盘日到 13:00）；
+    剔除长桥在休市日生成的零成交 bar（zr/data/calendar.py）。rth_only=True 隐含 intraday_only。
     """
     files = sorted((root / "bars_1m" / f"underlying={und}").glob("year=*/bars.parquet"))
     if not files:
@@ -38,6 +41,10 @@ def load_bars(
         df = df[df["session"] == "Intraday"]
     df = df.set_index("ts").sort_index()
     df.index = df.index.tz_convert("UTC")
+    if rth_only:
+        from zr.data.calendar import rth_mask
+
+        df = df[rth_mask(df.index)]
     if start is not None or end is not None:
         d = et_date(df.index)
         if start is not None:

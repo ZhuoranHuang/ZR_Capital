@@ -1,0 +1,318 @@
+{
+ "source": "ThetaData /v3/calendar/year_holidays（交易所日程，经本地 Theta Terminal）",
+ "fetched_utc": "2026-10-22T02:47:37+00:00",
+ "years": [
+  2023,
+  2024,
+  2025,
+  2026
+ ],
+ "days": [
+  {
+   "date": "2023-01-02",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2023-01-16",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2023-02-20",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2023-04-07",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2023-05-29",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2023-06-19",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2023-07-03",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2023-07-04",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2023-09-04",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2023-11-23",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2023-11-24",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2023-12-25",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2024-01-01",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2024-01-15",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2024-02-19",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2024-03-29",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2024-05-27",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2024-06-19",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2024-07-03",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2024-07-04",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2024-09-02",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2024-11-28",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2024-11-29",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2024-12-24",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2024-12-25",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2025-01-01",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2025-01-09",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2025-01-20",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2025-02-17",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2025-04-18",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2025-05-26",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2025-06-19",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2025-07-03",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2025-07-04",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2025-09-01",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2025-11-27",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2025-11-28",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2025-12-24",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2025-12-25",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2026-01-01",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2026-01-19",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2026-02-16",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2026-04-03",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2026-05-25",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2026-06-19",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2026-07-03",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2026-09-07",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2026-11-26",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2026-11-27",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2026-12-24",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2026-12-25",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  }
+ ]
+}

@@ -15,45 +15,64 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from zr.config import get_settings
+from zr.data.calendar import is_trading_day
 
 TABLE_HEADER = "## 全量拉取进度（scripts/theta_full_pull.sh 自动追加）"
 COLUMNS = (
-    "| 标的 | 月份 | 交易日 | 失败日 | quotes 行 | ohlc 行 | oi 行 | 拉取秒数 | parquet MB "
-    "| 完成时间 (ET) |"
+    "| 标的 | 月份 | 交易日 | 失败日 | 覆盖/未覆盖 | quotes 行 | ohlc 行 | oi 行 | 拉取秒数 "
+    "| parquet MB | 完成时间 (ET) |"
 )
-SEP = "|---|---|---|---|---|---|---|---|---|---|"
+SEP = "|---|---|---|---|---|---|---|---|---|---|---|"
 
 
 def month_summary(root: Path, und: str, start: dt.date, end: dt.date) -> dict:
+    """一个月的汇总：交易日/失败日按 manifest（同一天以最后一条非补拉记录为准）；
+    行数与大小直接读 parquet 元数据（补拉会追加记录，不能只看最后一条）。"""
+    import pyarrow.parquet as pq
+
     manifest = root / "options_1m" / "manifest.jsonl"
     latest: dict[str, dict] = {}
     if manifest.exists():
         for line in manifest.read_text(encoding="utf-8").splitlines():
             r = json.loads(line)
-            if r.get("underlying") != und:
+            if r.get("underlying") != und or r.get("supplement"):
                 continue
             d = dt.date.fromisoformat(str(r["date"]))
-            if start <= d <= end:
-                latest[d.isoformat()] = r  # 同一天以最后一次为准
-    ok = [r for r in latest.values() if "error" not in r]
+            if start <= d <= end and is_trading_day(d):  # 休市日记录（已删目录）不计
+                latest[d.isoformat()] = r
+    ok = [d for d, r in latest.items() if "error" not in r]
+    from zr.data.thetadata import coverage_report
+
+    cov = coverage_report(root, und, [dt.date.fromisoformat(d) for d in latest])
+    n_cov = int((cov["covered"] == True).sum()) if len(cov) else 0  # noqa: E712
+    n_unc = int((cov["covered"] == False).sum()) if len(cov) else 0  # noqa: E712
+    rows = {"quotes": 0, "ohlc": 0, "oi": 0}
     size = 0
     for d in latest:
         p = root / "options_1m" / f"underlying={und}" / f"date={d}"
-        if p.is_dir():
-            size += sum(f.stat().st_size for f in p.glob("*.parquet"))
+        if not p.is_dir():
+            continue
+        for name in rows:
+            f = p / f"{name}.parquet"
+            if f.exists():
+                rows[name] += pq.read_metadata(f).num_rows
+                size += f.stat().st_size
     return {
         "days": len(ok),
         "failed": len(latest) - len(ok),
-        "quotes": sum(r.get("rows_quotes", 0) for r in ok),
-        "ohlc": sum(r.get("rows_ohlc", 0) for r in ok),
-        "oi": sum(r.get("rows_oi", 0) for r in ok),
-        "mb": round(size / 1e6, 1),
+        "quotes": rows["quotes"],
+        "ohlc": rows["ohlc"],
+        "oi": rows["oi"],
+        "mb": round(size / 1e6, 2),
+        "covered": n_cov,
+        "uncovered": n_unc,
     }
 
 
 def format_row(und: str, start: dt.date, s: dict, seconds: int, finished: str) -> str:
     return (
-        f"| {und} | {start.strftime('%Y-%m')} | {s['days']} | {s['failed']} | {s['quotes']} | "
+        f"| {und} | {start.strftime('%Y-%m')} | {s['days']} | {s['failed']} | "
+        f"{s.get('covered', 0)}/{s.get('uncovered', 0)} | {s['quotes']} | "
         f"{s['ohlc']} | {s['oi']} | {seconds} | {s['mb']} | {finished} |"
     )
 

@@ -1,0 +1,11 @@
+# 通道定义参数（METHOD_V2 补充 1）。全部待测参数。
+slope_n: 5            # 三线斜率窗口（bar）
+F:
+  slope_min: 0.00005  # 中轨斜率 ≥ 阈值（每根 bar 相对变化，0.5 bp/bar）
+  parallel_max: 0.5   # 平行度：三线斜率 std / |均值| ≤ 阈值
+  min_len: 10         # 状态持续 ≥ N 根才算通道
+  max_dd: 0.005       # 通道期间方向化最大回撤 ≤ 0.5%
+C:
+  swing_w: 5
+D:
+  adx_min: 25

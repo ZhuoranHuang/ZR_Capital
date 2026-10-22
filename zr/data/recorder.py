@@ -294,8 +294,13 @@ def session_action(
 
 
 def is_trading_day(qctx: Any, day: dt.date) -> bool:
-    """trading_days(Market.US, day, day)；半日也算交易日。返回结构已内省：
-    MarketTradingDays{trading_days, half_trading_days}（元素类型未验证，按 date 处理）。"""
+    """交易日判断：优先用入库的交易所日历（config/us_equity_calendar.json，zr/data/calendar.py）；
+    日历未覆盖该年份时才退回长桥 trading_days（2026-10-22 实测长桥对历史休市日不可靠）。"""
+    from zr.data.calendar import covered_years
+    from zr.data.calendar import is_trading_day as cal_is_trading_day
+
+    if day.year in covered_years():
+        return cal_is_trading_day(day)
     from longport.openapi import Market
 
     res = qctx.trading_days(Market.US, day, day)

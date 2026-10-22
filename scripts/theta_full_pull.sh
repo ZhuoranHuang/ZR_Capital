@@ -5,7 +5,8 @@
 #
 # 后台运行：nohup bash scripts/theta_full_pull.sh >/dev/null 2>&1 &
 # 日志：$ZR_DATA_ROOT/logs/theta_pull.log
-# 参数（环境变量）：THETA_START（默认 2023-10-02）、THETA_END（默认今天美东日期）、THETA_SYMBOLS、THETA_CONCURRENCY
+# 参数（环境变量）：THETA_START（默认 2023-10-02）、THETA_END（默认今天美东日期）、THETA_SYMBOLS、
+# THETA_CONCURRENCY（默认 4 = 账户并发上限；429 指数退避、503/断连最多等 10 分钟）
 set -uo pipefail
 cd "$(dirname "$0")/.."
 REPO="$(pwd)"
@@ -17,7 +18,7 @@ UV="${UV:-$HOME/.local/bin/uv}"
 START="${THETA_START:-2023-10-02}"
 END="${THETA_END:-$(TZ=America/New_York date +%F)}"
 SYMBOLS="${THETA_SYMBOLS:-SPY.US QQQ.US MU.US}"
-CONC="${THETA_CONCURRENCY:-2}"
+CONC="${THETA_CONCURRENCY:-4}"
 LOG_DIR="$ZR_DATA_ROOT/logs"
 LOG="$LOG_DIR/theta_pull.log"
 LOCK="$LOG_DIR/theta_pull.lock"
@@ -26,12 +27,15 @@ exec >>"$LOG" 2>&1
 
 log() { echo "[theta_full $(TZ=America/New_York date -Iseconds) ET] $*"; }
 
-# 单实例
-if [ -e "$LOCK" ] && kill -0 "$(cat "$LOCK" 2>/dev/null)" 2>/dev/null; then
-    log "已有实例在运行（pid $(cat "$LOCK")），退出"
-    exit 0
+# 单实例（pid 文件；noclobber 原子创建，macOS 无 flock）。锁文件存在但进程已不在 → 视为残留，接管。
+if ! ( set -o noclobber; echo $$ > "$LOCK" ) 2>/dev/null; then
+    if kill -0 "$(cat "$LOCK" 2>/dev/null)" 2>/dev/null; then
+        log "已有实例在运行（pid $(cat "$LOCK")），退出"
+        exit 0
+    fi
+    log "清理残留锁（pid $(cat "$LOCK" 2>/dev/null) 已不在）"
+    echo $$ > "$LOCK"
 fi
-echo $$ > "$LOCK"
 trap 'rm -f "$LOCK"' EXIT
 
 if ! curl -s -o /dev/null --max-time 10 "http://127.0.0.1:25503/v3/option/list/expirations?symbol=SPY&format=json"; then
@@ -41,6 +45,9 @@ fi
 
 log "开始 symbols=[$SYMBOLS] $START ~ $END 并发 $CONC 数据根 $ZR_DATA_ROOT"
 for sym in $SYMBOLS; do
+    # 先清理：休市日目录 + 行权价覆盖不足的日期（按当日 RTH 高低点 ± 带宽判定），随后月循环自动重拉
+    (cd "$REPO" && "$UV" run --no-sync python -m zr.data.thetadata \
+        --symbols "$sym" --start "$START" --end "$END" --repull-uncovered --coverage-check)
     # 月份列表（美东自然月）
     months="$(cd "$REPO" && "$UV" run --no-sync python - "$START" "$END" <<'PY'
 import sys, datetime as dt
