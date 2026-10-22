@@ -67,14 +67,14 @@ def trial_counts(cfg: dict) -> dict:
     }
 
 
-def long_table(res: dict, cfg: dict, macd: str) -> pd.DataFrame:
+def long_table(res: dict, cfg: dict, macd: str, only: list | None = None) -> pd.DataFrame:
     x6, x7 = cfg["exits"]["X6"], cfg["exits"]["X7"]
     reps = dedup_names(cfg)
     parts = []
     for p, o in res.items():
         rules = o["rules"]
         for name, a in o["accum"].items():
-            if reps.get(name, name) != name:
+            if reps.get(name, name) != name or (only is not None and name not in only):
                 continue
             fam = name.split("|")[0]
             ok_rules = set(ex.exit_rules(cfg, fam))
@@ -99,7 +99,7 @@ def long_table(res: dict, cfg: dict, macd: str) -> pd.DataFrame:
                     "period": p,
                     "entry": name,
                     "family": fam,
-                    "state": STATE_OF[fam],
+                    "state": STATE_OF.get(fam, "OWN"),
                     "side": np.where(idx[:, 0] == 0, "long", "short"),
                     "exit_rule": [rules[i] for i in idx[:, 1]],
                     "tp": np.array(x6["tp"])[idx[:, 2]],
@@ -126,6 +126,10 @@ def long_table(res: dict, cfg: dict, macd: str) -> pd.DataFrame:
             )
             parts.append(df[df["exit_rule"].isin(ok_rules)])
     return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+
+
+def long_table_any(res: dict, cfg: dict, macd: str, names: list) -> pd.DataFrame:
+    return long_table(res, cfg, macd, only=names)
 
 
 def random_control(

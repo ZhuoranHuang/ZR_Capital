@@ -21,6 +21,7 @@ dependencies = [
     "matplotlib",
     "lightgbm",
     "scikit-learn",
+    "optuna>=5.0.0",
 ]
 
 [project.optional-dependencies]
