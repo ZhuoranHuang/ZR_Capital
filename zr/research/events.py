@@ -187,6 +187,98 @@ DETECTORS: dict[str, Callable[[pd.DataFrame, pd.DataFrame, dict], pd.Series]] = 
 }
 
 
+def e9_dip_buy(df: pd.DataFrame, f: pd.DataFrame, p: dict) -> pd.Series:
+    """E9 BinHV45 式抄底（定义在 zr/research/scan.py，延迟导入避免循环依赖）。"""
+    from zr.research.scan import e9_dip_buy as _e9
+
+    return _e9(df, f, p)
+
+
+def e1_tight(df: pd.DataFrame, f: pd.DataFrame, p: dict) -> pd.Series:
+    """E1 收紧版（METHOD_V2 规格 2）：通道 A 内回踩，ε 与确认根数来自参数。"""
+    from zr.features.channel import channel_states
+    from zr.research.replay_rule import pullback_events
+
+    chans = p.get("_chans")
+    chans = channel_states(df, f) if chans is None else chans
+    return pullback_events(
+        df, f, chans[f"chan_{p.get('channel', 'A')}"], p.get("eps", 0.0005), p.get("confirm", 1)
+    )
+
+
+DETECTORS["E9"] = e9_dip_buy
+DETECTORS["E1T"] = e1_tight
+
+# 共振家族（METHOD_V2 规格 3）：趋势 / 反转 / 波动
+FAMILIES = {
+    "trend": ("E1", "E1T", "E2", "E4", "E7"),
+    "reversal": ("E3", "E8", "E9"),
+    "vol": ("E5", "E6"),
+}
+
+
+def signal_matrix(
+    df: pd.DataFrame, feats: pd.DataFrame, cfg: dict, extra: dict | None = None
+) -> pd.DataFrame:
+    """每个启用检测器一列（+1/−1/0），同索引。extra 会并入每个检测器的参数（例如预先算好的 _chans）。"""
+    cols = {}
+    for name, fn in DETECTORS.items():
+        params = cfg.get("detectors", {}).get(name)
+        if params is None or not params.get("enabled", True):
+            continue
+        cols[name] = fn(df, feats, {**params, **(extra or {})}).astype(int)
+    return pd.DataFrame(cols, index=df.index)
+
+
+def confluence(sig: pd.DataFrame, window: int = 5) -> pd.DataFrame:
+    """过去 window 根（含当根，日内）同向触发的检测器数 / 家族数，按方向分列。"""
+    day = _day(sig.index).to_numpy()
+    out = pd.DataFrame(index=sig.index)
+    for d, tag in ((1, "up"), (-1, "dn")):
+        hit = (sig == d).astype(int)
+        rolled = hit.groupby(day).transform(lambda x: x.rolling(window, min_periods=1).max())
+        out[f"confl_n_{tag}"] = rolled.sum(axis=1)
+        fam = pd.DataFrame(
+            {
+                k: rolled[[c for c in v if c in rolled.columns]].max(axis=1)
+                if any(c in rolled.columns for c in v)
+                else 0
+                for k, v in FAMILIES.items()
+            },
+            index=sig.index,
+        )
+        out[f"confl_fam_{tag}"] = fam.sum(axis=1)
+    return out
+
+
+def events_from_matrix(
+    sig: pd.DataFrame, symbol: str, confl: pd.DataFrame | None = None
+) -> pd.DataFrame:
+    """矩阵 → 事件行；附上与事件同向的共振特征 confl_n_same_dir_5m / confl_families_5m（不含事件自身）。"""
+    rows = []
+    for name in sig.columns:
+        s = sig[name]
+        hit = s[s != 0]
+        rows.append(
+            pd.DataFrame(
+                {"ts": hit.index, "symbol": symbol, "direction": hit.to_numpy(), "detector": name}
+            )
+        )
+    ev = (
+        pd.concat(rows, ignore_index=True)
+        if rows
+        else pd.DataFrame(columns=["ts", "symbol", "direction", "detector"])
+    )
+    if confl is not None and len(ev):
+        c = confl.reindex(ev["ts"])
+        up = ev["direction"].to_numpy() == 1
+        n = np.where(up, c["confl_n_up"].to_numpy(), c["confl_n_dn"].to_numpy())
+        fam = np.where(up, c["confl_fam_up"].to_numpy(), c["confl_fam_dn"].to_numpy())
+        ev["confl_n_same_dir_5m"] = n - 1  # 不含自身
+        ev["confl_families_5m"] = fam
+    return ev.sort_values(["ts", "detector"]).reset_index(drop=True)
+
+
 def detect_events(df: pd.DataFrame, feats: pd.DataFrame, symbol: str, cfg: dict) -> pd.DataFrame:
     rows = []
     for name, fn in DETECTORS.items():
