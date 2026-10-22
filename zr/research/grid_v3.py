@@ -24,7 +24,7 @@ import pandas as pd
 from scipy.stats import norm
 
 from zr.config import get_settings
-from zr.features.bars import ET, load_bars
+from zr.features.bars import ET, load_extended_bars
 from zr.features.option_features import option_days
 from zr.features.regime import load_config
 from zr.ops.markdown import df_to_md
@@ -218,7 +218,7 @@ def run(und: str, n_random: int | None = None, out_dir: Path | None = None) -> d
     t0 = time.monotonic()
     cfg = load_config()
     root = get_settings().zr_data_root
-    stock = load_bars(root, und)
+    stock = load_extended_bars(root, und)
     days = option_days(root, und)
     res = sv.run_grid(root, und, stock, cfg, cfg["periods"], days)
     lt = long_table(res, cfg, "6,13,6")

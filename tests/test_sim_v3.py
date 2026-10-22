@@ -112,3 +112,12 @@ def test_greedy_one_position_at_a_time():
     hold = np.array([[5], [5], [5]])
     take = sv.greedy(e, hold)
     assert take[:, 0].tolist() == [True, False, True]
+
+
+def test_shift_signal_within_day_no_wraparound():
+    day = np.array(["2025-01-02"] * 3 + ["2025-01-03"] * 3)
+    sig = np.array([1, 0, -1, 2, 0, 0], dtype=np.int8)
+    out = sv.shift_signal_within_day(sig, day, 1)
+    # 第 1 天：[1,0,-1] -> 后移 1 -> [0,1,0]；第 2 天：[2,0,0] -> [0,2,0]（不跨日回绕）
+    assert out.tolist() == [0, 1, 0, 0, 2, 0]
+    assert sv.shift_signal_within_day(sig, day, 0).tolist() == sig.tolist()

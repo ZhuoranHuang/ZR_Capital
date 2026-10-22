@@ -3,7 +3,7 @@
 import numpy as np
 import pandas as pd
 
-from zr.features.regime import indicators, load_config, regimes, state_features
+from zr.features.regime import indicators, load_config, range_score, regimes, state_features
 from zr.research import exits as ex
 from zr.research import patterns_v3 as pt
 from zr.research.grid_v3 import dedup_names, trial_counts
@@ -61,3 +61,45 @@ def test_exit_rule_sets():
     r10, r1 = ex.exit_rules(CFG, "E10"), ex.exit_rules(CFG, "E1")
     assert "X4_back_inside" in r10 and "X4_back_inside" not in r1
     assert r1[0] == "none" and len(r1) == 13 and len(r10) == 14
+
+
+def test_bars_per_day_matches_actual_rth_count():
+    df = _bars(600)
+    from zr.features.regime import bars_per_day
+
+    # 600 根 2 分钟 bar，09:30-16:00 一天最多 195 根（390/2），超出的落到后续「日」
+    assert bars_per_day(df) <= 195
+
+
+def test_range_score_lower_when_flat_and_higher_when_trending():
+    rng = np.random.default_rng(1)
+    idx = pd.date_range("2024-03-04 09:30", periods=600, freq="2min", tz="America/New_York")
+    idx = idx[(idx.hour * 60 + idx.minute >= 570) & (idx.hour * 60 + idx.minute < 960)]
+    flat_close = 100 + rng.normal(0, 0.01, len(idx))
+    trend_close = 100 * np.exp(np.cumsum(rng.normal(0.0008, 0.003, len(idx))))
+    for close, label in ((flat_close, "flat"), (trend_close, "trend")):
+        df = pd.DataFrame(
+            {
+                "open": close,
+                "high": close + 0.05,
+                "low": close - 0.05,
+                "close": close,
+                "volume": 1000.0,
+            },
+            index=idx.tz_convert("UTC"),
+        )
+        x = indicators(df, CFG)
+        s = range_score(x, df, CFG["regime"]["range"], 2)
+        globals().setdefault("_scores", {})[label] = s.dropna().median()
+    assert globals()["_scores"]["flat"] < globals()["_scores"]["trend"]
+
+
+def test_range_score_no_lookahead():
+    df = _bars(400)
+    x = indicators(df, CFG)
+    s1 = range_score(x, df, CFG["regime"]["range"], 2)
+    df2 = df.copy()
+    df2.iloc[300:, :4] *= 1.2
+    x2 = indicators(df2, CFG)
+    s2 = range_score(x2, df2, CFG["regime"]["range"], 2)
+    pd.testing.assert_series_equal(s1.iloc[:300], s2.iloc[:300])

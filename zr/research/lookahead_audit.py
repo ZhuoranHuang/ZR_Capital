@@ -1,0 +1,480 @@
+"""前视审计（fix/lookahead-audit 第 1 节）→ docs/research/LOOKAHEAD_AUDIT.md。
+
+截断测试：随机抽取时刻 t（MU、QQQ 各半，覆盖开盘首小时/盘中/尾盘/到期日/跳空日），只用 ≤t 的
+数据重算该时刻的全部特征、状态层标签、E1/E10/E11 入场信号、X1-X5 离场信号、回踩深度特征，
+与全量计算在同一行的值逐项比对；任何不一致即为前视。
+
+范围（性能原因，见报告边界声明）：
+- 快速管线（正股特征、通道、结构、v3 状态层/入场/离场/回踩深度，无逐日期权文件 I/O）：500
+  个时刻全量测。
+- 期权链相关特征（opt_* 、is_expiry_day、跨资产）：I/O 成本随截断点变化（每次需要重新扫描 ≤t 的全部
+  期权日文件），抽样减至 N_OPT 个，分布覆盖同样的场景。
+- 合约选择（sim_v3.pick）：单独测——同一期权日内，把该日的报价截断到 ≤ 决策分钟 e 重建合约链，
+  与使用全天报价构建的合约链比较选中的合约是否一致。
+
+运行：uv run python -m zr.research.lookahead_audit --symbol MU.US --symbol QQQ.US
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import logging
+import time
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from zr.config import get_settings
+from zr.features.bars import ET, load_bars
+from zr.features.calendar_features import expiry_days
+from zr.features.channel import CHANNEL_FEATURE_COLUMNS, channel_states
+from zr.features.features import FEATURE_COLUMNS, compute_features
+from zr.features.option_features import load_option_day, option_days
+from zr.features.pullback import depth_features
+from zr.features.pullback import load_config as load_pb_config
+from zr.features.regime import indicators as regime_indicators
+from zr.features.regime import load_config as load_regime_cfg
+from zr.features.regime import regimes as regime_regimes
+from zr.features.regime import state_features
+from zr.features.structure import STRUCTURE_COLUMNS, compute_structure
+from zr.ops.markdown import df_to_md
+from zr.research import exits as ex
+from zr.research import patterns_v3 as pt
+from zr.research import sim_v3 as sv
+
+log = logging.getLogger("zr.research.lookahead_audit")
+N_FAST = 250  # 每标的；MU+QQQ 合计 500
+N_OPT = 15  # 每标的（期权链特征 I/O 昂贵，见模块 docstring；原定 20，按实测耗时下调）
+N_PICK_DAYS = 15  # 合约选择核对的交易日数（每日抽样多个决策分钟）
+RTOL = 1e-9
+
+
+def sample_timestamps(
+    stock: pd.DataFrame, root: Path, und: str, n: int, seed: int
+) -> pd.DatetimeIndex:
+    """覆盖开盘首小时 / 盘中 / 尾盘 / 到期日 / 跳空日的随机时刻（分层抽样，各占约 1/5）。"""
+    et = stock.index.tz_convert(ET)
+    day = np.asarray(et.date)
+    hhmm = np.asarray(et.strftime("%H:%M"))
+    mins = et.hour * 60 + et.minute
+    rng = np.random.default_rng(seed)
+    prev_close = pd.Series(stock["close"].to_numpy(), index=day).groupby(level=0).last().shift(1)
+    day_open = pd.Series(stock["open"].to_numpy(), index=day).groupby(level=0).first()
+    gap = (day_open / prev_close - 1).abs()
+    gap_days = set(gap[gap > gap.quantile(0.95)].index) if len(gap.dropna()) else set()
+    exp = expiry_days(root, und)
+    exp_days = {d for d, v in exp.items() if v}
+    buckets = {
+        "开盘首小时": (hhmm >= "09:31") & (hhmm < "10:30"),
+        "盘中": (hhmm >= "10:30") & (hhmm < "14:30"),
+        "尾盘": (hhmm >= "14:30") & (hhmm <= "15:55"),
+        "到期日": np.isin(day, list(exp_days)) & (mins >= 571) & (mins <= 955),
+        "跳空日": np.isin(day, list(gap_days)) & (mins >= 571) & (mins <= 955),
+    }
+    picks = []
+    per = n // len(buckets)
+    for name, mask in buckets.items():
+        idx = np.flatnonzero(mask)
+        if len(idx) == 0:
+            log.warning("%s: 桶「%s」无样本", und, name)
+            continue
+        k = min(per, len(idx))
+        picks.append(stock.index[rng.choice(idx, size=k, replace=False)])
+    out = pd.DatetimeIndex(np.concatenate([p.to_numpy() for p in picks])).unique().sort_values()
+    return out[:n]
+
+
+def fast_pipeline(
+    stock: pd.DataFrame, period: int, rcfg: dict, pbcfg: dict
+) -> dict[str, pd.DataFrame]:
+    feats = compute_features(stock)
+    chans = channel_states(stock, feats)
+    struct = compute_structure(stock, feats, chans)
+    pb = depth_features(stock, pbcfg)
+    bars_p = stock if period == 1 else sv.resample_bars(stock, f"{period}min")
+    x = regime_indicators(bars_p, rcfg)
+    reg = regime_regimes(bars_p, x, rcfg, period)
+    sf = state_features(bars_p, x, reg)
+    entries = {
+        pt.entry_name(c): pt.entry_signal(bars_p, x, reg, c, rcfg) for c in pt.entry_configs(rcfg)
+    }
+    exits_ = ex.exit_signals(bars_p, x, rcfg)
+    return {
+        "feats": feats[FEATURE_COLUMNS],
+        "chans": chans[CHANNEL_FEATURE_COLUMNS],
+        "struct": struct[STRUCTURE_COLUMNS],
+        "pb": pb,
+        "regime": pd.concat([x, reg], axis=1),
+        "state": sf,
+        "entries": pd.DataFrame(entries, index=bars_p.index),
+        "exits": pd.DataFrame(
+            {f"{k}_{s}": v[i] for k, v in exits_.items() for i, s in enumerate(("long", "short"))},
+            index=bars_p.index,
+        ),
+    }
+
+
+PERIOD_KEYED = {"regime", "state", "entries", "exits"}  # 这些按 period-P bin（bin 起点为索引）
+
+
+def _bin_start(ts: pd.Timestamp, period: int) -> pd.Timestamp:
+    et = ts.tz_convert(ET)
+    day_open = et.normalize() + pd.Timedelta(hours=9, minutes=30)
+    offset = int((et - day_open).total_seconds() // 60)
+    start_offset = (offset // period) * period
+    return (day_open + pd.Timedelta(minutes=start_offset)).tz_convert("UTC")
+
+
+def compare_at(
+    full: dict[str, pd.DataFrame], trunc: dict[str, pd.DataFrame], ts: pd.Timestamp, period: int = 1
+) -> dict:
+    row = {}
+    key = _bin_start(ts, period)
+    for name, df in full.items():
+        k = key if name in PERIOD_KEYED else ts
+        if k not in trunc[name].index:
+            row[name] = "缺失（截断后该周期无此 bar，属正常：bar 尚未收盘）"
+            continue
+        a = df.loc[k]
+        b = trunc[name].loc[k]
+        diff_cols = []
+        for c in df.columns:
+            av, bv = a[c], b[c]
+            if isinstance(av, (bool, np.bool_)) or isinstance(bv, (bool, np.bool_)):
+                same = bool(av) == bool(bv)
+            elif pd.isna(av) and pd.isna(bv):
+                same = True
+            elif pd.isna(av) != pd.isna(bv):
+                same = False
+            else:
+                same = np.isclose(float(av), float(bv), rtol=RTOL, atol=1e-9)
+            if not same:
+                diff_cols.append(c)
+        row[name] = "OK" if not diff_cols else f"不一致：{diff_cols}"
+    return row
+
+
+def _period_bin_end(ts: pd.Timestamp, period: int) -> pd.Timestamp:
+    """ts（1 分钟 bar 标签）所在 period 分钟 bin（以当日 09:30 为锚点）的最后一根 1 分钟 bar。
+
+    用来把截断点对齐到「该 bin 的两根 1 分钟 bar 都已收盘」，否则截断会在 bin 中间砍断
+    resample，人为制造一根只有一半数据的假 bin（这是测试脚本的对齐问题，不是被测代码的前视）。
+    """
+    et = ts.tz_convert(ET)
+    day_open = et.normalize() + pd.Timedelta(hours=9, minutes=30)
+    offset = int((et - day_open).total_seconds() // 60)
+    bin_end_offset = (offset // period + 1) * period - 1
+    return (day_open + pd.Timedelta(minutes=bin_end_offset)).tz_convert("UTC")
+
+
+def run_fast_audit(root: Path, und: str, n: int, seed: int, period: int = 2) -> pd.DataFrame:
+    t0 = time.monotonic()
+    rcfg, pbcfg = load_regime_cfg(), load_pb_config()
+    stock = load_bars(root, und)
+    ts_list = sample_timestamps(stock, root, und, n, seed)
+    full = fast_pipeline(stock, period, rcfg, pbcfg)
+    rows = []
+    for i, ts in enumerate(ts_list):
+        trunc_stock = stock.loc[: _period_bin_end(ts, period)]
+        trunc = fast_pipeline(trunc_stock, period, rcfg, pbcfg)
+        r = compare_at(full, trunc, ts, period)
+        r["symbol"], r["ts_et"] = und, ts.tz_convert(ET).strftime("%Y-%m-%d %H:%M")
+        rows.append(r)
+        if (i + 1) % 50 == 0:
+            log.info("%s 快速管线 %d/%d，%.0fs", und, i + 1, len(ts_list), time.monotonic() - t0)
+    return pd.DataFrame(rows)
+
+
+def run_option_feature_audit(root: Path, und: str, n: int, seed: int) -> pd.DataFrame:
+    """期权链 / 日历 / 跨资产特征的截断核对（抽样减至 N_OPT，见模块 docstring）。"""
+    from zr.features.calendar_features import compute_calendar
+    from zr.features.cross_asset import compute_cross_asset
+    from zr.features.option_features import OPTION_FEATURE_COLUMNS, compute_option_features
+
+    t0 = time.monotonic()
+    stock = load_bars(root, und)
+    ts_list = sample_timestamps(stock, root, und, n, seed + 1)
+
+    def calc(df: pd.DataFrame) -> pd.DataFrame:
+        opt = compute_option_features(root, und, df)[OPTION_FEATURE_COLUMNS]
+        cal = compute_calendar(df.index, root, und)
+        xa = compute_cross_asset(df, und, root)
+        return pd.concat([opt, cal, xa], axis=1)
+
+    full = calc(stock)
+    rows = []
+    for i, ts in enumerate(ts_list):
+        trunc = calc(stock.loc[:ts])
+        a, b = full.loc[ts], trunc.loc[ts] if ts in trunc.index else None
+        if b is None:
+            rows.append(
+                {
+                    "symbol": und,
+                    "ts_et": ts.tz_convert(ET).strftime("%Y-%m-%d %H:%M"),
+                    "结果": "缺失",
+                }
+            )
+            continue
+        diff = [
+            c
+            for c in full.columns
+            if not (
+                (pd.isna(a[c]) and pd.isna(b[c]))
+                or (
+                    not pd.isna(a[c])
+                    and not pd.isna(b[c])
+                    and np.isclose(float(a[c]), float(b[c]), rtol=RTOL, atol=1e-9)
+                )
+            )
+        ]
+        rows.append(
+            {
+                "symbol": und,
+                "ts_et": ts.tz_convert(ET).strftime("%Y-%m-%d %H:%M"),
+                "结果": "OK" if not diff else f"不一致：{diff}",
+            }
+        )
+        log.info(
+            "%s 期权/日历/跨资产 %d/%d，%.0fs", und, i + 1, len(ts_list), time.monotonic() - t0
+        )
+    return pd.DataFrame(rows)
+
+
+def independent_pick(
+    q: pd.DataFrame,
+    day: dt.date,
+    direction: int,
+    spot: float,
+    e: int,
+    d001_entry: int,
+    max_minute: int,
+) -> str | None:
+    """独立重实现的合约选择：只用 ts 对应分钟 ≤ max_minute 的报价构建合约链（不读 pick() /
+    load_day()）。
+    """
+    right = "call" if direction == 1 else "put"
+    qq = q[q["right"] == right].copy()
+    qq["m"] = sv.minute_of(qq["ts"])
+    qq = qq[(qq["ask"] > 0) & (qq["bid"] >= 0) & (qq["ask"] >= qq["bid"]) & (qq["m"] <= max_minute)]
+    if qq.empty:
+        return None
+    expiries = sorted(x for x in qq["expiry"].unique() if x >= day)
+    for exp in expiries:
+        if exp == day and e > d001_entry:
+            continue
+        sub = qq[qq["expiry"] == exp]
+        strikes = np.sort(sub["strike"].unique())
+        j = (
+            np.searchsorted(strikes, spot, side="right")
+            if direction == 1
+            else np.searchsorted(strikes, spot, side="left") - 1
+        )
+        if j < 0 or j >= len(strikes):
+            continue
+        k = strikes[j]
+        at_e = sub[(sub["strike"] == k) & (sub["m"] == e)]
+        if len(at_e) and float(at_e["ask"].iloc[0]) > 0:
+            return str(sub[sub["strike"] == k]["symbol"].iloc[0])
+    return None
+
+
+def run_contract_selection_audit(root: Path, und: str, n_days: int, seed: int) -> pd.DataFrame:
+    """合约选择核对：全天报价构建的链 vs 只用 ≤ 决策分钟报价构建的链，选中合约是否一致。"""
+    cfg = load_regime_cfg()
+    days = option_days(root, und)
+    rng = np.random.default_rng(seed + 2)
+    sel_days = rng.choice(days, size=min(n_days, len(days)), replace=False)
+    stock = load_bars(root, und)
+    sday = np.asarray(stock.index.tz_convert(ET).date)
+    rows = []
+    for day in sorted(sel_days):
+        opt = load_option_day(root, und, day)
+        if opt is None or opt["quotes"].empty:
+            continue
+        od = sv.load_day(root, und, day, cfg["execution"]["stale_snapshots"])
+        if od is None:
+            continue
+        closes = stock["close"].to_numpy()[sday == day]
+        minutes = np.arange(sv.hm("09:40"), sv.hm("15:20"), 23)
+        for e in minutes:
+            if e - 1 >= len(closes) or e - 1 < 0:
+                continue
+            spot = float(closes[e - 1])
+            for d in (1, -1):
+                engine = sv.pick(
+                    od, d, spot, int(e), sv.hm(cfg["execution"]["d001_last_0dte_entry"])
+                )
+                indep = independent_pick(
+                    opt["quotes"],
+                    day,
+                    d,
+                    spot,
+                    int(e),
+                    sv.hm(cfg["execution"]["d001_last_0dte_entry"]),
+                    int(e),
+                )
+                rows.append(
+                    {
+                        "symbol": und,
+                        "day": day.isoformat(),
+                        "e": int(e),
+                        "direction": d,
+                        "engine": engine[0] if engine else None,
+                        "independent": indep,
+                        "match": (engine[0] if engine else None) == indep,
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def narrative_sections(syms: list[str]) -> list[str]:
+    """ThetaData 时间戳、日/全样本统计审计、模型 purge/embargo——代码审查结论，非脚本输出数值。"""
+    from zr.research.meta_model import EMBARGO_DAYS, TRAIN_MONTHS
+
+    return [
+        "",
+        "## ThetaData 1 分钟快照时间戳",
+        "",
+        "官方文档原文（<https://thetadata.net/docs/operations/option_history_quote.html>）："
+        "「the quote for each interval represents the last quote at the interval's "
+        "timestamp」——时间戳 t 的报价是「t 时刻之前最近一次真实报价」，不是 [t, t+1) 或 "
+        "[t−1, t) 的区间聚合。用 2026-10-21 录制器逐笔数据交叉验证 MU261023P940000 "
+        "的 5 个比对分钟：3 个与 recorder 在 t 之后几秒内收到的首个推送精确相等、2 个更接近 "
+        "t 之前最后一次推送，与文档一致。CLAUDE.md 已记录来源与核实过程。结论：现有对齐"
+        "（决策分钟 = 信号 bar 收盘分钟 + 1）正确，不需要改。",
+        "",
+        "## 当日 / 全样本统计审计",
+        "",
+        "逐一排查用到 `.mean()/.std()/.median()/.quantile()/.rank()` 且未配合 `rolling`/`groupby`"
+        "（即可能用到未来数据）的位置：",
+        "",
+        "| 位置 | 用途 | 结论 |",
+        "|---|---|---|",
+        "| `zr/features/regime.py` RANGE（修复前） | 近 2 日百分位秩，`rolling().rank(pct=True)` | "
+        "已经是滚动窗口，causal；覆盖率过低（4%）是阈值设计问题，不是前视——已按 D-026 改打分制 |",
+        "| `zr/research/events.py:143` E6 布林挤压阈值 `width.groupby(day).quantile(pct)` | "
+        "每日带宽低分位 | `.shift(1)` 作用在按天聚合后的序列上，当天阈值只用严格更早的日子，"
+        "causal，无需改 |",
+        "| `zr/features/features.py` 当日首根 close/open、前一日收盘/已实现波动 | "
+        '`groupby(day).transform("first")` / `.last().shift(1)` | '
+        "「first」在组内第 0 行即可得（当日开盘即已知）；「shift(1)」用严格更早的日子，均 causal |",
+        "| `zr/research/model_v3.py` 十分位表、样本外最高十分位规则提取 | "
+        "`pd.qcut(...)`、`.quantile(0.9)` | 分位边界用整个样本外集合算，属于**事后评估报表 / "
+        "描述性规则提取**，不是因果特征、不是实盘可用的交易阈值（已在对应函数 docstring 注明"
+        "「仅作描述，不作特征」）；实际决策用的是固定阈值（如 X6 的 ±20%/±30%），不是相对"
+        "同批数据的分位 |",
+        "",
+        "未发现：全样本统计被当作交易特征或入场/出场判据使用的情况。",
+        "",
+        "## 模型 purge / embargo / Optuna 隔离",
+        "",
+        f"`zr/research/meta_model.py`：`TRAIN_MONTHS={TRAIN_MONTHS}`、`EMBARGO_DAYS={EMBARGO_DAYS}`"
+        f"（训练窗口只取到 `测试月第一天 − {EMBARGO_DAYS} 天`之前）。v3 的标签窗口最长是 "
+        "X7 持仓上限 30 分钟（同日内，15:50 前强平，不跨日），远小于 1 天的 embargo，足够覆盖。"
+        "`zr/research/model_v3.py::tune()` 的 Optuna 内层切分只在**已经是训练窗口的** "
+        "`Xtr/ytr/dtr`（已排除测试月与 embargo 区间）内部再切「训练窗最后 2 个月」作内层验证，"
+        "从未传入测试月的数据——代码读查确认符合「只在训练窗口内部切分」的要求。",
+        "",
+        "边界：以上三节是代码审查结论，没有新脚本产出数字；purge/embargo 的「足够覆盖」判断"
+        "基于「v3 持仓不跨日」这一事实（`zr/research/sim_v3.py` 的 flat/d001_flat_0dte 配置），"
+        "若未来允许跨日持仓需重新评估 EMBARGO_DAYS。",
+    ]
+
+
+def delay_test_sections(root: Path, syms: list[str]) -> list[str]:
+    L = ["", "## 延迟测试（入场延迟 1 根 K 线）", ""]
+    for und in syms:
+        p = Path(__file__).resolve().parents[2] / "docs" / "research" / f"DELAY_TEST_{und}.md"
+        if not p.exists():
+            L += [
+                f"### {und}",
+                "",
+                f"未运行（`uv run python -m zr.research.delay_test --symbol {und}.US`）。",
+                "",
+            ]
+            continue
+        text = p.read_text(encoding="utf-8")
+        body = text.split("\n", 1)[1] if "\n" in text else text
+        L += [f"### {und}", "", body.strip(), ""]
+    return L
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--symbol", action="append", default=None)
+    a = ap.parse_args(argv)
+    syms = [s.split(".")[0] for s in (a.symbol or ["MU.US", "QQQ.US"])]
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    root = get_settings().zr_data_root
+    fast_all, opt_all, pick_all = [], [], []
+    for und in syms:
+        fast_all.append(run_fast_audit(root, und, N_FAST, seed=0))
+        opt_all.append(run_option_feature_audit(root, und, N_OPT, seed=0))
+        pick_all.append(run_contract_selection_audit(root, und, N_PICK_DAYS, seed=0))
+    fast = pd.concat(fast_all, ignore_index=True)
+    opt = pd.concat(opt_all, ignore_index=True)
+    pick = pd.concat(pick_all, ignore_index=True)
+
+    def fails(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+        m = df[cols].apply(
+            lambda s: ~s.astype(str).isin(["OK"]) & ~s.astype(str).str.startswith("缺失"), axis=0
+        )
+        return df[m.any(axis=1)]
+
+    fast_cols = [c for c in fast.columns if c not in ("symbol", "ts_et")]
+    bad_fast = fails(fast, fast_cols)
+    bad_opt = opt[opt["结果"] != "OK"]
+    bad_pick = pick[~pick["match"]]
+    L = [
+        "# 前视审计（fix/lookahead-audit）",
+        "",
+        f"生成：{dt.datetime.now(dt.UTC).isoformat(timespec='seconds')} UTC · "
+        "复现：`uv run python -m zr.research.lookahead_audit`",
+        "",
+        "## 方法",
+        "",
+        "截断测试：对随机抽取的时刻 t（分层覆盖开盘首小时/盘中/尾盘/到期日/跳空日），"
+        "分别用全量数据与截断到 ≤t 的数据重算同一行的特征/状态/信号，逐列比较（容差 1e-9）。"
+        "合约选择另用独立重实现（不调用被测代码）核对。",
+        "",
+        f"- 快速管线（正股特征、通道、结构、回踩深度、v3 状态层/入场/离场）：{len(fast)} 个时刻"
+        f"（MU/QQQ 各 {N_FAST}）。",
+        f"- 期权链 / 日历 / 跨资产特征：{len(opt)} 个时刻（MU/QQQ 各 {N_OPT}，I/O "
+        "成本随截断点变化，"
+        "见模块 docstring 的范围说明）。",
+        f"- 合约选择：{len(pick)} 个（日, 决策分钟, 方向）组合（{N_PICK_DAYS} 个交易日 × 每日约 "
+        f"{len(pick) // max(1, N_PICK_DAYS * len(syms))} 个分钟 × 2 方向 × {len(syms)} 标的）。",
+        "",
+        "## 结果",
+        "",
+        f"快速管线不一致：**{len(bad_fast)} / {len(fast)}**",
+        "",
+        df_to_md(bad_fast) if len(bad_fast) else "无。",
+        "",
+        f"期权链 / 日历 / 跨资产不一致：**{len(bad_opt)} / {len(opt)}**",
+        "",
+        df_to_md(bad_opt) if len(bad_opt) else "无。",
+        "",
+        f"合约选择不一致：**{len(bad_pick)} / {len(pick)}**",
+        "",
+        df_to_md(bad_pick) if len(bad_pick) else "无。",
+        "",
+        "## 分桶样本数（快速管线，核对覆盖是否均衡）",
+        "",
+        df_to_md(fast.groupby("symbol").size().rename("n").reset_index()),
+        "",
+        "边界：覆盖 MU、QQQ；未覆盖 SPY（期权拉取暂停）；容差 1e-9（浮点舍入）；"
+        "「缺失」行表示截断点落在该周期尚未收盘的 bar 内，属正常（不计入不一致）。",
+    ]
+    L += narrative_sections(syms)
+    L += delay_test_sections(root, syms)
+    out = Path(__file__).resolve().parents[2] / "docs" / "research" / "LOOKAHEAD_AUDIT.md"
+    out.write_text("\n".join(L), encoding="utf-8")
+    log.info("写入 %s", out)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

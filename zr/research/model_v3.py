@@ -32,7 +32,7 @@ from sklearn.metrics import roc_auc_score
 from sklearn.tree import DecisionTreeClassifier
 
 from zr.config import get_settings
-from zr.features.bars import ET, load_bars
+from zr.features.bars import ET, load_bars, load_extended_bars
 from zr.features.calendar_features import compute_calendar
 from zr.features.channel import channel_states
 from zr.features.cross_asset import compute_cross_asset
@@ -71,8 +71,9 @@ def v2_frame(root: Path, und: str, df: pd.DataFrame) -> pd.DataFrame:
 
 def build_dataset(root: Path, und: str, cfg: dict) -> pd.DataFrame:
     t0 = time.monotonic()
-    stock = load_bars(root, und)
-    pdat = sv.prepare_period(stock, PERIOD, cfg)
+    stock = load_bars(root, und)  # RTH-only：v2_frame / depth_features 用这个
+    stock_ext = load_extended_bars(root, und)  # 含盘前盘后：v3 状态层指标用这个（D-026）
+    pdat = sv.prepare_period(stock_ext, PERIOD, cfg)
     x6, x7 = cfg["exits"]["X6"], cfg["exits"]["X7"]
     ti, si, ci = x6["tp"].index(TP), x6["sl"].index(SL), x7["cap_min"].index(CAP)
     fam_of = {n: n.split("|")[0] for n in pdat.entries}
@@ -223,6 +224,11 @@ def walk_forward(ds: pd.DataFrame, cols: list[str], n_trials: int) -> tuple[pd.D
 
 
 def deciles(res: pd.DataFrame, col: str) -> pd.DataFrame:
+    """按样本外概率分十分位汇总（标准评估报表写法）。
+
+    分位边界用整个样本外集合算，仅作描述性报告，不是因果特征、不作为交易阈值
+    （交易用的是固定阈值，不是相对同批样本外数据的分位）。
+    """
     r = res[res[col].notna()].copy()
     r["decile"] = pd.qcut(r[col].rank(method="first"), 10, labels=range(1, 11))
     g = r.groupby("decile", observed=True)
@@ -237,7 +243,11 @@ def deciles(res: pd.DataFrame, col: str) -> pd.DataFrame:
 
 
 def extract_rule(oos: pd.DataFrame, cols: list[str]) -> dict:
-    """样本外最高十分位 → 深度 ≤ 3 决策树 → 正样本占比最高的叶子规则及其真实期权盈亏。"""
+    """样本外最高十分位 → 深度 ≤ 3 决策树 → 正样本占比最高的叶子规则及其真实期权盈亏。
+
+    90% 分位用整个样本外集合算，是事后对「模型高置信区域长什么样」的描述，不是因果特征、
+    不是可独立复现的交易规则（提取与评估用的是同一批样本外数据）。
+    """
     top = (oos["p_optuna"] >= oos["p_optuna"].quantile(0.9)).astype(int).to_numpy()
     Xo = np.nan_to_num(oos[cols].astype(float).to_numpy(), nan=-999.0)
     tree = DecisionTreeClassifier(max_depth=3, min_samples_leaf=200, random_state=0).fit(Xo, top)
