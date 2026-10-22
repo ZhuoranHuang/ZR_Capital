@@ -1,6 +1,6 @@
 # 状态
 
-更新：2026-10-22 08:50 SGT · main
+更新：2026-10-22 04:58 PT · feat/method-v2 → main
 
 ## 阶段
 
@@ -22,7 +22,8 @@
 
 ## 进行中
 
-- **ThetaData 全量拉取**：2026-10-22 08:45 SGT 启动（`nohup caffeinate -i bash scripts/theta_full_pull.sh`），SPY→QQQ→MU，2023-10-02～2026-10-21，进度逐月写进 `docs/DATA_INVENTORY.md`；日志 `$ZR_DATA_ROOT/logs/theta_pull.log`。开头几天 ≈23 s/天。终端重启时客户端最多等 10 分钟后继续；超时或其他错误则停在当月，重跑脚本续传。
+- **ThetaData 全量拉取**：MU、QQQ 完成（各 767 个交易日，2023-10-02～2026-10-21）；**SPY 按负责人指令暂停于 2024-07-30**（208 天，保留），续拉命令见 DATA_INVENTORY。拉取进程已全部停止；脚本单实例锁改为 noclobber 原子创建。
+- **方法论 v2 第一轮已完成**：MU 主报告 `docs/research/METHOD_V2_ROUND1.md`，QQQ 对照 `docs/research/METHOD_V2_ROUND1_QQQ.md`；回放主结果为 D-022 网格（`E1_PULLBACK_SWEEP_{MU,QQQ}.md`），收紧版 E1 作对照；结果登记在 RESEARCH_LOG R-017～R-027、R-029。
 - **数据根已迁到外接 SSD**（APFS）：`/Volumes/ZHITAI TiPlus9100 2TB Media/zr_data`，4,141 个文件 / 345,158,096 字节核对一致；`.env` 只改了 `ZR_DATA_ROOT` 一行；同步、录制、全量拉取脚本经 `scripts/lib/data_root.sh` 解析，盘未挂载时报错退出。
 - 录制器：VPS 10-22 13:20 UTC 起按 timer 运行（SPY/QQQ/MU，239 订阅）。
 
@@ -33,6 +34,8 @@
 3. 全量到位后：在 2 年期权数据上重跑元标签（加期权特征），报告同样指标（PLAN_W3 线 a）。
 
 ## 待确认
+
+0. **QQQ 期权结果表疑似伪影（阻塞 QQQ 期权结论）**：`research/v2/outcomes/underlying=QQQ` 在 2025、2026 年**多空两个方向**在所有决策分钟的 cap30 均值都为正（2025 put +4.14 / call +2.67，2026 +5.75 / +4.90 USD/2 张），随机入场也为正；MU 同期为 −17～−29。真实市场里同时做多做空的随机期权不应扣费后为正，怀疑 2025 起 QQQ 报价数据或出场规则（+20% 减半、中轨止损、15:55 按 bid 平仓）在 0DTE 上的伪影。QQQ 报告中所有期权盈亏结论暂不可用；正股标签、模型 AUC、审计不受影响。是否排查请负责人决定。
 
 1. **10-21 定稿的「门」的具体条件写进 DECISIONS**——仓库里没有书面记录，D-017 只引用了 W2 数字；请负责人给出原文，我补一条 D-018。
 2. 账户净资产 ≈ 0，实盘前需入金（实盘已推后，不阻塞）。

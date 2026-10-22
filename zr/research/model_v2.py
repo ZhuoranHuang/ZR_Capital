@@ -63,6 +63,9 @@ def design(ds: pd.DataFrame, und: str) -> pd.DataFrame:
 def walk_forward(
     X: pd.DataFrame, y: pd.Series, w: np.ndarray, day: pd.Series
 ) -> tuple[pd.Series, list[dict]]:
+    # 按位置对齐（调用方可能传入子集化的 X 与重新编号的 y / day）
+    y = pd.Series(np.asarray(y), index=X.index)
+    day = pd.Series(np.asarray(day), index=X.index)
     month = pd.to_datetime(day).dt.to_period("M")
     pday = pd.to_datetime(day)
     months = sorted(month.unique())

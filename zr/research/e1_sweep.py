@@ -45,14 +45,14 @@ H = 10
 def grid(cfg: dict) -> list[dict]:
     depths = [("pctb", x) for x in cfg["pctb"]] + [("eps", x) for x in cfg["eps"]]
     return [
-        {"channel": ch, "bb": p, "n": n, "kind": k, "value": v}
+        {"channel": ch, "bb": p, "pattern_n": n, "kind": k, "value": v}
         for ch, p, n, (k, v) in product(cfg["channels"], cfg["bb_period"], cfg["pattern_n"], depths)
     ]
 
 
 def combo_name(g: dict) -> str:
     v = f"{g['value']:.2f}" if g["kind"] == "pctb" else f"{g['value'] * 100:.2f}%"
-    return f"{g['channel']}|BB{g['bb']}|n{g['n']}|{g['kind']}≤{v}"
+    return f"{g['channel']}|BB{g['bb']}|n{g['pattern_n']}|{g['kind']}≤{v}"
 
 
 def trial_counts(cfg: dict) -> dict:
@@ -125,7 +125,9 @@ def run(
     on_opt = np.array([d in opt_days for d in day])
     ev_rows, rp_rows = [], []
     for g in grid(cfg):
-        sig = base.signal(chans[f"chan_{g['channel']}"], g["bb"], g["kind"], g["value"], g["n"])
+        sig = base.signal(
+            chans[f"chan_{g['channel']}"], g["bb"], g["kind"], g["value"], g["pattern_n"]
+        )
         name = combo_name(g)
         for d in (1, -1):
             pos = np.flatnonzero(sig == d)
@@ -158,7 +160,7 @@ def run(
 def marginals(rp: pd.DataFrame, cap: int) -> pd.DataFrame:
     r = rp[(rp["cap"] == cap) & (rp["n"] >= 5)]
     rows = []
-    for dim in ("channel", "bb", "n", "kind", "side"):
+    for dim in ("channel", "bb", "pattern_n", "kind", "side"):
         for v, g in r.groupby(dim):
             rows.append(
                 {

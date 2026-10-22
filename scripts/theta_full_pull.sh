@@ -27,12 +27,15 @@ exec >>"$LOG" 2>&1
 
 log() { echo "[theta_full $(TZ=America/New_York date -Iseconds) ET] $*"; }
 
-# 单实例
-if [ -e "$LOCK" ] && kill -0 "$(cat "$LOCK" 2>/dev/null)" 2>/dev/null; then
-    log "已有实例在运行（pid $(cat "$LOCK")），退出"
-    exit 0
+# 单实例（pid 文件；noclobber 原子创建，macOS 无 flock）。锁文件存在但进程已不在 → 视为残留，接管。
+if ! ( set -o noclobber; echo $$ > "$LOCK" ) 2>/dev/null; then
+    if kill -0 "$(cat "$LOCK" 2>/dev/null)" 2>/dev/null; then
+        log "已有实例在运行（pid $(cat "$LOCK")），退出"
+        exit 0
+    fi
+    log "清理残留锁（pid $(cat "$LOCK" 2>/dev/null) 已不在）"
+    echo $$ > "$LOCK"
 fi
-echo $$ > "$LOCK"
 trap 'rm -f "$LOCK"' EXIT
 
 if ! curl -s -o /dev/null --max-time 10 "http://127.0.0.1:25503/v3/option/list/expirations?symbol=SPY&format=json"; then
