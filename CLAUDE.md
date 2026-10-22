@@ -62,6 +62,7 @@ uv run pytest -q
   与「t 时刻之前最近报价」一致，核实为正确，沿用不改）。
   来源：<https://thetadata.net/docs/operations/option_history_quote.html>（未验证：该页面未显式定义
   interval 边界是左闭右开还是其他）。
+- 逐笔成交（OPRA）：`/v3/option/history/trade`（Options Standard 可用，2026-10-22 实测）：字段 sequence / condition / size / price / exchange / timestamp（毫秒，美东无时区）；`ThetaClient.history_trade`。此前 FILL_RESOLUTION.md「Standard 不提供逐笔成交」的说法是错的，已更正。
 - 单到期日 `strike=*` 1 分钟 quote ≈ 22 MB / 5 s；SPY 一天（DTE≤5）≈ 31 s、1.9 MB parquet。
 - 本机 LightGBM 缺 `libomp`（无 Homebrew），`zr/research/meta_model.py` 自动回退 sklearn HistGradientBoosting。
 - 终端连上游用 gRPC，只认 HTTP CONNECT 代理；SOCKS 会导致 `MDDS upstream unavailable`。默认直连，`run_theta_terminal.sh --proxy` 才启用（需 `THETA_HTTP_PROXY`）。
