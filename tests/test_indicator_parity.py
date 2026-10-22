@@ -48,3 +48,21 @@ def test_macd_matches_app_screenshots_within_display_rounding():
         for k in ("dif", "dea"):
             err = pct_err(float(d.loc[ts, k]), want[k])
             assert err < MACD_TOL_PCT, f"{hm} {k} 误差 {err}% 超出 {MACD_TOL_PCT}%"
+
+
+EXT_FIXTURE = Path(__file__).parent / "fixtures" / "mu_2026_10_21_min1_ext.csv"
+
+
+def test_convention_c_continuous_extended_matches_app_exactly_at_display_precision():
+    """D-028 口径 C：含盘前盘后的长桥原始 1 分钟 K（04:00 起，不清洗）聚合 2 分钟、不重置，
+    3 个截图时刻 15 个值四舍五入到 3 位小数后与 App 完全相等。"""
+    df = pd.read_csv(EXT_FIXTURE, parse_dates=["ts"])
+    df["ts"] = pd.to_datetime(df["ts"], utc=True)
+    close = resample_bars(df.set_index("ts").sort_index(), "2min")["close"]
+    b, d = boll(close, 20, 2.0, ddof=0), macd(close, 6, 13, 6, ema_first_seed)
+    for hm, want in APP.items():
+        ts = nearest_close(close.index, hm, label_offset_min=2)
+        for k in ("mid", "upper", "lower"):
+            assert round(float(b.loc[ts, k]), 3) == want[k], (hm, k)
+        for k in ("dif", "dea"):
+            assert round(float(d.loc[ts, k]), 3) == want[k], (hm, k)

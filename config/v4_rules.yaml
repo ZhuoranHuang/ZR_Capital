@@ -1,0 +1,53 @@
+source: zr/research/intraday_single_leg.py（口径 A，入选日内单腿样本）
+rules:
+- id: R1
+  conditions:
+  - - ma5_pos
+    - '>'
+    - -0.004492130363360047
+  - - hist_chg_n
+    - '>'
+    - 8.216078640543856e-05
+  - - ma5_pos
+    - '>'
+    - 0.0022968753473833203
+  n: 6
+  lots: 9
+  days: 5
+  n_nan: 0
+  win_rate: 1.0
+  sum_usd: 3607.6
+- id: R2
+  conditions:
+  - - ma5_pos
+    - '>'
+    - -0.004492130363360047
+  - - hist_chg_n
+    - <=
+    - 8.216078640543856e-05
+  - - bw_expand
+    - <=
+    - 0.003922722418792546
+  n: 22
+  lots: 38
+  days: 13
+  n_nan: 5
+  win_rate: 0.955
+  sum_usd: 17121.78
+- id: R3
+  conditions:
+  - - ma5_pos
+    - '>'
+    - -0.004492130363360047
+  - - hist_chg_n
+    - <=
+    - 8.216078640543856e-05
+  - - bw_expand
+    - '>'
+    - 0.003922722418792546
+  n: 9
+  lots: 16
+  days: 7
+  n_nan: 0
+  win_rate: 0.667
+  sum_usd: 1822.89

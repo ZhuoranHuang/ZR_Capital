@@ -1,0 +1,74 @@
+# V4 决定性检验（RESEARCH_LOG R-033，预登记；负责人指令写 R-031，但该编号已被 v3 打法提取占用，
+# 日志只追加，顺延为 R-033）。运行前固定，运行后不改。不扩网格：3 个假设 × 3 种离场 × 2 方向 × 2 标的。
+
+period: 2                     # 2 分钟 K
+boll: {n: 20, k: 2.0}         # ddof=0（zr/features/indicators.bollinger）
+macd: {fast: 6, slow: 13, signal: 6}
+
+# 指标口径（D-028，见 docs/research/V4_CHECKPOINTS.md）
+conventions:
+  C:                          # 主检验：含盘前盘后连续、不按日重置、长桥原始 K（不清洗）
+    ext: true
+    reset: false
+    warmup: nan
+    clean: false
+    range_threshold: 0.507    # 同一规则重标：MU 2024 年 RTH bar range_score 的 30% 分位
+  A:                          # 敏感性（D-027 原口径）：RTH-only、按日重置、BOLL 不足 20 根为空值
+    ext: false
+    reset: true
+    warmup: nan
+    range_threshold: 0.3499
+primary: C
+sensitivity: A
+
+hypotheses:
+  H1: {entry: E10, k: 2}                                          # 点火中第 2 根外轨 K 收盘确认，顺势
+  H2: {entry: E1, pctb: [0.45, 0.75], c: 0.2, N: 5, M: 10}        # 通道回踩 + 反转 K；N/M = v3 通道默认
+  H3: {entry: E11, M: 20, v: 1.5, vol_window: 20, confirm_bars: 1}  # RANGE 后突破，下一根收盘仍在突破侧
+
+exits:                        # 结构规则 + 权利金规则 + 30 分钟上限，任一先到即出
+  a: {H1: X3_mid2, H2: X3_mid2, H3: X3_mid2}             # 连续 2 根收盘越过中轨
+  b: {H1: X2_shrink2, H2: X2_shrink2, H3: X2_shrink2}    # MACD 柱连续 2 根缩短（多头柱值逐根下降）
+  c: {H1: X4_inside_0.1_0.9, H2: X5_higher_low, H3: X5_higher_low}  # H1 收盘 %b 回到 [0.1,0.9]；H2/H3 跌破前一更高低点
+premium:
+  tp: 0.20                    # tick mid ≥ 入场 ask × 1.2 → 卖 1 张（2 张减半）
+  sl: 0.30                    # tick mid ≤ 入场 ask × 0.7 → 剩余全卖
+cap_min: 30
+
+execution:
+  qty: 2                      # 0DTE 也是 2 张（D-014 的 0DTE 减半与「+20% 减半」规则冲突，不采用，见报告边界）
+  lag_s: 2                    # 入场 = 信号 K 收盘 + 2 s 后第一个有效 ask tick；离场 = 触发 + 2 s 后第一个有效 bid tick
+  first_entry_bar: "09:30"    # 首根 RTH K（09:30 标签，09:32 收盘）之前不入场；盘前 K 的信号不入场
+  last_entry: "15:40"         # 沿用 v3 执行口径
+  flat: "15:50"               # 强平触发 = 15:49:00
+  d001_last_0dte_entry: "10:15"
+  d001_flat_0dte: "10:45"     # 0DTE 强平触发 = 10:44:00
+  flat_lead_s: 60
+guardrails:
+  no_counter_ignition: true   # 入场 K 状态为 IGNITION 且方向与交易相反 → 不入场
+  no_range_entry: true        # 入场 K 状态为 RANGE → 不入场
+contract:
+  max_dte: 1                  # 日历日 DTE ∈ {0, 1} 中最近的到期日（10:15 后排除 0DTE）；都没有则不交易
+  otm_steps: 1                # 略虚值一档（相对入场 K 收盘价）；行权价来自当日期权链数据
+
+sample:
+  underlyings: [MU, QQQ]      # QQQ 用同一组日期（「同期」）
+  all_days_from: "2026-07-01"
+  all_days_to: "2026-10-21"
+  thu_fri_from: "2023-10-02"
+  thu_fri_to: "2026-06-30"
+
+ticks:
+  pre_min: 1                  # 每笔拉 [信号 K 收盘 − 1 分钟, + 31 分钟]；随机对照另需 ±15 分钟，合并后按合约-日拉
+  post_min: 31
+  random_pad_min: 15
+
+random:
+  window_min: 15              # 同日、同方向、入场 K 收盘在实际入场 ±15 分钟内（不含实际那根）、满足同样护栏
+  n_rep: 1000
+  seed: 0
+
+stats:
+  min_n: 10                   # 笔数 < 10 的格子 p 记为 1
+  fdr_q: 0.10                 # Benjamini–Hochberg，主检验 36 格一族；敏感性另算一族，只报告
+  top_k_remove: 5

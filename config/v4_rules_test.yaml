@@ -1,0 +1,23 @@
+# R-035 预登记：负责人日内单腿样本（D-029）提取的规则在 MU 上回放。运行前固定，运行后不改。
+# 规则本身冻结在 config/v4_rules.yaml（zr/research/intraday_single_leg.py 生成：入场决策层面、口径 A、
+# 只用入场前 K 线特征、深度 ≤3 决策树、胜率 > 0.5 的叶子按胜率排序取前 5 条——实得 R1–R3 三条）。
+# 其余口径（护栏、0/1 DTE 合约、tick 成交、权利金规则、30 分钟上限、随机对照、统计）全部沿用
+# config/v4_decisive.yaml（R-033），这里只写不同之处。
+
+rules_file: config/v4_rules.yaml
+base: A                 # 规则在口径 A 上提取
+contrast: C
+underlyings: [MU]
+window:                 # 「两年 MU 数据」；日期规则同 R-033（2026-07-01 起全部交易日，之前只取周四周五）
+  from: "2024-10-22"
+  to: "2026-10-21"
+extraction_window:      # 规则提取所用交易的日期范围：主检验剔除这些日子（否则是样本内），单列报告、不进 FDR
+  from: "2026-06-09"
+  to: "2026-08-18"
+exits: {a: X3_mid2, b: X2_shrink2, c: X5_higher_low}   # 同 R-033 的 H2/H3
+directions: separate    # 规则特征已方向化（空头镜像），多空分别回放；同一根 K 两个方向都可能满足
+missing_values: -999    # 规则里的比较按 −999 填充缺失值（与提取时一致；口径 A 开盘前 20 根 BOLL 为空）
+judge:
+  p: max_of_conventions # 格子 p = max(p_A, p_C)，单侧、按日聚类、n<10 记 1
+  fdr: joint            # 与 R-033 口径 C 36 格、R-034 H5 18 格合为一族（共 36+18+R-035 格），BH q=0.10；
+  fdr_q: 0.10           # 此前各族（R-033 36 格、R-034 54 格）结果原样另报

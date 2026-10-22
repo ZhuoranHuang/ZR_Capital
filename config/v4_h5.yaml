@@ -1,0 +1,44 @@
+# V4 补充 H5（RESEARCH_LOG R-034，预登记；不改动 R-033 的 H1–H4 与 config/v4_decisive.yaml）。
+# 元标签模型：在 H1–H3 全部事件上预测「该离场组合下扣费后期权盈亏 > 0」。运行前固定，运行后不改。
+
+base: A            # 负责人指令：D-027 口径为底座
+contrast: C        # D-028 口径作对照；判定要求两个口径方向一致，所以底座选择不影响通过与否
+
+events:            # 事件 = H1–H3 的全部信号 K × 方向 × 所属假设（同一 K 属多个假设时各算一行），
+  source: v4_decisive   # 护栏、合约、tick 成交、离场 (a)(b)(c) 与 R-033 完全相同；不做贪心（标签用每笔自身结果）
+labels: [y_win, net_pct]   # y_win = 扣费后 USD > 0；net_pct = 扣费后占权利金 %
+models_per: [und, exit]     # 每个标的 × 离场组合各一个模型（2 × 3 = 6 个/口径）；假设、方向、DTE 作特征
+
+features:
+  v2: all                   # dataset_v2.feature_columns(und) 全部（1 分钟 K，取决策时刻前最后一根已收盘 K）
+  confluence_window_1m: 10  # 共振窗口 = 过去 5 根 2 分钟 K = 10 根 1 分钟 K（v2 原为 5 根 1 分钟）
+  v3_state: true            # regime.state_features（2 分钟决策 K；按所用口径计算）
+  new: [prev_state, prev_dir, ign_to_chan_bars, ma5_pos, ma10_pos, hyp_H1, hyp_H2, hyp_H3, direction, dte]
+
+model:                      # LightGBM 本机不可用（缺 libomp），用 sklearn HistGradientBoosting 同参
+  max_leaf_nodes: 31
+  max_iter: 300
+  learning_rate: 0.03
+  early_stopping: false
+  random_state: 0
+walk_forward:
+  min_train_days: 60        # 训练集至少 60 个样本交易日才开始
+  test_months: 1
+  embargo_days: 1           # 测试月首日之前 1 个日历日内的训练样本剔除
+  window: expanding
+
+eval:
+  thresholds: [0.55, 0.60, 0.65]
+  deciles: 10
+  mda_top: 15               # 置换重要性：样本外 AUC 下降，按测试折加权平均
+  mda_repeats: 1
+  tree_depth: 3
+  tree_target_prob: 0.60    # 决策树把「样本外概率 ≥ 0.60」翻译成规则
+  tree_min_leaf: 10
+
+judge:                      # 格子 = 标的 × 离场 × 阈值（18 个）
+  rule: "两个口径下模型过滤后（逐笔贪心）扣费后均值% > 0，且去掉最大 5 笔盈利后均值% > 0，且两口径符号一致"
+  p: max_of_conventions     # 格子 p = max(p_A, p_C)，各自为单侧、按日聚类
+  fdr: joint                # 与 R-033 口径 C 的 36 格合为一族 BH q=0.10；R-033 原 36 格一族的结果另行原样报告
+  fdr_q: 0.10
+  min_n: 10

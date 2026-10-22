@@ -1,6 +1,6 @@
 # 状态
 
-更新：2026-10-22 14:30 PT · feat/e4-review → main
+更新：2026-10-22 16:05 PT · feat/v4-decisive → main
 
 ## 阶段
 
@@ -26,6 +26,12 @@
 - **ThetaData 全量拉取**：MU、QQQ 完成（各 767 个交易日，2023-10-02～2026-10-21）；**SPY 按负责人指令暂停于 2024-07-30**（208 天，保留），续拉命令见 DATA_INVENTORY。拉取进程已全部停止；脚本单实例锁改为 noclobber 原子创建。
 - **前视审计完成**（`docs/research/LOOKAHEAD_AUDIT.md`）：截断测试 0/500（快速管线）、0/30（期权链/日历/跨资产）、0/900（合约选择）不一致；ThetaData 1 分钟快照时间戳对齐核实无误；模型 purge/embargo/Optuna 隔离代码审查确认符合要求。发现并修复两类问题：(1) RANGE 三条件同时满足覆盖率仅 4%，改打分制（D-026，阈值 0.3487 在 MU 2024 年标定，2024–2026 覆盖率 0.300/0.303/0.312）；(2) v3 状态层指标只在诊断函数里用了含盘前盘后的连续 K 线，`grid_v3.py`/`own_policy.py`/`model_v3.py` 三个真正产出结果的引擎仍是 RTH-only——自查发现并接到 `load_extended_bars`。延迟测试发现 MU 的 E11 做空配置延迟 1 根反而更赚，逐行审查代码未见前视，判断为真实的突破确认时点现象，记入 STATUS 0d、未改代码。对比见 `docs/research/LOOKAHEAD_FIX_COMPARISON.md`。
 - **方法论 v3 第一轮已按修复后重跑**（`docs/research/METHOD_V3_ROUND1.md`）：MU 规则卡 16→49 张（随机分位 ≥95 的 0→4 张）、QQQ 1,640→1,901 张（随机分位 ≥95 的 79→3 张，此前的「QQQ E1 空头线索」基本消失，见 STATUS 0b）；模型样本外 AUC MU 0.5618/0.5427→0.5626/0.5637、QQQ 0.5356/0.5334→0.5318/0.5353（Optuna 由拖累变为略有帮助）；四个人工校验点 3 个改善（0/0.04/0.30 → 0.71/0.21/0.46）、1 个退化（E1 回踩识别 12/36→0/36，连续带下该根中轨/带宽整体偏移）；157 笔分类数字大幅变化（如 CHANNEL 反向组合计盈亏 +5,614→+126 USD），是修复的直接后果。R-030～R-032 结果仍有效，数值已随本次重跑更新。依赖新增 optuna 5.0.0。
+- **V4 决定性检验完成（`docs/research/V4_DECISIVE.md`、`V4_H5.md`）：所有预登记族 BH-FDR 通过 0 格**。
+  - R-033（H1–H3）：口径 C 36 格扣费后全负（MU −10.4%～−5.8%、QQQ −5.0%～−0.1% 每笔占权利金），最小 p 0.535；口径 A 同样全负。H1 顺点火 12 格在 ±15 分钟随机入场对照中分位全部 ≤5。
+  - R-034（H5 元标签）：样本外 AUC 0.499–0.550，18 格 0 格满足条件。
+  - H4（D-030 样本）：逆 IGNITION 2 段 −1,724 USD、RANGE 9 段 −80 USD、其余 37 段 +11,539 USD。
+  - R-035（D-029 规则，已取代）、R-037（D-030 规则）：全部格子每笔约 −6%～−7.5%，多空相近（规则不含方向），规则来源期本身也为负。
+  - 边界：成交口径为「+2 秒吃对手价」，比负责人实际成交差（对账见 KNOWN_ANSWER_AUDIT）；限价成交下的重跑见 feat/fill-model。
 - **E4 正股复核（R-036，`docs/research/E4_REVIEW.md`）**：原实现无代码错误（入场、KDJ、止损、无前视均核实；独立复算 10/10）。「毛利为正、扣费后为负」的原因：每笔等权价差在扣成本前已是 −13.5 bp，USD 毛利 +578（0.25 USD/笔）只是 100 股固定股数在 MU 高价阶段的放大；成本 3.6 bp/笔只是让它更负。11 个预登记变体研究期 BH 无一通过，样本外无「正股策略候选」（只做多三处为正但不优于随机方向 90 分位）。E4 维持移出候选（D-020）。
 - 方法论 v2 第一轮（`METHOD_V2_ROUND1*.md`）的期权盈亏数字含前视偏差，按 D-023 作废为绝对值结论。
 - **数据根已迁到外接 SSD**（APFS）：`/Volumes/ZHITAI TiPlus9100 2TB Media/zr_data`，4,141 个文件 / 345,158,096 字节核对一致；`.env` 只改了 `ZR_DATA_ROOT` 一行；同步、录制、全量拉取脚本经 `scripts/lib/data_root.sh` 解析，盘未挂载时报错退出。
@@ -49,14 +55,16 @@
 
 0. ~~QQQ 期权结果表伪影~~ → 已查明并修复（D-023）。
 0a. **状态层口径两次修订，最终定为 D-027**：D-026（fix/lookahead-audit）先改成「RANGE 打分制 + 含盘前盘后连续 K 线」；diag/indicator-parity 用 App 截图的精确数值核实后发现「含盘前盘后连续」是错的，改为 D-027（RTH-only、BOLL/MACD **按日重置**）——这个口径让 BOLL/MACD 与 App 截图精确匹配（9 个 BOLL 值误差 0%，MACD 残余 <0.0005 绝对值）。D-027 下 13:00 回踩 K 被 E1 识别恢复到 12/36（与 D-026 的 0/36 相比，证实 D-026 把中轨算偏了）；09:30 急跌→IGNITION 在 D-027 下是「无法判定」（BOLL 按日重置后开盘前 40 分钟没有有效值），比 D-026 的「0.71」更诚实但不算通过；RANGE/CHANNEL 两个比例型校验点两种口径下都远低于 1，是状态定义问题，不是指标数值问题。**只重算了状态层与校验点，没有重跑全部网格**，见下一条。
-0a-stale. **以下产出都是 D-026（已知错误口径）算出来的，现已过时，待重新跑**：`docs/research/RULE_CARDS_MU.md`、`RULE_CARDS_QQQ.md`、`METHOD_V3_ROUND1.md`、`OWN_POLICY_EXTRACTED.md`、`research/v3/model_{MU,QQQ}.md`、`docs/research/LOOKAHEAD_AUDIT.md`（延迟测试部分）、`docs/research/DELAY_TEST_{MU,QQQ}.md`、`docs/research/LOOKAHEAD_FIX_COMPARISON.md`。下面 0b、0d 两条结论也是基于这些过时文件得出的，**需要在 D-027 口径下重新验证才能相信**。
-0b. ~~QQQ E1 空头 5 分钟线索，D-026 口径下修复后基本消失~~ → 这个对比本身用的是 D-026（已知错误）口径，结论待 D-027 口径下重新验证，暂不采信。
-0d. ~~延迟测试发现 E11 做空类配置延迟 1 根反而更赚~~ → 同上，用的是 D-026 口径下的网格/规则卡，待 D-027 口径下重新验证。
-0e. **fill-resolution 诊断的 V4 方案是否立项，待负责人决定**：`docs/research/FILL_RESOLUTION.md`
-提出三条未实施的建议——(1) 0/1-DTE 规则卡宣布「有边」前用 tick 级数据独立复核；
-(2) `sim_v3.py` 成交函数加一个默认关闭的按 DTE 分层滑点缓冲参数；(3) DTE≥2 桶 1 分钟
-快照结果不必重做。这些只是诊断性抽样（MU/QQQ 54 个 contract-day）得出的建议，不是已验证
-结论，本代理未改动 `sim_v3.py` 或任何回放结果（规则 11）。
+0a-stale. **需按新口径（D-028 主 / D-027 敏感性）重跑、本轮不重跑的报告**（全部在 D-027 之前或之中产生；D-028 修了分箱锚点与清洗两个 bug，D-026 时期含盘前盘后的状态层在约 37% 的天里分箱错位）：
+  - **W2（RTH-only 跨日连续的 1 分钟 BOLL/MACD——恰是截图唯一排除的口径；MACD 还是 12/26/9 不是 App 的 6/13/6）**：`EVENT_LABEL_TABLE.md`（E1、E6 部分）、`SCAN_TABLE.md`（E1/E6/E9 扫描）、`CONDITIONAL_TABLE.md`、`META_MODEL.md`、`BASELINE_IC.md`（MACD/BOLL 特征部分）；E2/E3/E5/E7/E8 不依赖 BOLL/MACD，不受影响。
+  - **v2**：`METHOD_V2_ROUND1.md`、`METHOD_V2_ROUND1_QQQ.md`（期权盈亏已按 D-023 作废）、`E1_PULLBACK_SWEEP_{MU,QQQ}.md`、`REPLAY_RULE_{MU,QQQ}.md`、`OPTION_FEATURES_PILOT.md`（事件来自 v2 检测器）。
+  - **v3 网格、模型、规则卡**：`RULE_CARDS_{MU,QQQ}.md`、`METHOD_V3_ROUND1.md`、`research/v3/model_{MU,QQQ}.md`、`OWN_POLICY_EXTRACTED.md`（157 笔分类已在 V4 H4 按新口径重做，规则提取部分未重做）、`DELAY_TEST_{MU,QQQ}.md`、`LOOKAHEAD_FIX_COMPARISON.md`、`LOOKAHEAD_AUDIT.md` 的延迟测试部分（截断/成交时点审计是机制测试，与口径无关，仍有效）。
+  - **其他用到 K 线指标的**：`SCREENSHOT_STRATEGIES.md`（E9 YaleV3 用 BOLL；E4 用 SMA/KDJ/RSI，同样面临「是否含盘前、是否跨日」的口径问题）、`E4_MU_STOCK.md`（SMA120/ATR，同上，优先级低）。
+  - 不受影响：`RV_VS_IV.md`、`QQQ_ARTIFACT.md`（成交时点机制）、`FILL_RESOLUTION.md`、`INDICATOR_PARITY.md`（结论已由 V4_CHECKPOINTS 修正）。
+0b. ~~QQQ E1 空头 5 分钟线索，D-026 口径下修复后基本消失~~ → 这个对比用的是 D-026（分箱错位）口径，暂不采信；待 v3 网格按 D-028 重跑。
+0d. ~~延迟测试发现 E11 做空类配置延迟 1 根反而更赚~~ → 已作为 V4 H3（R-033）预登记检验，结果见 V4_DECISIVE.md。
+0e. ~~fill-resolution 的 V4 方案是否立项~~ → 负责人 10-22 采纳：0/1 DTE 一律 tick 级成交，已在 V4（R-033/R-034）实施。
+0f. **D-028 口径需要一张截图核实（开盘前 40 分钟）**：截图区分不了「RTH-only 按日重置」（D-027）与「含盘前盘后连续」（D-028 主口径 C），开盘前 20 根 2 分钟 K 三种处理（空值 / 部分窗口 / 窗口延伸到盘前）数值完全不同。请负责人提供任一交易日 **09:32–10:08 ET** 之间某根 2 分钟 K 在 App 上的 BOLL(20,2) MID/UPPER/LOWER 与 MACD(6,13,6) DIF/DEA（与之前三张截图同样设置），并注明图表是否显示盘前。若结果是 A，V4 以 V4_DECISIVE.md 第 5 节（口径 A）为准，CLAUDE.md 指标口径改回。见 docs/research/V4_CHECKPOINTS.md。
 0g. **E4 梯形法则「入场前的谷底算不算」**（R-036）：按字面实现「收盘跌破最近一个已确认的更高谷底」时，入场前当日最近的更高谷底可能早已被跌破、在入场价之上，入场后第一根就出场（MU 601 笔，扣费后 −11,754 USD）。R-036 登记并报告的是字面版本；另附「入场时水位须在入场价止损一侧」的敏感性（未登记）。两种口径下都没有候选，所以不影响结论；若以后还要用梯形法则，请负责人定：(1) 字面版本；(2) 入场水位须在止损一侧；(3) 只用入场后确认的谷底。
 0h. **日内单腿清单（D-030）：卖出开仓的腿算不算 call / put 持仓**：交易史里有 25 个卖出开仓持仓段（多为同行权价 call / put 成对卖出，疑似卖出跨式；没有买入平仓成交，可能到期失效或被行权）。按规则字面它们参与重叠判定（区间算到到期日 16:00），入选 51 段；若不参与，入选 73 段（差异集中在 MU 2026-08-12～08-14，逐笔见 INTRADAY_SINGLE_LEG_LIST.md）。另有 9 段「反手重叠」待逐笔判断。请负责人确认；另 MU260812C860000.US 的卖出成交时间记录为 08-11 08:10 ET（早于期权开盘），原因未核实。
 0c. **长桥 token 的 JWT `ac` 字段未独立核实（D-025）**：按负责人说法实现了 live/paper 的 `ac` 校验，但本代理没有、也不应该读取真实 token 去核实格式。解码失败（非 3 段式、字段缺失）时的处理是实现方选的：paper 模式按「不符」拒绝，live 模式按「不是模拟盘 token」放行——这个「失败放行」的选择没有逐条确认过。请负责人找一次低风险时机（例如 `api_facts` 核验时）确认：(1) access_token 确实是 JWT 且能被 `_jwt_claim` 解出 `ac`；(2) live 模式下解码失败时应放行还是拒绝。
