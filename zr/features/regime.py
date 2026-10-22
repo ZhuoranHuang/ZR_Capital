@@ -108,7 +108,7 @@ def bars_per_day(df: pd.DataFrame) -> float:
 
 def range_score(x: pd.DataFrame, df: pd.DataFrame, rg: dict, period: int) -> pd.Series:
     """RANGE 打分（D-026）：三项百分位秩的加权和，越低越「不活跃」。只用 ≤t 的滚动窗口。"""
-    w = max(1, round(rg["window_days"] * bars_per_day(df) / period))
+    w = max(1, round(rg["window_days"] * bars_per_day(df)))  # bars_per_day 已按周期 P 计数（D-031）
     pr = lambda s: s.rolling(w, min_periods=max(20, w // 4)).rank(pct=True)  # noqa: E731
     wt = rg["weights"]
     return (

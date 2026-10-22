@@ -128,3 +128,35 @@ def test_v4_day_limits_follow_early_close():
     exe = v4d.load_v4()["execution"]
     assert v4d.day_limits(dt.date(2025, 11, 26), exe) == (dt.time(15, 40), dt.time(15, 50))
     assert v4d.day_limits(dt.date(2025, 11, 28), exe) == (dt.time(12, 40), dt.time(12, 50))
+
+
+def test_range_window_is_window_days_trading_days_for_any_period():
+    """D-031：窗口 = window_days × 当日 bar 数（bar 数已按周期 P 计）。"""
+    from zr.features.regime import load_config, range_score
+
+    rg = load_config()["regime"]["range"]
+    for period, per_day in ((2, 195), (5, 78)):
+        idx = []
+        for d in pd.bdate_range("2026-03-02", periods=6):
+            start = pd.Timestamp(f"{d.date()} 09:30", tz=ET)
+            idx += list(pd.date_range(start, periods=per_day, freq=f"{period}min"))
+        idx = pd.DatetimeIndex(idx).tz_convert("UTC")
+        rng = np.random.default_rng(0)
+        x = pd.DataFrame(
+            {
+                "bw": rng.random(len(idx)),
+                "slope": rng.normal(size=len(idx)),
+                "hist": rng.normal(size=len(idx)),
+            },
+            index=idx,
+        )
+        df = pd.DataFrame({"close": 100 + rng.normal(size=len(idx))}, index=idx)
+        s = range_score(x, df, rg, period)
+        w = rg["window_days"] * per_day
+        # 窗口之外的值改变不影响最后一根的分数
+        x2 = x.copy()
+        x2.iloc[: len(idx) - w] = 1e6
+        assert range_score(x2, df, rg, period).iloc[-1] == s.iloc[-1]
+        x3 = x.copy()
+        x3.iloc[len(idx) - w] = 1e6
+        assert range_score(x3, df, rg, period).iloc[-1] != s.iloc[-1]
