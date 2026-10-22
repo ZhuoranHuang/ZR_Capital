@@ -32,20 +32,20 @@ EXIT_DESC = {
 }
 
 
-def _load(root: Path, conv: str):
+def _load(root: Path, conv: str, sfx: str = ""):
     base = root / "research" / "v4"
-    cells = pd.read_parquet(base / f"cells_{conv}.parquet")
-    tp = base / f"trades_{conv}.parquet"
+    cells = pd.read_parquet(base / f"cells_{conv}{sfx}.parquet")
+    tp = base / f"trades_{conv}{sfx}.parquet"
     trades = pd.read_parquet(tp) if tp.exists() else pd.DataFrame()
-    run = json.loads((base / f"run_{conv}.json").read_text(encoding="utf-8"))
+    run = json.loads((base / f"run_{conv}{sfx}.json").read_text(encoding="utf-8"))
     return cells, trades, run
 
 
-def main_table(cells: pd.DataFrame) -> pd.DataFrame:
+def main_table(cells: pd.DataFrame, fdr: bool = True) -> pd.DataFrame:
     c = cells.copy()
     c["格子"] = c["hyp"] + "·" + c["exit"] + "·" + c["dir"] + "·" + c["und"]
     c["p"] = c["p"].map(lambda v: f"{v:.4f}")
-    c["FDR"] = np.where(c["fdr_pass"], "通过", "—")
+    c["FDR"] = np.where(c["fdr_pass"], "通过", "—") if fdr else "待统一"
     c["随机分位"] = [
         f"{p}（{n}）" if n else "—" for p, n in zip(c["random_pctile"], c["random_n"], strict=True)
     ]
@@ -145,7 +145,9 @@ def h4_table(root: Path) -> pd.DataFrame:
 # ---------------- R-035 ----------------
 
 
-def rules_tables(root: Path, v4: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def rules_tables(
+    root: Path, v4: dict, sfx: str = ""
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     base = root / "research" / "v4"
     spec, _ = rt.load_spec()
     A, C = spec["base"], spec["contrast"]
@@ -174,7 +176,7 @@ def rules_tables(root: Path, v4: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.D
     e0, e1 = (dt.date.fromisoformat(spec["extraction_window"][k]) for k in ("from", "to"))
     rows = []
     for conv in (A, C):
-        p = base / f"trades_{conv}.parquet"
+        p = base / f"trades_{conv}{sfx}.parquet"
         if not p.exists():
             continue
         t = pd.read_parquet(p)
@@ -192,11 +194,35 @@ def rules_tables(root: Path, v4: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.D
     return out["main"], out["extract"], pd.DataFrame(rows)
 
 
-def rules_and_fdr(root: Path, v4: dict, cp: pd.DataFrame) -> list[str]:
+def rules_and_fdr(root: Path, v4: dict, cp: pd.DataFrame, partial: bool = False) -> list[str]:
     base = root / "research" / "v4"
-    main_t, ext_t, h13 = rules_tables(root, v4)
-    h5p = base / "h5_cells.parquet"
+    try:
+        main_t, ext_t, h13 = rules_tables(root, v4, "_MU" if partial else "")
+    except FileNotFoundError:
+        return ["## 6b. R-035：日内单腿规则回放", "", "尚未运行。", ""]
+    h5p = base / ("h5_cells_MU.parquet" if partial else "h5_cells.parquet")
     h5 = pd.read_parquet(h5p) if h5p.exists() else pd.DataFrame(columns=["p"])
+    if partial:
+        return [
+            "## 6b. R-035：日内单腿规则在两年 MU 上回放（口径 A 提取、C 对照）",
+            "",
+            "**FDR 待 QQQ 完成后与 R-033、H5 统一计算；下表 p 为未校正值**（p = 两口径较大者）。"
+            "规则特征方向化，**规则本身不含方向**，多空分开回放；主检验剔除规则提取期"
+            "（2026-06-09～2026-08-18）。",
+            "",
+            df_to_md(main_t.round(3)),
+            "",
+            "规则提取期（样本内，描述性）：",
+            "",
+            df_to_md(ext_t.round(3)),
+            "",
+            "同一窗口上 H1–H3（MU）的表现，并列对照：",
+            "",
+            df_to_md(h13) if len(h13) else "无",
+            "",
+            f"H5（MU）结果见 `docs/research/V4_H5.md`（{len(h5)} 格，FDR 同样待统一）。",
+            "",
+        ]
     fam = np.r_[cp["p"].to_numpy(), h5["p"].to_numpy(), main_t["p"].to_numpy()]
     rej = v4d.bh(fam, v4["stats"]["fdr_q"])
     n33, n5 = len(cp), len(h5)
@@ -233,15 +259,22 @@ def rules_and_fdr(root: Path, v4: dict, cp: pd.DataFrame) -> list[str]:
 # ---------------- 主流程 ----------------
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--unds", default=None, help="部分报告（如 MU），FDR 待统一")
+    args = ap.parse_args(argv)
+    partial = args.unds is not None
+    sfx = f"_{args.unds.replace(',', '_')}" if partial else ""
     root = get_settings().zr_data_root
     v4 = v4d.load_v4()
     P, S = v4["primary"], v4["sensitivity"]
-    cp, tp, rp = _load(root, P)
-    cs, ts, rs = _load(root, S)
-    passed = cp[cp["fdr_pass"]]
+    cp, tp, rp = _load(root, P, sfx)
+    cs, ts, rs = _load(root, S, sfx)
+    passed = cp[cp["fdr_pass"]] if not partial else cp.iloc[0:0]
     L = [
-        "# V4 决定性检验（R-033）",
+        "# V4 决定性检验（R-033）" + (f"——{args.unds} 部分（QQQ 待补）" if partial else ""),
         "",
         f"生成：{dt.datetime.now(dt.UTC).isoformat(timespec='seconds')} UTC · 复现 "
         "`uv run python -m zr.research.v4_decisive` → `uv run python -m zr.research.v4_report`",
@@ -254,7 +287,18 @@ def main() -> int:
         f"## 1. FDR（BH q={v4['stats']['fdr_q']}，口径 {P} 的 {len(cp)} 格一族）",
         "",
     ]
-    if passed.empty:
+    if partial:
+        top = cp.sort_values("p").head(5)
+        L += [
+            f"**部分报告（{args.unds}）。FDR 待 QQQ 完成后对两个标的统一计算；以下所有 p 均为"
+            "未校正值，不能单独据此判定通过。**",
+            "",
+            f"MU 口径 {P} 共 {len(cp)} 格，未校正 p 最小的 5 格：",
+            "",
+            df_to_md(main_table(top, fdr=False)),
+            "",
+        ]
+    elif passed.empty:
         L += [
             f"**没有格子通过。** 最小 p = {cp['p'].min():.4f}"
             f"（{cp.loc[cp['p'].idxmin(), ['hyp', 'exit', 'dir', 'und']].str.cat(sep='·')}）。",
@@ -269,7 +313,7 @@ def main() -> int:
         "平均盈利 ÷ 平均亏损（USD）；随机分位 = 实际均值在 1000 次同时段随机入场均值中的分位"
         "（括号为有随机候选的笔数）；p 为单侧、按日聚类。",
         "",
-        df_to_md(main_table(cp)),
+        df_to_md(main_table(cp, fdr=not partial)),
         "",
         "## 3. 按年份（每格：笔数 · 扣费后均值% · 合计 USD；2026-07 后单列）",
         "",
@@ -281,9 +325,9 @@ def main() -> int:
         "",
         f"## 5. 敏感性：口径 {S}（D-027）",
         "",
-        f"FDR（{S} 另算一族）通过 {int(cs['fdr_pass'].sum())} 格。",
+        "FDR 待统一。" if partial else f"FDR（{S} 另算一族）通过 {int(cs['fdr_pass'].sum())} 格。",
         "",
-        df_to_md(main_table(cs)),
+        df_to_md(main_table(cs, fdr=not partial)),
         "",
         "## 6. H4：负责人交易按新口径重做状态分类（D-029：只用日内单腿样本）",
         "",
@@ -294,7 +338,7 @@ def main() -> int:
         "",
         df_to_md(h4_table(root)),
         "",
-        *rules_and_fdr(root, v4, cp),
+        *rules_and_fdr(root, v4, cp, partial),
         "## 7. 数据与运行",
         "",
         f"- 口径 {P}：{json.dumps(rp['info'], ensure_ascii=False)}",

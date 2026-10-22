@@ -364,13 +364,21 @@ def run_one(root: Path, und: str, conv: str, v4: dict, h5: dict, v2, depth) -> d
     return out
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--unds", default=None, help="逗号分隔；给定时为部分结果，不算 FDR")
+    args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     root = get_settings().zr_data_root
     v4, h5 = v4d.load_v4(), load_h5()
     convs = (h5["base"], h5["contrast"])
+    unds = args.unds.split(",") if args.unds else v4["sample"]["underlyings"]
+    partial = args.unds is not None
+    sfx = f"_{'_'.join(unds)}" if partial else ""
     res: dict = {}
-    for und in v4["sample"]["underlyings"]:
+    for und in unds:
         stock = load_bars(root, und)
         v2 = v2_frame(root, und, stock, h5["features"]["confluence_window_1m"])
         depth = depth_features(stock)
@@ -378,7 +386,7 @@ def main() -> int:
             res[(conv, und)] = run_one(root, und, conv, v4, h5, v2, depth)
     # 判定与 FDR
     cells = []
-    for und in v4["sample"]["underlyings"]:
+    for und in unds:
         for x in EXITS:
             for t in h5["eval"]["thresholds"]:
                 s = {c: res[(c, und)]["by_exit"][x]["thr"][t] for c in convs}
@@ -404,15 +412,20 @@ def main() -> int:
                     }
                 )
     cells = pd.DataFrame(cells)
-    r33 = pd.read_parquet(root / "research" / "v4" / f"cells_{v4['primary']}.parquet")
-    joint = np.r_[r33["p"].to_numpy(), cells["p"].to_numpy()]
-    rej = v4d.bh(joint, h5["judge"]["fdr_q"])
-    cells["joint_fdr"] = rej[len(r33) :]
-    cells["通过"] = cells["条件满足"] & cells["joint_fdr"]
-    r33_joint = rej[: len(r33)]
+    if partial:
+        r33, r33_joint = None, None
+        cells["joint_fdr"] = None
+        cells["通过"] = np.where(cells["条件满足"], "条件满足，FDR 待定", "否")
+    else:
+        r33 = pd.read_parquet(root / "research" / "v4" / f"cells_{v4['primary']}.parquet")
+        joint = np.r_[r33["p"].to_numpy(), cells["p"].to_numpy()]
+        rej = v4d.bh(joint, h5["judge"]["fdr_q"])
+        cells["joint_fdr"] = rej[len(r33) :]
+        cells["通过"] = cells["条件满足"] & cells["joint_fdr"]
+        r33_joint = rej[: len(r33)]
     write_report(res, cells, r33, r33_joint, v4, h5)
     store = root / "research" / "v4"
-    cells.to_parquet(store / "h5_cells.parquet", index=False)
+    cells.to_parquet(store / f"h5_cells{sfx}.parquet", index=False)
     for (c, u), r in res.items():
         for x, rr in r["by_exit"].items():
             rr["oos"].to_parquet(store / f"h5_oos_{c}_{u}_{x}.parquet", index=False)
@@ -442,17 +455,28 @@ def write_report(res, cells, r33, r33_joint, v4, h5) -> None:
         "## 1. 判定（18 格；两口径过滤后均值 > 0、去前 5 笔 > 0、符号一致，且联合 FDR 通过）",
         "",
     ]
-    passed = cells[cells["通过"]]
-    L += [
-        "**没有格子通过。**" if passed.empty else f"**通过 {len(passed)} 格。**",
-        "",
-        df_to_md(cells.round(4)),
-        "",
-        f"联合 FDR（R-033 口径 C 36 格 + H5 18 格 = {len(r33) + len(cells)} 格，q="
-        f"{h5['judge']['fdr_q']}）：R-033 的格子在联合族中通过 {int(r33_joint.sum())} 个；"
-        f"R-033 预登记的 36 格一族结果见 V4_DECISIVE.md 第 1 节，不因加入 H5 改写。",
-        "",
-    ]
+    if r33 is None:
+        n_ok = int((cells["条件满足"]).sum())
+        L += [
+            f"**部分结果（{', '.join(sorted(cells['und'].unique()))}）："
+            "FDR 待 QQQ 完成后统一计算。**"
+            f"下表 p 为未校正值；满足「两口径均值 > 0、去前 5 笔 > 0」条件的格子 {n_ok} 个。",
+            "",
+            df_to_md(cells.drop(columns=["joint_fdr"]).round(4)),
+            "",
+        ]
+    else:
+        passed = cells[cells["通过"]]
+        L += [
+            "**没有格子通过。**" if passed.empty else f"**通过 {len(passed)} 格。**",
+            "",
+            df_to_md(cells.round(4)),
+            "",
+            f"联合 FDR（R-033 口径 C 36 格 + H5 18 格 = {len(r33) + len(cells)} 格，q="
+            f"{h5['judge']['fdr_q']}）：R-033 的格子在联合族中通过 {int(r33_joint.sum())} 个；"
+            f"R-033 预登记的 36 格一族结果见 V4_DECISIVE.md 第 1 节，不因加入 H5 改写。",
+            "",
+        ]
     for (conv, und), r in res.items():
         L += [f"## {conv} · {und}（H1–H3 事件 {r['n_events']} 行）", ""]
         for x, rr in r["by_exit"].items():
@@ -493,8 +517,7 @@ def write_report(res, cells, r33, r33_joint, v4, h5) -> None:
         "逐笔模拟才贪心。",
         "- 训练样本少（每模型几百到两千行），扩展窗口自 60 个样本交易日起，样本外月份不足 3 年。",
         "- 规则卡在同一批样本外数据上提取并评估，存在选择偏差，只作描述。",
-        "- LightGBM 本机不可用，用 sklearn HistGradientBoosting"
-        "（叶子 31、300 轮、学习率 0.03）。",
+        "- LightGBM 本机不可用，用 sklearn HistGradientBoosting（叶子 31、300 轮、学习率 0.03）。",
         "",
     ]
     OUT.write_text("\n".join(L), encoding="utf-8")

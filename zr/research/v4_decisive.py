@@ -96,8 +96,13 @@ def build_bars(root: Path, und: str, conv: dict, end: dt.date) -> pd.DataFrame:
 def e11_delayed(df: pd.DataFrame, x: pd.DataFrame, reg: pd.DataFrame, h: dict) -> np.ndarray:
     """E11 突破（前一根 RANGE、收盘破前 M 根高/低点、量比 ≥ v）后，下一根（同日）收盘仍在突破
     水位之外才入场；信号落在确认那根 K 上。"""
-    raw = pt.entry_signal(df, x, reg, {"entry": "E11", "M": h["M"], "v": h["v"]},
-                          {"entries": {"E11": {"vol_window": h["vol_window"]}}})
+    raw = pt.entry_signal(
+        df,
+        x,
+        reg,
+        {"entry": "E11", "M": h["M"], "v": h["v"]},
+        {"entries": {"E11": {"vol_window": h["vol_window"]}}},
+    )
     hi, lo, cl = (df[k].to_numpy(float) for k in ("high", "low", "close"))
     hh = pd.Series(hi).shift(1).rolling(h["M"], min_periods=h["M"]).max().to_numpy()
     ll = pd.Series(lo).shift(1).rolling(h["M"], min_periods=h["M"]).min().to_numpy()
@@ -120,8 +125,13 @@ def hypothesis_signals(df, x, reg, cfg, v4) -> dict[str, np.ndarray]:
     e1 = h["H2"]
     return {
         "H1": pt.entry_signal(df, x, reg, {"entry": "E10", "k": h["H1"]["k"]}, cfg),
-        "H2": pt.entry_signal(df, x, reg, {"entry": "E1", "pctb": tuple(e1["pctb"]), "c": e1["c"],
-                                           "N": e1["N"], "M": e1["M"]}, cfg),
+        "H2": pt.entry_signal(
+            df,
+            x,
+            reg,
+            {"entry": "E1", "pctb": tuple(e1["pctb"]), "c": e1["c"], "N": e1["N"], "M": e1["M"]},
+            cfg,
+        ),
         "H3": e11_delayed(df, x, reg, h["H3"]),
     }
 
@@ -142,8 +152,11 @@ def guard_mask(df: pd.DataFrame, reg: pd.DataFrame, v4: dict, days: set) -> tupl
     close = et + pd.Timedelta(minutes=v4["period"])
     close_hm = np.asarray(close.strftime("%H:%M"))
     day = np.asarray(et.date)
-    time_ok = ((label >= exe["first_entry_bar"]) & (close_hm <= exe["last_entry"])
-               & np.isin(day, list(days)))
+    time_ok = (
+        (label >= exe["first_entry_bar"])
+        & (close_hm <= exe["last_entry"])
+        & np.isin(day, list(days))
+    )
     st, d = reg["state"].to_numpy(), reg["dir"].to_numpy()
     ok_l = np.ones(len(df), bool)
     ok_s = np.ones(len(df), bool)
@@ -173,8 +186,9 @@ def day_chain(root: Path, und: str, day: dt.date) -> dict:
     return out
 
 
-def pick_contract(chain: dict, day: dt.date, direction: int, spot: float,
-                  decision_et: dt.time, v4: dict) -> dict | None:
+def pick_contract(
+    chain: dict, day: dt.date, direction: int, spot: float, decision_et: dt.time, v4: dict
+) -> dict | None:
     """DTE（日历日）∈ [0, max_dte] 中最近的到期日（10:15 后排除 0DTE）、略虚值 otm_steps 档。"""
     c, exe = v4["contract"], v4["execution"]
     right = "call" if direction == 1 else "put"
@@ -186,12 +200,20 @@ def pick_contract(chain: dict, day: dt.date, direction: int, spot: float,
     exp = exps[0]
     s, syms = chain[(exp, right)]
     k = c["otm_steps"] - 1
-    j = (int(np.searchsorted(s, spot, side="right")) + k if direction == 1
-         else int(np.searchsorted(s, spot, side="left")) - 1 - k)
+    j = (
+        int(np.searchsorted(s, spot, side="right")) + k
+        if direction == 1
+        else int(np.searchsorted(s, spot, side="left")) - 1 - k
+    )
     if not 0 <= j < len(s):
         return None
-    return {"symbol": syms[j], "expiry": exp, "strike": float(s[j]), "right": right,
-            "dte": (exp - day).days}
+    return {
+        "symbol": syms[j],
+        "expiry": exp,
+        "strike": float(s[j]),
+        "right": right,
+        "dte": (exp - day).days,
+    }
 
 
 def ns(x) -> np.ndarray:
@@ -202,8 +224,9 @@ def ns(x) -> np.ndarray:
 # ---------------- 事件 ----------------
 
 
-def build_events(root: Path, und: str, conv_key: str, v4: dict, sig_fn=None, hyps=HYPS,
-                 days: list | None = None) -> tuple[pd.DataFrame, dict]:
+def build_events(
+    root: Path, und: str, conv_key: str, v4: dict, sig_fn=None, hyps=HYPS, days: list | None = None
+) -> tuple[pd.DataFrame, dict]:
     """返回事件表（每行 = 一个可入场 K × 方向 × 所选合约，含实际信号与随机候选）与离场触发。
 
     列：bar_i、day、decision_ts（K 收盘，UTC）、direction、spot、symbol…、flat_ts、
@@ -252,16 +275,28 @@ def build_events(root: Path, und: str, conv_key: str, v4: dict, sig_fn=None, hyp
             flat = et_ts(d, _hm(exe["d001_flat_0dte"] if pk["dte"] == 0 else exe["flat"])) - lead
             if close_utc[i] >= flat:
                 continue
-            rows.append({"bar_i": int(i), "day": d, "decision_ts": close_utc[i],
-                         "direction": direction, "spot": spot[i], **pk, "flat_ts": flat,
-                         **{f"hyp_{h}": bool(is_sig[h][i]) for h in hyps}})
+            rows.append(
+                {
+                    "bar_i": int(i),
+                    "day": d,
+                    "decision_ts": close_utc[i],
+                    "direction": direction,
+                    "spot": spot[i],
+                    **pk,
+                    "flat_ts": flat,
+                    **{f"hyp_{h}": bool(is_sig[h][i]) for h in hyps},
+                }
+            )
     ev = pd.DataFrame(rows)
     trig = {}
     for rule in exits:
         lg, sh = exits[rule]
         trig[rule] = {1: cns[lg], -1: cns[sh]}
-    meta = {"n_bars": len(df), "days": days,
-            "signals": {h: int(sig[h][0].sum() + sig[h][1].sum()) for h in hyps}}
+    meta = {
+        "n_bars": len(df),
+        "days": days,
+        "signals": {h: int(sig[h][0].sum() + sig[h][1].sum()) for h in hyps},
+    }
     return ev, {"trig": trig, "meta": meta}
 
 
@@ -315,8 +350,11 @@ def uncovered(start: pd.Timestamp, end: pd.Timestamp, have: list[tuple[int, int]
         cur = max(cur, b)
     if cur < end.value:
         segs.append((cur, end.value))
-    return [(pd.Timestamp(a, tz="UTC").floor("s"), pd.Timestamp(b, tz="UTC").ceil("s"))
-            for a, b in segs if b - a >= 1e9]
+    return [
+        (pd.Timestamp(a, tz="UTC").floor("s"), pd.Timestamp(b, tz="UTC").ceil("s"))
+        for a, b in segs
+        if b - a >= 1e9
+    ]
 
 
 def pull_ticks(root: Path, und: str, windows: pd.DataFrame, concurrency: int = 4) -> dict:
@@ -343,9 +381,15 @@ def pull_ticks(root: Path, und: str, windows: pd.DataFrame, concurrency: int = 4
         p = tick_path(root, und, r.symbol, r.day, a, b)
         try:
             df = client.history_quote(
-                und, r.expiry, r.day, interval="tick", strike=f"{r.strike:.3f}", right=r.right,
+                und,
+                r.expiry,
+                r.day,
+                interval="tick",
+                strike=f"{r.strike:.3f}",
+                right=r.right,
                 start_time=a.tz_convert(ET).strftime("%H:%M:%S.000"),
-                end_time=b.tz_convert(ET).strftime("%H:%M:%S.000"))
+                end_time=b.tz_convert(ET).strftime("%H:%M:%S.000"),
+            )
         except Exception as e:  # noqa: BLE001 - 单个合约失败不中断，计数并报告
             log.warning("tick 拉取失败 %s %s：%s", r.symbol, r.day, e)
             bump("failed")
@@ -433,8 +477,15 @@ def simulate(tk: Ticks, decision_ns: int, struct_ns: np.ndarray, flat_ns: int, v
     k = _first_at(tk, t_f + lag)
     b = float(tk.bid[k])
     cash += rem * b * 100 - (float(sell_fee(rem, b)) if b > 0 else 0.0)
-    return {"entry_ns": te, "exit_ns": int(tk.ts[k]), "ask0": ask0, "net_usd": cash,
-            "net_pct": cash / (ask0 * 100 * qty) * 100, "tp_used": used, "reason": reason}
+    return {
+        "entry_ns": te,
+        "exit_ns": int(tk.ts[k]),
+        "ask0": ask0,
+        "net_usd": cash,
+        "net_pct": cash / (ask0 * 100 * qty) * 100,
+        "tp_used": used,
+        "reason": reason,
+    }
 
 
 def greedy(rows: pd.DataFrame) -> pd.DataFrame:
@@ -508,8 +559,9 @@ def cell_stats(t: pd.DataFrame, v4: dict) -> dict:
     return {
         "n": len(t),
         "win_rate": round(float((usd > 0).mean()), 3) if len(t) else np.nan,
-        "payoff": round(float(wins.mean() / -losses.mean()), 2) if len(wins) and len(losses)
-        and losses.mean() < 0 else np.nan,
+        "payoff": round(float(wins.mean() / -losses.mean()), 2)
+        if len(wins) and len(losses) and losses.mean() < 0
+        else np.nan,
         "mean_pct": round(float(x.mean()), 2) if len(t) else np.nan,
         "median_pct": round(float(np.median(x)), 2) if len(t) else np.nan,
         "sum_usd": round(float(usd.sum()), 2),
@@ -538,21 +590,34 @@ def random_percentile(t: pd.DataFrame, cand: dict, v4: dict) -> tuple[float, int
 # ---------------- 主流程 ----------------
 
 
-def run_conv(root: Path, conv_key: str, v4: dict, pull: bool = True, sig_fn=None, hyps=HYPS,
-             exit_map: dict | None = None, days_fn=None, unds: list | None = None) -> dict:
+def run_conv(
+    root: Path,
+    conv_key: str,
+    v4: dict,
+    pull: bool = True,
+    sig_fn=None,
+    hyps=HYPS,
+    exit_map: dict | None = None,
+    days_fn=None,
+    unds: list | None = None,
+) -> dict:
     exit_map = v4["exits"] if exit_map is None else exit_map
     trades_all, cells, pull_stats, info = [], [], {}, {}
-    for und in (v4["sample"]["underlyings"] if unds is None else unds):
+    for und in v4["sample"]["underlyings"] if unds is None else unds:
         days = days_fn(root, und) if days_fn else None
         ev, aux = build_events(root, und, conv_key, v4, sig_fn=sig_fn, hyps=hyps, days=days)
         trig = aux["trig"]
         windows = needed_windows(ev, v4)
         if pull:
             pull_stats[und] = pull_ticks(root, und, windows)
-        info[und] = {"days": len(aux["meta"]["days"]), "bars": aux["meta"]["n_bars"],
-                     "signals_raw": aux["meta"]["signals"], "windows": len(windows),
-                     "event_rows": len(ev),
-                     "signal_rows": {h: int(ev[f"hyp_{h}"].sum()) for h in hyps}}
+        info[und] = {
+            "days": len(aux["meta"]["days"]),
+            "bars": aux["meta"]["n_bars"],
+            "signals_raw": aux["meta"]["signals"],
+            "windows": len(windows),
+            "event_rows": len(ev),
+            "signal_rows": {h: int(ev[f"hyp_{h}"].sum()) for h in hyps},
+        }
         ev = ev.reset_index(drop=True)
         ev["decision_ns"] = ns(ev["decision_ts"])
         ev["flat_ns"] = ns(ev["flat_ts"])
@@ -567,8 +632,13 @@ def run_conv(root: Path, conv_key: str, v4: dict, pull: bool = True, sig_fn=None
             if tk is None:
                 continue
             for rule in rules:
-                res = simulate(tk, int(r["decision_ns"]), trig[rule][int(r["direction"])],
-                               int(r["flat_ns"]), v4)
+                res = simulate(
+                    tk,
+                    int(r["decision_ns"]),
+                    trig[rule][int(r["direction"])],
+                    int(r["flat_ns"]),
+                    v4,
+                )
                 if res is not None:
                     sims[(i, rule)] = res
         w = pd.Timedelta(minutes=v4["random"]["window_min"]).value
@@ -581,27 +651,49 @@ def run_conv(root: Path, conv_key: str, v4: dict, pull: bool = True, sig_fn=None
                     for i in np.flatnonzero(m.to_numpy()):
                         res = sims.get((i, rule))
                         if res is not None:
-                            rows.append({"key": i, "day": ev.at[i, "day"],
-                                         "decision_ns": int(ev.at[i, "decision_ns"]),
-                                         "dte": int(ev.at[i, "dte"]),
-                                         "symbol": ev.at[i, "symbol"], **res})
-                    t = greedy(pd.DataFrame(rows)) if rows else pd.DataFrame(
-                        columns=["key", "day", "decision_ns", "net_usd", "net_pct", "entry_ns"])
+                            rows.append(
+                                {
+                                    "key": i,
+                                    "day": ev.at[i, "day"],
+                                    "decision_ns": int(ev.at[i, "decision_ns"]),
+                                    "dte": int(ev.at[i, "dte"]),
+                                    "symbol": ev.at[i, "symbol"],
+                                    **res,
+                                }
+                            )
+                    t = (
+                        greedy(pd.DataFrame(rows))
+                        if rows
+                        else pd.DataFrame(
+                            columns=["key", "day", "decision_ns", "net_usd", "net_pct", "entry_ns"]
+                        )
+                    )
                     cand = {}
                     same = ev[(ev["direction"] == direction)]
                     for k, d0, dn in zip(t["key"], t["day"], t["decision_ns"], strict=True):
-                        c = same[(same["day"] == d0) & ((same["decision_ns"] - dn).abs() <= w)
-                                 & (same.index != k)]
-                        cand[k] = [sims[(j, rule)]["net_pct"] for j in c.index
-                                   if (j, rule) in sims]
+                        c = same[
+                            (same["day"] == d0)
+                            & ((same["decision_ns"] - dn).abs() <= w)
+                            & (same.index != k)
+                        ]
+                        cand[k] = [sims[(j, rule)]["net_pct"] for j in c.index if (j, rule) in sims]
                     s = cell_stats(t, v4)
                     s["random_pctile"], s["random_n"] = random_percentile(t, cand, v4)
-                    s.update({"conv": conv_key, "und": und, "hyp": h, "exit": xk, "rule": rule,
-                              "dir": "long" if direction == 1 else "short"})
+                    s.update(
+                        {
+                            "conv": conv_key,
+                            "und": und,
+                            "hyp": h,
+                            "exit": xk,
+                            "rule": rule,
+                            "dir": "long" if direction == 1 else "short",
+                        }
+                    )
                     cells.append(s)
                     if len(t):
-                        tt = t.assign(conv=conv_key, und=und, hyp=h, exit=xk, rule=rule,
-                                      dir=s["dir"])
+                        tt = t.assign(
+                            conv=conv_key, und=und, hyp=h, exit=xk, rule=rule, dir=s["dir"]
+                        )
                         trades_all.append(tt)
     cells = pd.DataFrame(cells)
     cells["fdr_pass"] = bh(cells["p"].to_numpy(), v4["stats"]["fdr_q"])
@@ -612,6 +704,9 @@ def run_conv(root: Path, conv_key: str, v4: dict, pull: bool = True, sig_fn=None
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--conv", default="both", choices=["C", "A", "both"])
+    ap.add_argument(
+        "--unds", default=None, help="逗号分隔；给定时输出文件带 _<标的> 后缀，FDR 不在此计算"
+    )
     ap.add_argument("--no-pull", action="store_true")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -620,14 +715,17 @@ def main(argv: list[str] | None = None) -> int:
     out = root / "research" / "v4"
     out.mkdir(parents=True, exist_ok=True)
     convs = [v4["primary"], v4["sensitivity"]] if args.conv == "both" else [args.conv]
+    unds = args.unds.split(",") if args.unds else None
+    sfx = f"_{'_'.join(unds)}" if unds else ""
     for c in convs:
-        res = run_conv(root, c, v4, pull=not args.no_pull)
-        res["cells"].to_parquet(out / f"cells_{c}.parquet", index=False)
+        res = run_conv(root, c, v4, pull=not args.no_pull, unds=unds)
+        res["cells"].to_parquet(out / f"cells_{c}{sfx}.parquet", index=False)
         if len(res["trades"]):
-            res["trades"].to_parquet(out / f"trades_{c}.parquet", index=False)
-        pd.Series({"pull": res["pull"], "info": res["info"]}).to_json(out / f"run_{c}.json",
-                                                                       default_handler=str)
-        log.info("口径 %s 完成：%d 格", c, len(res["cells"]))
+            res["trades"].to_parquet(out / f"trades_{c}{sfx}.parquet", index=False)
+        pd.Series({"pull": res["pull"], "info": res["info"]}).to_json(
+            out / f"run_{c}{sfx}.json", default_handler=str
+        )
+        log.info("口径 %s%s 完成：%d 格", c, sfx, len(res["cells"]))
     return 0
 
 
