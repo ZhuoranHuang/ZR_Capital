@@ -18,6 +18,7 @@ def test_month_summary_uses_latest_record_per_day(tmp_path):
         },
         {"underlying": "SPY", "date": "2023-10-03", "rows_quotes": 5, "rows_ohlc": 5, "rows_oi": 1},
         {"underlying": "SPY", "date": "2023-10-04", "error": "HTTP 570"},
+        {"underlying": "SPY", "date": "2023-10-07", "rows_quotes": 1},  # 周六：不计
         {
             "underlying": "QQQ",
             "date": "2023-10-02",

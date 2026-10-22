@@ -81,3 +81,14 @@ def test_day_outcomes_flags_d001_and_covers_both_directions():
     assert out["minute"].min() == oc.FIRST_ENTRY and out["minute"].max() == oc.LAST_ENTRY
     assert (out.loc[out["minute"] > 45, "d001_violation"]).all()
     assert not out.loc[out["minute"] <= 45, "d001_violation"].any()
+
+
+def test_bid_max_ret_windows():
+    bid, ask = _flat(1.0), _flat(1.1)
+    bid[53] = 1.5
+    q = {(DAY, "call", 101.0): (bid, ask), (DAY, "put", 99.0): (_flat(1.0), _flat(1.1))}
+    out = oc.day_outcomes(_day(_flat(100.0), _flat(100.0), q))
+    r = out[(out["minute"] == 50) & (out["direction"] == 1)].iloc[0]
+    assert np.isclose(r["bid_max_ret_2"], 1.0 / 1.1 - 1)  # 51–52 分钟
+    assert np.isclose(r["bid_max_ret_3"], 1.5 / 1.1 - 1)  # 含 53 分钟
+    assert np.isclose(r["bid_max_ret_30"], 1.5 / 1.1 - 1)

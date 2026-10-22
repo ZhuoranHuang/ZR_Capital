@@ -5,7 +5,8 @@
 - min_to_next_release：距下一个定时发布的分钟数（无则 NaN）
 - min_since_last_release：距上一个定时发布的分钟数（无则 NaN）
 - is_earnings_week：财报所在周（财报日 pending → 全部 NaN）
-- is_expiry_day：当日是否为该标的的期权到期日（来自 ThetaData 已落盘的期权数据；无期权数据的日期 NaN）
+- is_expiry_day：当日是否为该标的的期权到期日（来自 ThetaData 已落盘的期权数据；无期权数据的日期
+  NaN）
 """
 
 from __future__ import annotations

@@ -1,7 +1,8 @@
 """直接回放负责人的规则（METHOD_V2 规格 2，R-017；负责人 2026-10-22 补充 1/2）。
 
 - 事件：E1 收紧版——通道内回踩中轨：|low−中轨|/中轨 ≤ ε（0.05%）且收盘回到中轨同侧，确认 1 根
-  （触及后下一根收盘仍在中轨同侧）。通道用 A（MACD 三条件）与 F（布林三线同号平行、持续、回撤受限），
+  （触及后下一根收盘仍在中轨同侧）。通道用 A（MACD 三条件）与 F（布林三线同号平行、持续、回撤受限）
+  ，
   zr/features/channel.py。做多 = 上升通道买 call，做空 = 下降通道买 put，分开统计。
 - 合约与出场：zr/research/outcomes.py（最近可用到期日 DTE≤5、最近一档略虚值、2 张、+20% 减半、
   中轨结构止损、持仓上限 10/30 分钟、买 ask 卖 bid、D-013）。实际 DTE 记录并分层。
@@ -51,7 +52,9 @@ SESSIONS = [
 def pullback_events(
     df: pd.DataFrame, feats: pd.DataFrame, chan: pd.Series, eps: float = EPS, confirm: int = CONFIRM
 ) -> pd.Series:
-    """通道内回踩中轨（+1 多 / −1 空 / 0）。只用 ≤t 的数据；确认 1 根 = t−1 触及、t 收盘仍在中轨同侧。"""
+    """通道内回踩中轨（+1 多 / −1 空 / 0）。只用 ≤t 的数据；确认 1 根 = t−1 触及、t
+    收盘仍在中轨同侧。
+    """
     mid = feats["bb_mid"]
     touch_lo = (df["low"] - mid).abs() / mid <= eps
     touch_hi = (df["high"] - mid).abs() / mid <= eps
@@ -218,7 +221,8 @@ def run(
                 else []
             )
             t = e.assign(net=net, dte=dte, cap=cap, channel=ch, ex0930=ex).dropna(subset=["net"])
-            name = f"{ch}|{'long' if direction == 1 else 'short'}|cap={cap}|{'ex0930' if ex else 'all'}"
+            side = "long" if direction == 1 else "short"
+            name = f"{ch}|{side}|cap={cap}|{'ex0930' if ex else 'all'}"
             s = {
                 "config": name,
                 "events": len(e),
@@ -248,8 +252,10 @@ def run(
         "",
         f"生成：{dt.datetime.now(dt.UTC).isoformat(timespec='seconds')} UTC · {start}～{end} · "
         f"耗时 {time.monotonic() - t0:.0f}s · 随机对照 {n_random} 次/组",
-        f"规则：E1 收紧版（ε={EPS:.2%}、确认 {CONFIRM} 根）× 通道 {'/'.join(CHANNELS)}；合约与出场见 "
-        "zr/research/outcomes.py（最近可用到期日 DTE≤5、最近一档略虚值、2 张、+20% 减半、中轨结构止损、"
+        f"规则：E1 收紧版（ε={EPS:.2%}、确认 {CONFIRM} 根）× 通道 {'/'.join(CHANNELS)}；"
+        "合约与出场见 "
+        "zr/research/outcomes.py（最近可用到期日 DTE≤5、最近一档略虚值、2 张、+20% 减半、"
+        "中轨结构止损、"
         "持仓上限 10/30 分钟、买 ask 卖 bid、D-013 费用）。",
         "",
         "## 覆盖矩阵",
@@ -260,7 +266,8 @@ def run(
         "",
         "## 16 组配置（通道 × 方向 × 持仓上限 × 是否排除 09:30–10:00）",
         "",
-        "no_contract = 决策分钟没有可买合约（DTE≤5 内都无 ask）的事件数；real_pctile = 真实合计在 1,000 次同日同笔数随机入场中的分位。",
+        "no_contract = 决策分钟没有可买合约（DTE≤5 内都无 ask）的事件数；real_pctile = 真实合计在 "
+        "1,000 次同日同笔数随机入场中的分位。",
         "",
         df_to_md(summ),
         "",
@@ -300,7 +307,8 @@ def run(
         lines += [
             "## DTE 0–1 专表",
             "",
-            f"{und} 首个周一/周三到期日：{era_start}。之前只有周五到期，DTE 0–1 只出现在周四（DTE 1）与周五（DTE 0）。",
+            f"{und} 首个周一/周三到期日：{era_start}。之前只有周五到期，DTE 0–1 只出现在周四（DTE "
+            "1）与周五（DTE 0）。",
             "",
             "### 含周一/周三到期合约之后",
             "",
@@ -334,8 +342,8 @@ def run(
                 (tr["channel"] == ch)
                 & (tr["direction"] == direction)
                 & (tr["cap"] == 30)
-                & (tr["ex0930"] == False)
-            ]  # noqa: E712
+                & ~tr["ex0930"].astype(bool)
+            ]
             rows.append(
                 {
                     "channel": ch,
@@ -384,9 +392,12 @@ def run(
     lines += [
         "## 边界",
         "",
-        f"边界：标的 {und}；{start}～{end} 中有期权数据的 {len(lk.days)} 个交易日（RTH、交易日历过滤）；"
-        f"事件 {int(summ['events'].sum())} 个（含重复计入各配置）；费用 D-013 + 买 ask 卖 bid；对齐：决策分钟 = 触发 bar 后一分钟，"
-        "用该分钟时间戳的 NBBO；未覆盖：无期权数据的月份（见覆盖矩阵）、DTE>5 的情形、ask 缺失的分钟；"
+        f"边界：标的 {und}；{start}～{end} 中有期权数据的 {len(lk.days)} 个交易日（RTH、"
+        "交易日历过滤）；"
+        f"事件 {int(summ['events'].sum())} 个（含重复计入各配置）；费用 D-013 + 买 ask 卖 bid；"
+        "对齐：决策分钟 = 触发 bar 后一分钟，"
+        "用该分钟时间戳的 NBBO；未覆盖：无期权数据的月份（见覆盖矩阵）、DTE>5 的情形、ask "
+        "缺失的分钟；"
         "随机对照只随机入场分钟，合约与出场规则不变。",
         "",
         "## 复现",

@@ -220,7 +220,9 @@ FAMILIES = {
 def signal_matrix(
     df: pd.DataFrame, feats: pd.DataFrame, cfg: dict, extra: dict | None = None
 ) -> pd.DataFrame:
-    """每个启用检测器一列（+1/−1/0），同索引。extra 会并入每个检测器的参数（例如预先算好的 _chans）。"""
+    """每个启用检测器一列（+1/−1/0），同索引。extra 会并入每个检测器的参数（例如预先算好的 _chans）
+    。
+    """
     cols = {}
     for name, fn in DETECTORS.items():
         params = cfg.get("detectors", {}).get(name)
@@ -254,7 +256,9 @@ def confluence(sig: pd.DataFrame, window: int = 5) -> pd.DataFrame:
 def events_from_matrix(
     sig: pd.DataFrame, symbol: str, confl: pd.DataFrame | None = None
 ) -> pd.DataFrame:
-    """矩阵 → 事件行；附上与事件同向的共振特征 confl_n_same_dir_5m / confl_families_5m（不含事件自身）。"""
+    """矩阵 → 事件行；附上与事件同向的共振特征 confl_n_same_dir_5m /
+    confl_families_5m（不含事件自身）。
+    """
     rows = []
     for name in sig.columns:
         s = sig[name]

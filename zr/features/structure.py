@@ -3,8 +3,10 @@
 
 - pullback_idx：本轮通道（通道 A = MACD 三条件状态连续段）内第几次回踩中轨（|low−中轨|/中轨 ≤ ε，
   下降通道用 high）；不在通道内为 0
-- bars_since_macd_cross / bars_since_kdj_cross：距最近一次 DIF/DEA（K/D）交叉的根数（首次交叉前 NaN）
-- channel_len_bars / channel_max_dd：通道 A 的持续根数与通道内方向化最大回撤（zr/features/channel.py）
+- bars_since_macd_cross / bars_since_kdj_cross：距最近一次 DIF/DEA（K/D）交叉的根数（首次交叉前
+  NaN）
+- channel_len_bars / channel_max_dd：通道 A
+  的持续根数与通道内方向化最大回撤（zr/features/channel.py）
 - bb_parallel：布林上中下轨斜率的 std/|均值|
 - kdj_k / kdj_d / kdj_j
 - tf5_regime：5 分钟 K 上的 MACD 状态（+1 DIF>DEA 且 DIF>0；−1 对称；0 其他）
@@ -62,7 +64,9 @@ def macd_state(close: pd.Series) -> pd.Series:
 
 
 def tf5_regime(df: pd.DataFrame) -> pd.Series:
-    """5 分钟 bar（标签 T 覆盖 [T, T+5)，在 T+5 完成）上的 MACD 状态，按完成时刻对齐到 1 分钟 bar 的收盘时刻 t+1。"""
+    """5 分钟 bar（标签 T 覆盖 [T, T+5)，在 T+5 完成）上的 MACD 状态，按完成时刻对齐到 1 分钟 bar
+    的收盘时刻 t+1。
+    """
     b5 = resample_bars(df, "5min")
     st = macd_state(b5["close"])
     avail = pd.DataFrame({"avail": b5.index + pd.Timedelta(minutes=5), "tf5": st.to_numpy()})

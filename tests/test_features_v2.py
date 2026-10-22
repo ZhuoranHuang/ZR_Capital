@@ -85,7 +85,8 @@ def test_tf5_uses_only_completed_5min_bars(data):
     b.iloc[-1, b.columns.get_loc("close")] *= 1.2
     r2 = tf5_regime(b)
     pd.testing.assert_series_equal(r.iloc[:-1], r2.iloc[:-1])
-    # 09:30–09:33 收盘时没有任何完成的当日 5 分钟 bar，状态来自前一日或 NaN；09:34 收盘（=09:35）才看到 09:30 那根
+    # 09:30–09:33 收盘时没有任何完成的当日 5 分钟 bar，状态来自前一日或 NaN；09:34 收盘（=09:35）
+    # 才看到 09:30 那根
     first_day = df.index.tz_convert(ET).date[0]
     m = df.index.tz_convert(ET).date == first_day
     assert r[m].iloc[:4].isna().all()
@@ -97,7 +98,8 @@ def test_calendar_minutes_to_and_since():
     )
     rel = pd.DatetimeIndex([pd.Timestamp("2026-09-16 14:00", tz=ET)]).tz_convert("UTC")
     c = compute_calendar(idx, releases=rel)
-    # bar 13:50 收盘 13:51 → 距 14:00 还有 9 分钟；bar 13:59 收盘 14:00 → 0；bar 14:05 收盘 14:06 → 已过 6
+    # bar 13:50 收盘 13:51 → 距 14:00 还有 9 分钟；bar 13:59 收盘 14:00 → 0；bar 14:05 收盘 14:06 →
+    # 已过 6
     assert c["min_to_next_release"].iloc[0] == 9
     assert c["min_to_next_release"].iloc[9] == 0
     assert c["min_since_last_release"].iloc[15] == 6

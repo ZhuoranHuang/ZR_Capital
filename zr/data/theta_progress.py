@@ -15,6 +15,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from zr.config import get_settings
+from zr.data.calendar import is_trading_day
 
 TABLE_HEADER = "## 全量拉取进度（scripts/theta_full_pull.sh 自动追加）"
 COLUMNS = (
@@ -37,7 +38,7 @@ def month_summary(root: Path, und: str, start: dt.date, end: dt.date) -> dict:
             if r.get("underlying") != und or r.get("supplement"):
                 continue
             d = dt.date.fromisoformat(str(r["date"]))
-            if start <= d <= end:
+            if start <= d <= end and is_trading_day(d):  # 休市日记录（已删目录）不计
                 latest[d.isoformat()] = r
     ok = [d for d, r in latest.items() if "error" not in r]
     from zr.data.thetadata import coverage_report

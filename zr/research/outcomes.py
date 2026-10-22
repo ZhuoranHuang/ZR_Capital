@@ -5,14 +5,16 @@
 四条基线、模型决策模拟都只是在这张表上按入场分钟查表，保证同一套合约与出场规则。
 
 合约（负责人 2026-10-22 补充 2）：最近的可用到期日（DTE ≤ 5，记录实际 DTE）；在该到期日上取
-最近一档略虚值（call 行权价 > 现价、put 行权价 < 现价），且决策分钟必须有有效 ask，否则顺延到下一个到期日。
+最近一档略虚值（call 行权价 > 现价、put 行权价 < 现价），且决策分钟必须有有效 ask，
+否则顺延到下一个到期日。
 现价 = 决策分钟前一根（触发 bar）的收盘价。
 入场：决策分钟 ask，2 张。出场：bid ≥ 入场 ask × 1.2 时卖 1 张（减半）；剩余在正股收盘跌破布林中轨
 （多头；空头对称）时卖出；持仓上限到点卖出；15:55 ET 强制平仓；全部卖 bid。费用 D-013。
 时间对齐：Theta 1m 时间戳 t 的报价 = t 时刻 NBBO；决策分钟 m 用时间戳 m 的 ask。
 D-001 标记：DTE 0 且决策时刻晚于 10:15 ET 的记一个 d001_violation（不排除，分层报告）。
 
-运行：uv run python -m zr.research.outcomes --symbol MU.US → ZR_DATA_ROOT/research/v2/outcomes_MU.parquet
+运行：uv run python -m zr.research.outcomes --symbol MU.US →
+ZR_DATA_ROOT/research/v2/outcomes_MU.parquet
 （按日缓存，已算过的日期跳过；新拉到的期权日会被补算）。
 """
 
@@ -47,6 +49,7 @@ TAKE_PROFIT = 0.20
 CAPS = (10, 30)
 MAX_DTE = 5
 D001_LAST_0DTE_ENTRY = 45  # 10:15
+BID_MAX_H = (1, 2, 3, 5, 10, 15, 30)  # 标签 (a)：期权 bid 在 H 分钟内相对入场 ask 的最大涨幅
 
 
 @lru_cache(maxsize=200_000)
@@ -198,10 +201,18 @@ def day_outcomes(d: Day) -> pd.DataFrame:
                 continue
             sym, exp = pk
             dte = (exp - d.day).days
+            ask0 = d.ask[sym][m]
+            bids = d.bid[sym]
+            bmax = {}
+            for h in BID_MAX_H:
+                w = bids[m + 1 : min(m + h, FORCE_EXIT) + 1]
+                w = w[np.isfinite(w)]
+                bmax[f"bid_max_ret_{h}"] = float(w.max() / ask0 - 1) if len(w) else np.nan
             for cap in CAPS:
                 r = simulate(d, m, direction, sym, cap)
                 if r is None:
                     continue
+                r.update(bmax)
                 r.update(
                     {
                         "day": d.day,
