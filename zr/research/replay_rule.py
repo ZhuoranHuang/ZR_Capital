@@ -152,6 +152,43 @@ def random_control(
     }
 
 
+LOCAL_WINDOW = 15
+
+
+def random_control_local(
+    lk: Lookup,
+    real: pd.DataFrame,
+    direction: int,
+    cap: int,
+    window: int = LOCAL_WINDOW,
+    n: int = N_RANDOM,
+    seed: int = 0,
+) -> dict:
+    """时段匹配的随机对照：每笔真实入场换成同日 ±window 分钟内的随机决策分钟（同方向、同持仓上限）。
+
+    排除「随机分钟落在开盘等高成本时段」带来的偏差；分位 = 真实合计 ≥ 随机合计的比例。
+    """
+    rng = np.random.default_rng(seed)
+    net = lk.net[(direction, cap)]
+    totals = np.zeros(n)
+    for day, mins in real.groupby("day")["minute"]:
+        i = lk.day_ix.get(day)
+        if i is None:
+            continue
+        row = net[i]
+        for m in mins.to_numpy():
+            lo = max(oc.FIRST_ENTRY, int(m) - window)
+            hi = min(oc.LAST_ENTRY, int(m) + window)
+            cand = lo + np.flatnonzero(np.isfinite(row[lo : hi + 1]))
+            if len(cand):
+                totals += row[cand[rng.integers(0, len(cand), size=n)]]
+    real_total = float(real["net"].sum())
+    return {
+        "local_p50": round(float(np.percentile(totals, 50)), 1),
+        "real_pctile_local": round(float((totals <= real_total).mean() * 100), 1),
+    }
+
+
 def minute_matrix(
     days: list, sday: np.ndarray, minute: np.ndarray, values: np.ndarray
 ) -> np.ndarray:

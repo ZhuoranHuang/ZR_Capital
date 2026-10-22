@@ -8,6 +8,7 @@
   10 分钟方向化收益均值与 t。
 - 回放（真实期权，期权日）：每组 × 方向 × 持仓上限 {10, 30}，决策分钟 = 信号 bar + 1，合约与出场同
   zr/research/outcomes.py；随机对照 = 同日同笔数、同方向同持仓上限的随机决策分钟。
+- 随机对照两种：全天随机分钟（real_pctile）与同日 ±15 分钟时段匹配（real_pctile_local）。
 - 多重比较：预登记试验数 = 回放行数；Bonferroni 双侧 5% 的 |t| 门槛由代码算出。
 运行：uv run python -m zr.research.e1_sweep --symbol MU.US
 """
@@ -34,7 +35,7 @@ from zr.ops.markdown import df_to_md
 from zr.research import outcomes as oc
 from zr.research.labels import rolling_sigma
 from zr.research.labels_v2 import mfe_mae
-from zr.research.replay_rule import Lookup, random_control, stats
+from zr.research.replay_rule import Lookup, random_control, random_control_local, stats
 
 log = logging.getLogger("zr.research.e1_sweep")
 START, END = dt.date(2023, 10, 2), dt.date(2026, 10, 21)
@@ -147,6 +148,7 @@ def run(
                     )
                 if len(t) >= 5:
                     s.update(random_control(lk, t, d, cap, elig, n_random))
+                    s.update(random_control_local(lk, t, d, cap, n=n_random))
                 rp_rows.append(s)
     evt, rp = pd.DataFrame(ev_rows), pd.DataFrame(rp_rows)
     log.info("遍历完成 %d 组，%.0fs", len(grid(cfg)), time.monotonic() - t0)
@@ -167,6 +169,7 @@ def marginals(rp: pd.DataFrame, cap: int) -> pd.DataFrame:
                     "best_mean_net": round(float(g["mean_net"].max()), 2),
                     "rows_mean_net>0": int((g["mean_net"] > 0).sum()),
                     "median_real_pctile": round(float(g["real_pctile"].median()), 1),
+                    "median_pctile_local": round(float(g["real_pctile_local"].median()), 1),
                 }
             )
     for kind in ("pctb", "eps"):
@@ -180,6 +183,7 @@ def marginals(rp: pd.DataFrame, cap: int) -> pd.DataFrame:
                     "best_mean_net": round(float(g["mean_net"].max()), 2),
                     "rows_mean_net>0": int((g["mean_net"] > 0).sum()),
                     "median_real_pctile": round(float(g["real_pctile"].median()), 1),
+                    "median_pctile_local": round(float(g["real_pctile_local"].median()), 1),
                 }
             )
     return pd.DataFrame(rows)
@@ -199,6 +203,7 @@ def summary(rp: pd.DataFrame, cfg: dict) -> dict:
         "rows_mean_net_gt_0": int((r["mean_net"] > 0).sum()),
         "rows_t_gt_bonf": int((r.get("t_net", pd.Series(dtype=float)) > tb).sum()),
         "rows_pctile_ge_95": int((r["real_pctile"] >= 95).sum()),
+        "rows_pctile_local_ge_95": int((r["real_pctile_local"] >= 95).sum()),
         "best_mean_net": round(float(r["mean_net"].max()), 2),
         "best_combo": " / ".join(
             r.sort_values("mean_net", ascending=False).iloc[0][["combo", "side", "cap"]].astype(str)

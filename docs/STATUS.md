@@ -30,7 +30,6 @@
 
 1. **2026-10-25（SGT）删除旧数据目录** `./data_store`（确认 SSD 上数据完好、同步与拉取都写到 SSD 后）。
 2. **全量拉取已停在 2024-01**（2026-10-21 18:11 PT）：负责人 18:12 重启终端时用的是旧版脚本（默认 SOCKS），子 JVM 带 `-DsocksProxyHost=127.0.0.1:1080`，gRPC 上游全部 `503 io exception`。脚本已改为默认直连（`--proxy` 才用 HTTP CONNECT）。**请负责人用新脚本重启终端**：`bash scripts/run_theta_terminal.sh`，确认 `curl http://127.0.0.1:25503/v3/option/list/expirations?symbol=SPY` 返回 200 后告诉我，我重跑 `scripts/theta_full_pull.sh` 续传（2023-12 的 4 个失败日会自动重拉）。
-2b. **安全：Theta 终端的 REST/MCP 对局域网开放**——`host=127.0.0.1` 不限制监听（实测 `*.25503`，局域网 IP 访问 `/mcp/sse` 返回 200），macOS 防火墙关闭。三种处理方式见 DEPLOY.md「ThetaData」小节，均需 sudo，待负责人决定。
 3. 全量到位后：在 2 年期权数据上重跑元标签（加期权特征），报告同样指标（PLAN_W3 线 a）。
 
 ## 待确认
@@ -41,4 +40,3 @@
 4. D-008 蒙特卡洛脚本未入库（R-002）。
 5. Mac 合盖或电池模式仍会睡眠；全量拉取期间请接电源、不合盖（`caffeinate -i` 只防空闲睡眠）。
 6. ~~D-019 覆盖率 0%~~ → 负责人 10-22 改为 D-021（OI 水平特征），已实现。**可选**：「ATM±3 占比」的分母现在是开盘价 ±b 内的已拉取合约，不是全链；若要全链，需另拉 OI（每日每到期日 1 次请求，须等全量拉取结束，账户并发上限 4）。
-7. **防火墙**（2026-10-21 20:25 PT 复查）：防火墙已开启，但 `socketfilterfw --listapps` 显示 `~/thetadata/jdk/.../bin/java` 为「Allow incoming connections」；终端监听 `*:25503`，`config.toml` 的 host=127.0.0.1 不限制 MCP。本机访问自身局域网 IP 返回 200 不能作为证据（不经过应用防火墙），需从另一台设备访问 `http://<Mac 局域网 IP>:25503/mcp/sse` 复查。建议把 java 改为「阻止传入连接」（系统设置 → 网络 → 防火墙 → 选项）。

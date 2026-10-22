@@ -1,6 +1,7 @@
 """方法论 v2 第一轮报告（METHOD_V2 规格 11）→ docs/research/METHOD_V2_ROUND1.md。
 
-顺序：覆盖矩阵 → 回放结果 → 四条基线 → 标签与分层（R-018～R-022）→ 模型 → 决策模拟 → 审计 → 秒级。
+顺序：覆盖矩阵 → 回放结果 → E1 回踩遍历（D-022）→ 四条基线 → 标签与分层（R-018～R-022）
+→ 模型 → 决策模拟 → 审计 → 秒级。
 每节附边界声明（CLAUDE.md 规则 12）。前置：
   uv run python -m zr.research.outcomes --symbol MU.US
   uv run python -m zr.research.dataset_v2 --symbol MU.US
@@ -27,6 +28,7 @@ from zr.research import (
     audit_v2,
     baselines_v2,
     decision_sim,
+    e1_sweep,
     model_v2,
     outcomes,
     replay_rule,
@@ -138,6 +140,19 @@ def main(argv: list[str] | None = None) -> int:
     summ = rtext.split("## 16 组配置")[1].split("## 按")[0] if "## 16 组配置" in rtext else ""
     log.info("回放完成 %.0fs", time.monotonic() - t0)
 
+    # 1b E1 回踩深度遍历（D-022）
+    stext, _, srp = e1_sweep.run(root, und, START, END, a.n_random)
+    (repo / "docs" / "research" / f"E1_PULLBACK_SWEEP_{und}.md").write_text(stext, encoding="utf-8")
+    scfg = e1_sweep.load_config()
+    ssum = e1_sweep.summary(srp, scfg) if len(srp) else {}
+    smarg = {cap: e1_sweep.marginals(srp, cap) for cap in outcomes.CAPS} if len(srp) else {}
+    stop = (
+        srp[srp["n"] >= 30].sort_values("mean_net", ascending=False).head(10)
+        if len(srp)
+        else pd.DataFrame()
+    )
+    log.info("D-022 遍历完成 %.0fs", time.monotonic() - t0)
+
     # 2 基线
     base_tabs = []
     for cap in outcomes.CAPS:
@@ -234,6 +249,25 @@ def main(argv: list[str] | None = None) -> int:
         summ.strip(),
         "",
         f"边界：{bound}；随机对照 = 同日同笔数、同方向同持仓上限的随机决策分钟，{a.n_random} 次。",
+        "",
+    ]
+    L += [
+        "## 1b. E1 回踩深度遍历（D-022，R-029）",
+        "",
+        f"完整表见 `docs/research/E1_PULLBACK_SWEEP_{und}.md`（事件表 + 回放全表）。网格 "
+        "config/e1_sweep.yaml；试验计数与 Bonferroni 门槛见要点表。",
+        "",
+    ]
+    if ssum:
+        L += ["要点：", "", df_to_md(pd.DataFrame([ssum])), ""]
+        for cap, m in smarg.items():
+            L += [f"回放边际（持仓上限 {cap}，按维度取中位数）：", "", df_to_md(m), ""]
+        L += ["回放前 10 行（n ≥ 30，按 mean_net）：", "", df_to_md(stop), ""]
+    else:
+        L += [f"待 {und} 全量（无期权数据）。", ""]
+    L += [
+        f"边界：{bound}；回踩信号定义见 zr/features/pullback.py（深度 %b / ε 二选一、"
+        "至少 n 根同日回调后收阳、布林值取信号 bar）；随机对照同第 1 节。",
         "",
         "## 2. 四条基线（规格 8，R-025）",
         "",
