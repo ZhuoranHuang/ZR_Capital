@@ -96,6 +96,18 @@ def label_overview(ds: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _thin_note(tab: pd.DataFrame) -> str:
+    """阈值组笔数 < 30 时提示样本过少（目标正例率远低于阈值时常见）。"""
+    thr = tab[tab["group"].str.startswith("模型")]
+    thin = thr[thr["n"].fillna(0) < 30]
+    if thin.empty:
+        return ""
+    return (
+        f"注：{'、'.join(sorted(set(thin['group'])))} 有配置笔数 < 30，样本过少，不作结论；"
+        "固定阈值高于该目标的正例率时几乎不触发，参考第 4 节十分位表。\n"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--symbol", default="MU.US")
@@ -287,6 +299,7 @@ def main(argv: list[str] | None = None) -> int:
             "",
             df_to_md(tab),
             "",
+            _thin_note(tab),
             f"![decision](./{png})",
             "",
             "同一批月份的四条基线（持仓上限 30）：",
