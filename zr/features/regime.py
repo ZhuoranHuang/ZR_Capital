@@ -47,22 +47,31 @@ def _consec(flag: np.ndarray) -> np.ndarray:
 
 
 def indicators(
-    df: pd.DataFrame, cfg: dict, macd_key: str = "macd", daily_reset: bool = True
+    df: pd.DataFrame,
+    cfg: dict,
+    macd_key: str = "macd",
+    daily_reset: bool = True,
+    warmup: str = "nan",
 ) -> pd.DataFrame:
     """周期 P 的 K 线 → BOLL / MACD / 衍生量。
 
-    daily_reset=True（默认，D-027）：BOLL/MACD 每个交易日从头算，不跨日累计——
-    docs/research/INDICATOR_PARITY.md 核实这与长桥 App 的显示值在 3 个独立时刻上精确匹配
-    （BOLL mid/upper/lower 9 个值误差 0%，MACD DIF/DEA 残余误差 <0.0005 绝对值，来自 App 只显示
-    3 位小数的量化，不是口径差异）；daily_reset=False 保留作对照（D-026 的连续累计版，已知与
-    App 不符）。两种模式下 df 都应为 RTH-only bars（不含盘前盘后——核实发现含盘前盘后反而更不
-    匹配，取代 D-026「指标含盘前盘后」的假设）。
+    daily_reset=True（默认，D-027 底座）：BOLL/MACD 每个交易日从头算，df 为 RTH-only bars。
+    daily_reset=False + 含盘前盘后 bars = 连续全时段口径。2026-10-22 复核（V4_CHECKPOINTS.md）：
+    负责人的 3 个截图时刻在 App 显示精度（3 位小数）下两种口径都 15/15 精确相等，**截图区分不了**；
+    INDICATOR_PARITY.md 里「含盘前盘后误差 44%」是本地 2 分钟分箱锚在 04:01 的 bug，不是 App 行为。
+    只有「RTH-only 跨日连续」被截图排除（误差 2.38%）。
+
+    warmup：BOLL 不足 n 根时的处理。"nan"（不足 n 根为空值）或 "partial"（按已有根数算）。
+    MACD 的 EMA 从第一根就有值，不受影响。App 的实际处理未核实，见 docs/research/V4_CHECKPOINTS.md。
     """
+    if warmup not in ("nan", "partial"):
+        raise ValueError(f"warmup 只能是 nan / partial：{warmup}")
+    mp = 1 if warmup == "partial" else None
     m = cfg[macd_key]
     boll_n, boll_k = cfg["boll"]["n"], cfg["boll"]["k"]
 
     def _one_day(g: pd.DataFrame) -> pd.DataFrame:
-        b = ind.bollinger(g["close"], boll_n, boll_k)
+        b = ind.bollinger(g["close"], boll_n, boll_k, min_periods=mp)
         mc = ind.macd(g["close"], m["fast"], m["slow"], m["signal"])
         return pd.concat([b, mc], axis=1)
 

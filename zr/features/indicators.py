@@ -44,9 +44,13 @@ def macd(close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> p
     return pd.DataFrame({"dif": dif, "dea": dea, "hist": dif - dea})
 
 
-def bollinger(close: pd.Series, n: int = 20, k: float = 2.0) -> pd.DataFrame:
-    mid = sma(close, n)
-    std = close.rolling(n, min_periods=n).std(ddof=0)
+def bollinger(
+    close: pd.Series, n: int = 20, k: float = 2.0, min_periods: int | None = None
+) -> pd.DataFrame:
+    """min_periods=None 即 n（不足 n 根为 NaN）；给 1 则用部分窗口（不足 n 根时按已有根数算）。"""
+    mp = n if min_periods is None else min_periods
+    mid = close.rolling(n, min_periods=mp).mean()
+    std = close.rolling(n, min_periods=mp).std(ddof=0)
     upper = mid + k * std
     lower = mid - k * std
     band = upper - lower

@@ -59,12 +59,20 @@ def et_date(index: pd.DatetimeIndex) -> np.ndarray:
 
 
 def load_extended_bars(
-    root: Path, und: str, start: dt.date | None = None, end: dt.date | None = None
+    root: Path,
+    und: str,
+    start: dt.date | None = None,
+    end: dt.date | None = None,
+    clean: bool = True,
 ) -> pd.DataFrame:
     """读取含盘前盘后的连续 1 分钟 K（Pre + Intraday + Post），按交易日历过滤交易日，不做
     RTH 裁剪（供 v3 状态层的 BOLL/MACD 等指标用，与长桥 App 的连续图一致；信号/交易仍限
     09:30–16:00，由下游按分钟索引过滤，见 zr/research/sim_v3.py）。已用
     `zr.data.bar_quality.flag_extended_bars` 剔除坏 bar。
+
+    clean=False：不剔除，保留长桥原始 K（App 画的就是原始 K）。注意 clean=True 会误删真实的
+    RTH 大振幅 bar：ATR 跨 session 连续计算，安静盘前之后的开盘急跌 bar 振幅 > 5×ATR 被当成坏 bar
+    （MU 2026-10-21 的 09:32、12:39 两根被删，13:00 中轨与 App 差 0.24，见 V4_CHECKPOINTS.md）。
     """
     from zr.data.bar_quality import clean_extended_bars
     from zr.data.calendar import is_trading_day
@@ -81,7 +89,8 @@ def load_extended_bars(
     uniq = {d: is_trading_day(d) for d in set(days)}
     df = df[np.fromiter((uniq[d] for d in days), dtype=bool, count=len(days))]
     df = df[~df.index.duplicated(keep="last")]
-    df = clean_extended_bars(df)
+    if clean:
+        df = clean_extended_bars(df)
     if start is not None or end is not None:
         d = et_date(df.index)
         if start is not None:
@@ -94,11 +103,14 @@ def load_extended_bars(
 def resample_bars(df: pd.DataFrame, rule: str) -> pd.DataFrame:
     """按美东日分组后 resample（label=left，bar 时间戳 = 开盘时刻），不跨日。
 
-    rule 如 "2min" / "5min"。
+    rule 如 "2min" / "5min"。分箱锚定在 UTC 零点（origin="start_day"），即整分钟网格
+    （2 分钟 K 落在偶数分钟，与长桥原生 2 分钟 K 一致）。不用 origin="start"：含盘前盘后数据
+    经 clean_extended_bars 清洗后当日 04:00 那根常被删、首根变成 04:01，会把全天分箱错开一分钟
+    （MU 767 天里 286 天，见 V4_CHECKPOINTS.md）。
     """
     parts = []
     for _, g in df.groupby(et_date(df.index)):
-        r = g.resample(rule, label="left", closed="left", origin="start").agg(OHLCV_AGG)
+        r = g.resample(rule, label="left", closed="left", origin="start_day").agg(OHLCV_AGG)
         parts.append(r.dropna(subset=["open"]))
     out = pd.concat(parts)
     out.index.name = "ts"
