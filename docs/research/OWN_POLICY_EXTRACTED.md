@@ -1,6 +1,6 @@
 # 负责人打法提取（METHOD_V3 第 7 节）
 
-生成：2026-10-22T13:08:30+00:00 UTC · 复现 `uv run python -m zr.research.own_policy`
+生成：2026-10-22T14:15:10+00:00 UTC · 复现 `uv run python -m zr.research.own_policy`
 
 ## 157 笔按状态分类（决策 K = 入场前最后一根已收盘 2 分钟 K；「同向 / 反向」= 状态方向与所买 call / put 方向是否一致；盈亏为实际成交扣费后）
 
@@ -33,7 +33,7 @@
 
 | rule | side | rows_n_ge_30 | events_max_n | median_per_contract | best_per_contract | rows_mean_gt_0 | grid_median_per_contract | grid_best_per_contract |
 |---|---|---|---|---|---|---|---|---|
-| OWN_call | long | 468 | 24242 | -23.53 | -22.55 | 0 | -24.12 | 1.34 |
+| OWN_call | long | 468 | 24244 | -23.53 | -22.55 | 0 | -24.12 | 1.34 |
 | OWN_put | short | 468 | 1483 | -41.61 | -37.38 | 0 | -26.28 | -16.22 |
 
 边界：规则从 2026-07～08 的 20 个交易日学出，再放到 2023-10～2026-10 全样本回放——学习期包含在回放期内，不是独立验证；正样本只有几十个决策 K，树的阈值不稳定。成交口径同第 6 节（D-023）。

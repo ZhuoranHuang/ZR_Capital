@@ -53,6 +53,7 @@ from zr.research.own_policy import apply_rule, tree_rule
 log = logging.getLogger("zr.research.model_v3")
 PERIOD = 2
 TP, SL, CAP = 0.20, 0.30, 15
+NAN_NOTE = "\n\n规则中的缺失值按 −999 参与比较（例如 `x <= 阈值` 包含 x 缺失的行）。"
 
 
 def v2_frame(root: Path, und: str, df: pd.DataFrame) -> pd.DataFrame:
@@ -235,6 +236,57 @@ def deciles(res: pd.DataFrame, col: str) -> pd.DataFrame:
     ).reset_index()
 
 
+def extract_rule(oos: pd.DataFrame, cols: list[str]) -> dict:
+    """样本外最高十分位 → 深度 ≤ 3 决策树 → 正样本占比最高的叶子规则及其真实期权盈亏。"""
+    top = (oos["p_optuna"] >= oos["p_optuna"].quantile(0.9)).astype(int).to_numpy()
+    Xo = np.nan_to_num(oos[cols].astype(float).to_numpy(), nan=-999.0)
+    tree = DecisionTreeClassifier(max_depth=3, min_samples_leaf=200, random_state=0).fit(Xo, top)
+    path, share, _ = tree_rule(tree, cols, min_pos=50)
+    if not path:
+        return {}
+    sel = oos[apply_rule(oos[cols], path)]
+    yr = pd.to_datetime(sel["day"].astype(str)).dt.year
+    return {
+        "rule": " 且 ".join(f"{c} {op} {t:.4g}" for c, op, t in path),
+        "n_rows": int(len(sel)),
+        "n_events": int(sel[["day", "e", "direction"]].drop_duplicates().shape[0]),
+        "mean_per_contract": round(float(sel["net"].mean() / 2), 2) if len(sel) else np.nan,
+        "win_rate": round(float((sel["net"] > 0).mean()), 3) if len(sel) else np.nan,
+        "mean_per_contract_2026": round(float(sel.loc[yr == 2026, "net"].mean() / 2), 2)
+        if (yr == 2026).any()
+        else np.nan,
+        "top_decile_share_in_leaf": round(float(share), 3),
+    }
+
+
+def rules_only(und: str) -> None:
+    """不重训：从已保存的样本外预测重算规则，替换 model_<UND>.md 的规则表与 model_rules parquet。"""
+    root = get_settings().zr_data_root
+    store = root / "research" / "v3"
+    oos = pd.read_parquet(store / f"model_oos_{und}.parquet")
+    oos = oos[oos["p_optuna"].notna()]
+    drop = {"p_fixed", "p_optuna", "y"}
+    cols = [c for c in feature_list(oos.drop(columns=list(drop)), und) if c != "direction"] + [
+        "direction"
+    ]
+    rs = extract_rule(oos, cols)
+    md = (store / f"model_{und}.md").read_text(encoding="utf-8")
+    head, rest = md.split("样本外最高十分位的深度 ≤ 3 决策树规则（并入 RULE_CARDS 附录）：", 1)
+    tail = rest[rest.index("边界：") :]
+    body = (df_to_md(pd.DataFrame([rs])) + NAN_NOTE) if rs else "无满足条件的叶子。"
+    (store / f"model_{und}.md").write_text(
+        head
+        + "样本外最高十分位的深度 ≤ 3 决策树规则（并入 RULE_CARDS 附录）：\n\n"
+        + body
+        + "\n\n"
+        + tail,
+        encoding="utf-8",
+    )
+    (pd.DataFrame([rs]) if rs else pd.DataFrame()).to_parquet(
+        store / f"model_rules_{und}.parquet", index=False
+    )
+
+
 def run(und: str, n_trials: int) -> tuple[str, pd.DataFrame]:
     t0 = time.monotonic()
     cfg = load_config()
@@ -249,27 +301,7 @@ def run(und: str, n_trials: int) -> tuple[str, pd.DataFrame]:
     auc_f = roc_auc_score(oos["y"], oos["p_fixed"]) if len(oos) else np.nan
     auc_o = roc_auc_score(oos["y"], oos["p_optuna"]) if len(oos) else np.nan
     df_f, df_o = deciles(oos, "p_fixed"), deciles(oos, "p_optuna")
-    # 规则提取：样本外最高十分位
-    top = (oos["p_optuna"] >= oos["p_optuna"].quantile(0.9)).astype(int).to_numpy()
-    Xo = np.nan_to_num(oos[cols].astype(float).to_numpy(), nan=-999.0)
-    tree = DecisionTreeClassifier(max_depth=3, min_samples_leaf=200, random_state=0).fit(Xo, top)
-    path, share, _ = tree_rule(tree, cols, min_pos=50)
-    rule_stats = {}
-    if path:
-        m = apply_rule(oos[cols], path)
-        sel = oos[m]
-        yr = pd.to_datetime(sel["day"].astype(str)).dt.year
-        rule_stats = {
-            "rule": " 且 ".join(f"{c} {op} {t:.4g}" for c, op, t in path),
-            "n_rows": int(len(sel)),
-            "n_events": int(sel[["day", "e", "direction"]].drop_duplicates().shape[0]),
-            "mean_per_contract": round(float(sel["net"].mean() / 2), 2),
-            "win_rate": round(float((sel["net"] > 0).mean()), 3),
-            "mean_per_contract_2026": round(float(sel.loc[yr == 2026, "net"].mean() / 2), 2)
-            if (yr == 2026).any()
-            else np.nan,
-            "top_decile_share_in_leaf": round(float(share), 3),
-        }
+    rule_stats = extract_rule(oos, cols)
     months = sorted(oos["day"].astype(str).str[:7].unique())
     L = [
         f"## 模型（第 8 节，{und}）",
@@ -299,7 +331,7 @@ def run(und: str, n_trials: int) -> tuple[str, pd.DataFrame]:
         "",
         "样本外最高十分位的深度 ≤ 3 决策树规则（并入 RULE_CARDS 附录）：",
         "",
-        df_to_md(pd.DataFrame([rule_stats])) if rule_stats else "无满足条件的叶子。",
+        (df_to_md(pd.DataFrame([rule_stats])) + NAN_NOTE) if rule_stats else "无满足条件的叶子。",
         "",
         f"边界：标的 {und}；期权日 2023-10-02～2026-10-21；成交口径 D-023；只评估一组 X6/X7；"
         "十分位与规则都在样本外月份上计算，但规则是在同一批样本外数据上提取的（描述性，"
@@ -313,9 +345,13 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--symbol", default="MU.US")
     ap.add_argument("--trials", type=int, default=15)
+    ap.add_argument("--rules-only", action="store_true", help="从已保存的样本外预测重算规则")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     und = a.symbol.split(".")[0]
+    if a.rules_only:
+        rules_only(und)
+        return 0
     text, rules = run(und, a.trials)
     root = get_settings().zr_data_root
     (root / "research" / "v3" / f"model_{und}.md").write_text(text, encoding="utf-8")

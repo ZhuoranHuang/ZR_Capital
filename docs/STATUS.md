@@ -24,7 +24,7 @@
 ## 进行中
 
 - **ThetaData 全量拉取**：MU、QQQ 完成（各 767 个交易日，2023-10-02～2026-10-21）；**SPY 按负责人指令暂停于 2024-07-30**（208 天，保留），续拉命令见 DATA_INVENTORY。拉取进程已全部停止；脚本单实例锁改为 noclobber 原子创建。
-- **方法论 v3 第一轮已完成**（`docs/research/METHOD_V3_ROUND1.md`）：QQQ 伪影根因 = v2 结构止损一分钟前视（D-023，`QQQ_ARTIFACT.md`），修复后 QQQ 随机入场两方向 −9～−11 USD/笔；v3 网格 127,872 行无一过 Bonferroni；规则卡 MU 16 张（同一入场，随机分位中位 18.7）、QQQ 1,640 张（t ≤ 1.82）；负责人 157 笔按状态分类：逆点火方向 11 笔 −10,009 USD；结果登记 R-030～R-032。
+- **方法论 v3 第一轮已完成**（`docs/research/METHOD_V3_ROUND1.md`）：QQQ 伪影根因 = v2 结构止损一分钟前视（D-023，`QQQ_ARTIFACT.md`），修复后 QQQ 随机入场两方向 −9～−11 USD/笔；v3 网格 127,872 行无一过 Bonferroni；规则卡 MU 16 张（同一入场，随机分位中位 18.7）、QQQ 1,640 张（t ≤ 1.82）；负责人 157 笔按状态分类：逆点火方向 11 笔 −10,009 USD；模型样本外 AUC MU 0.562（Optuna 0.543）、QQQ 0.536（0.533），十分位全部为负；结果登记 R-030～R-032。依赖新增 optuna 5.0.0。
 - 方法论 v2 第一轮（`METHOD_V2_ROUND1*.md`）的期权盈亏数字含前视偏差，按 D-023 作废为绝对值结论。
 - **数据根已迁到外接 SSD**（APFS）：`/Volumes/ZHITAI TiPlus9100 2TB Media/zr_data`，4,141 个文件 / 345,158,096 字节核对一致；`.env` 只改了 `ZR_DATA_ROOT` 一行；同步、录制、全量拉取脚本经 `scripts/lib/data_root.sh` 解析，盘未挂载时报错退出。
 - 录制器：VPS 10-22 13:20 UTC 起按 timer 运行（SPY/QQQ/MU，239 订阅）。

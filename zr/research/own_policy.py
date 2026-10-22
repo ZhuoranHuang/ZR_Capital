@@ -109,7 +109,7 @@ def tree_rule(tree: DecisionTreeClassifier, cols: list[str], min_pos: int = 5):
 def apply_rule(f: pd.DataFrame, path) -> np.ndarray:
     m = np.ones(len(f), dtype=bool)
     for col, op, thr in path:
-        v = f[col].to_numpy(float)
+        v = np.nan_to_num(f[col].to_numpy(float), nan=-999.0)  # 与训练树时的缺失值填充一致
         with np.errstate(invalid="ignore"):
             m &= (v <= thr) if op == "<=" else (v > thr)
     return m
