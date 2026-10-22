@@ -26,6 +26,7 @@ from zr.journal.analyze_history import load
 from zr.journal.intraday_list import build as build_list
 
 log = logging.getLogger("zr.research.fill_model")
+REPO = Path(__file__).resolve().parents[2]
 PRE = pd.Timedelta(seconds=60)
 POST = pd.Timedelta(seconds=300)
 LIMIT_TYPES = ("LO", "LIT")
@@ -227,7 +228,7 @@ def pull_v4_trades(root: Path, und: str = "MU", concurrency: int = 4) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["pull", "pull-v4-trades"])
+    ap.add_argument("cmd", choices=["pull", "pull-v4-trades", "calibrate"])
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     root = get_settings().zr_data_root
@@ -237,7 +238,344 @@ def main(argv: list[str] | None = None) -> int:
         log.info("拉取：%s", pull(root, s))
     elif args.cmd == "pull-v4-trades":
         log.info("V4 成交拉取：%s", pull_v4_trades(root))
+    elif args.cmd == "calibrate":
+        f = order_features(root, s)
+        coef, tab = fit_fill_prob(f)
+        store = root / "research" / "fill_model"
+        store.mkdir(parents=True, exist_ok=True)
+        f.to_parquet(store / "owner_order_features.parquet", index=False)
+        head = ["# 限价单成交模型校准（负责人订单，feat/fill-model 第 1 节）", "",
+                f"生成：{dt.datetime.now(dt.UTC).isoformat(timespec='seconds')} UTC · 复现 "
+                "`uv run python -m zr.research.fill_model pull` → `calibrate`", ""]
+        out = REPO / "docs" / "research" / "FILL_MODEL_CALIBRATION.md"
+        out.write_text("\n".join(head + report_calibration(f, coef, tab)), encoding="utf-8")
+        log.info("写入 %s", out)
     return 0
+
+
+
+# ---------------- 第 1 节：校准 ----------------
+
+DELTAS_FILL = (10, 30, 60)
+DELTAS_CANCEL = (30, 60, 300)
+HORIZONS = (2, 5, 10, 30, 60, 300)
+
+
+def _load_ticks(root: Path, oid) -> tuple[pd.DataFrame, pd.DataFrame] | None:
+    qp, tp = _path(root, oid, "quotes"), _path(root, oid, "trades")
+    if not qp.exists():
+        return None
+    q = pd.read_parquet(qp)
+    q = q[(q["ask"] > 0) & (q["bid"] > 0) & (q["ask"] >= q["bid"])].copy()
+    if q.empty:
+        return None
+    q["ts"] = pd.to_datetime(q["ts"], utc=True)
+    q = q.sort_values("ts", kind="stable").reset_index(drop=True)
+    q["ns"] = pd.DatetimeIndex(q["ts"]).as_unit("ns").asi8
+    t = pd.read_parquet(tp) if tp.exists() else pd.DataFrame(columns=["ts", "price", "size"])
+    if len(t):
+        t["ts"] = pd.to_datetime(t["ts"], utc=True)
+        t = t.sort_values("ts", kind="stable").reset_index(drop=True)
+    return q, t
+
+
+def _asof(q: pd.DataFrame, ts: pd.Timestamp):
+    i = int(np.searchsorted(q["ns"].to_numpy(), ts.value, side="right")) - 1
+    return q.iloc[max(i, 0)]
+
+
+def order_features(root: Path, s: pd.DataFrame) -> pd.DataFrame:
+    from zr.execution.ticks import tick_size
+
+    _, ex, _ = load(root)
+    ex = ex.assign(ts=_utc(ex["ts_et"], naive_is_utc=False))
+    first_fill = ex.groupby("order_id")["ts"].min()
+    rows = []
+    for _, r in s.iterrows():
+        w = window(r)
+        base = {
+            k: r[k]
+            for k in (
+                "order_id",
+                "group",
+                "symbol",
+                "und",
+                "side",
+                "type",
+                "status",
+                "limit",
+                "qty",
+                "filled_qty",
+            )
+        }
+        if w is None:
+            rows.append({**base, "skip": "盘外"})
+            continue
+        d = _load_ticks(root, r["order_id"])
+        if d is None:
+            rows.append({**base, "skip": "无有效报价"})
+            continue
+        q, t = d
+        sgn = 1 if r["side"] == "Buy" else -1
+        t0 = max(r["submit"], w[0] + PRE)
+        a0 = _asof(q, t0)
+        mid0, spr = (a0["bid"] + a0["ask"]) / 2, a0["ask"] - a0["bid"]
+        tick = float(tick_size(r["symbol"], mid0))
+        lim = float(r["limit"]) if pd.notna(r["limit"]) else np.nan
+        prev = _asof(q, t0 - pd.Timedelta(seconds=30))
+        out = {
+            **base,
+            "skip": "",
+            "t0": t0,
+            "bid0": a0["bid"],
+            "ask0": a0["ask"],
+            "mid0": mid0,
+            "spread": spr,
+            "spread_ticks": spr / tick,
+            "spread_pct": spr / mid0 * 100,
+            "tick": tick,
+            "offset_ticks": sgn * (lim - mid0) / tick,
+            "offset_spread": sgn * (lim - mid0) / spr if spr > 0 else np.nan,
+            "marketable": bool((lim >= a0["ask"]) if sgn == 1 else (lim <= a0["bid"])),
+            "mid_dir30_ticks": sgn * (mid0 - (prev["bid"] + prev["ask"]) / 2) / tick,
+            "filled": r["filled_qty"] > 0,
+            "full": r["filled_qty"] >= r["qty"],
+            "live_s": (r["end"] - t0).total_seconds() if pd.notna(r["end"]) else np.nan,
+        }
+        ff = first_fill.get(r["order_id"])
+        if pd.notna(ff) and out["filled"]:
+            out["fill_s"] = max((ff - t0).total_seconds(), 0.0)
+            af = _asof(q, ff)
+            m_f = (af["bid"] + af["ask"]) / 2
+            for dlt in DELTAS_FILL:
+                aa = _asof(q, ff + pd.Timedelta(seconds=dlt))
+                out[f"adv_{dlt}s_ticks"] = sgn * ((aa["bid"] + aa["ask"]) / 2 - m_f) / tick
+                out[f"adv_{dlt}s_pct"] = sgn * ((aa["bid"] + aa["ask"]) / 2 / m_f - 1) * 100
+        if r["status"] in ("Canceled", "Expired") and pd.notna(r["end"]):
+            ac = _asof(q, r["end"])
+            m_c = (ac["bid"] + ac["ask"]) / 2
+            for dlt in DELTAS_CANCEL:
+                aa = _asof(q, r["end"] + pd.Timedelta(seconds=dlt))
+                out[f"miss_{dlt}s_ticks"] = sgn * ((aa["bid"] + aa["ask"]) / 2 - m_c) / tick
+                out[f"miss_{dlt}s_pct"] = sgn * ((aa["bid"] + aa["ask"]) / 2 / m_c - 1) * 100
+        # 触价：卖一 ≤ 挂单价（买）或 OPRA 成交价 ≤ 挂单价（买）首次出现的时刻
+        qq = q[q["ts"] >= t0]
+        touch_q = qq["ts"][(qq["ask"] <= lim) if sgn == 1 else (qq["bid"] >= lim)]
+        tt = t[t["ts"] >= t0] if len(t) else t
+        touch_t = (
+            tt["ts"][(tt["price"] <= lim) if sgn == 1 else (tt["price"] >= lim)]
+            if len(tt)
+            else pd.Series(dtype="datetime64[ns, UTC]")
+        )
+        through = (
+            tt["ts"][(tt["price"] < lim) if sgn == 1 else (tt["price"] > lim)]
+            if len(tt)
+            else pd.Series(dtype="datetime64[ns, UTC]")
+        )
+        out["through_trade_s"] = (through.iloc[0] - t0).total_seconds() if len(through) else np.nan
+        out["touch_quote_s"] = (touch_q.iloc[0] - t0).total_seconds() if len(touch_q) else np.nan
+        out["touch_trade_s"] = (touch_t.iloc[0] - t0).total_seconds() if len(touch_t) else np.nan
+        rows.append(out)
+    return pd.DataFrame(rows)
+
+
+def fit_fill_prob(f: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """成交概率：对每个时长 T，样本 = 存活至少 T 秒或在 T 内成交的订单，y = T 内成交；
+    特征 = 挂单位置（÷ spread）、log T、最近 30 秒中间价方向（tick，按方向）、spread（tick）。
+    样本小，用带 L2 的逻辑回归，系数只作描述。"""
+    from sklearn.linear_model import LogisticRegression
+
+    g = f[(f["skip"] == "") & f["type"].isin(LIMIT_TYPES) & f["offset_spread"].notna()].copy()
+    rows = []
+    for T in HORIZONS:
+        filled_in = g["filled"] & (g["fill_s"] <= T)
+        alive = g["live_s"].fillna(np.inf) >= T
+        m = filled_in | alive
+        for _, r in g[m].iterrows():
+            rows.append(
+                {
+                    "T": T,
+                    "y": int(filled_in.loc[r.name]),
+                    "offset_spread": r["offset_spread"],
+                    "logT": np.log(T),
+                    "mid_dir30_ticks": r["mid_dir30_ticks"],
+                    "spread_ticks": r["spread_ticks"],
+                    "marketable": r["marketable"],
+                }
+            )
+    d = pd.DataFrame(rows)
+    X = d[["offset_spread", "logT", "mid_dir30_ticks", "spread_ticks"]].to_numpy(float)
+    mdl = LogisticRegression(C=1.0, max_iter=1000).fit(X, d["y"])
+    coef = pd.DataFrame(
+        {
+            "特征": [
+                "截距",
+                "挂单位置 ÷ spread",
+                "log 等待秒数",
+                "最近 30 秒中间价方向（tick）",
+                "spread（tick）",
+            ],
+            "系数": np.r_[mdl.intercept_, mdl.coef_[0]].round(3),
+        }
+    )
+    d["p_hat"] = mdl.predict_proba(X)[:, 1]
+    d["pos_bucket"] = pd.cut(
+        d["offset_spread"],
+        [-np.inf, -0.25, 0.0, 0.25, 0.5, np.inf],
+        labels=[
+            "≤ −0.25（靠近己方报价）",
+            "(−0.25, 0]",
+            "(0, 0.25]",
+            "(0.25, 0.5]（靠近对手价）",
+            "> 0.5（越过对手价）",
+        ],
+    )
+    tab = (
+        d.groupby(["T", "pos_bucket"], observed=True)
+        .agg(订单数=("y", "size"), 实际成交率=("y", "mean"), 模型成交率=("p_hat", "mean"))
+        .round(3)
+    )
+    return coef, tab.reset_index()
+
+
+def _q(x: pd.Series) -> str:
+    x = x.dropna()
+    return (
+        f"{x.median():.2f}（P25 {x.quantile(0.25):.2f} / P75 {x.quantile(0.75):.2f}，n={len(x)}）"
+        if len(x)
+        else "—"
+    )
+
+
+def report_calibration(f: pd.DataFrame, coef: pd.DataFrame, tab: pd.DataFrame) -> list[str]:
+    from zr.ops.markdown import df_to_md
+
+    g = f[f["skip"] == ""].copy()
+    g["filled"] = g["filled"].astype(bool)
+    lim = g[g["type"].isin(LIMIT_TYPES)]
+    fl, uf = lim[lim["filled"]], lim[~lim["filled"]]
+    before = uf["touch_trade_s"] <= uf["live_s"]
+    thr_before = uf["through_trade_s"] <= uf["live_s"]
+    by_pos = lim.assign(
+        pos=pd.cut(lim["offset_spread"], [-np.inf, -1, -0.5, -0.25, 0, 0.25, 0.5, np.inf])
+    ).groupby("pos", observed=True)
+    pos_tab = pd.DataFrame(
+        {
+            "订单数": by_pos.size(),
+            "成交率": by_pos["filled"].mean().round(3),
+            "成交耗时中位（秒）": by_pos["fill_s"].median().round(1),
+        }
+    ).reset_index()
+    adv = pd.DataFrame(
+        [
+            {
+                "成交后": f"+{d} 秒",
+                "中间价变化中位（tick，按方向）": round(float(fl[f"adv_{d}s_ticks"].median()), 2),
+                "中位（% 中间价）": round(float(fl[f"adv_{d}s_pct"].median()), 2),
+                "不利（< 0）占比": round(float((fl[f"adv_{d}s_ticks"] < 0).mean()), 2),
+            }
+            for d in DELTAS_FILL
+        ]
+    )
+    canc = g[g["status"].isin(["Canceled", "Expired"])]
+    miss = pd.DataFrame(
+        [
+            {
+                "撤单后": f"+{d} 秒",
+                "中间价变化中位（tick，按方向）": round(
+                    float(canc[f"miss_{d}s_ticks"].median()), 2
+                ),
+                "中位（% 中间价）": round(float(canc[f"miss_{d}s_pct"].median()), 2),
+                "错过有利行情（> 0）占比": round(float((canc[f"miss_{d}s_ticks"] > 0).mean()), 2),
+            }
+            for d in DELTAS_CANCEL
+        ]
+    )
+    ctx = (
+        lim.groupby("group")
+        .agg(
+            订单数=("order_id", "size"),
+            成交率=("filled", "mean"),
+            spread_tick中位=("spread_ticks", "median"),
+            spread_pct中位=("spread_pct", "median"),
+            挂单距中间价tick中位=("offset_ticks", "median"),
+            挂单位置除spread中位=("offset_spread", "median"),
+            提交即可成交占比=("marketable", "mean"),
+            存活秒中位=("live_s", "median"),
+        )
+        .round(3)
+        .reset_index()
+    )
+    return [
+        "## 1. 样本",
+        "",
+        df_to_md(g.groupby(["group", "type", "side"]).size().rename("订单数").reset_index()),
+        "",
+        f"另有 {int((f['skip'] == '盘外').sum())} 单完全在盘外提交并撤掉（期权不交易），"
+        f"{int((f['skip'] == '无有效报价').sum())} 单窗口内无有效报价，未纳入。"
+        "负责人 92 笔撤单中 88 笔是限价单（其余为市价 / 条件单）。分析单位是订单。",
+        "",
+        "## 2. 提交时的盘口与挂单位置（限价单）",
+        "",
+        "挂单位置 = (挂单价 − 中间价) × 方向 ÷ sprea"
+        "d：0 = 挂在中间价，+0.5 = 挂在对手价（买单挂卖一），"
+        "−0.5 = 挂在己方最优价（买单挂买一），< −0.5 = 挂在己方最优价之外。",
+        "",
+        df_to_md(ctx),
+        "",
+        "## 3. 成交与挂单位置",
+        "",
+        df_to_md(pos_tab),
+        "",
+        f"- 成交耗时（已成交的限价单）：{_q(fl['fill_s'])} 秒；部分成交 "
+        f"{int((lim['filled'] & ~lim['full'].astype(bool)).sum())} 单。",
+        f"- 撤单 / 过期前存活时长：{_q(uf['live_s'])} 秒。",
+        "",
+        "## 4. 「触价即成交」规则的检验",
+        "",
+        f"- 已成交 {len(fl)} 单：成交时刻之前，盘口卖一（买单）已 ≤ 挂单价的 "
+        f"{int((fl['touch_quote_s'] <= fl['fill_s'] + 1).sum())} 单；有 OPRA 成交价 ≤ 挂单价的 "
+        f"{int((fl['touch_trade_s'] <= fl['fill_s'] + 1).sum())}"
+        f" 单。**只看盘口会漏掉一半以上的成交**"
+        "——负责人的成交大多是别人的市价单打到挂单价，盘口并没有越过挂单价。",
+        f"- 未成交 {len(uf)} 单：撤单前已有 OPRA 成交价 ≤ 挂单价（触价）的 {int(before.sum())} 单，"
+        f"其中成交价严格越过挂单价的 {int(thr_before.sum())} 单。",
+        f"- 合起来：撤单前被成交价触到的限价单里，实际成交 {len(fl)}"
+        f" / {len(fl) + int(before.sum())}"
+        f"（{len(fl) / max(len(fl) + int(before.sum()), 1):.0%}"
+        f"）。只「触到」但没「越过」时可能因排队"
+        "没轮到；模拟时把「越过」记为确定成交、「触到」记为按此比例成交。",
+        "",
+        "## 5. 成交后的逆向选择（按方向：> 0 = 成交后价格朝有利方向走）",
+        "",
+        df_to_md(adv),
+        "",
+        "## 6. 撤单后的错过机会（按方向：> 0 = 撤掉之后价格朝原本想要的方向走）",
+        "",
+        df_to_md(miss),
+        "",
+        "## 7. 成交概率拟合（逻辑回归，带 L2；样本小，系数只作描述）",
+        "",
+        "样本：每个等待时长 T ∈ {2, 5, 10, 30, 60, 300} 秒，取在 T 内成交或存活至少 T 秒的限价单，"
+        "y = T 内是否成交。",
+        "",
+        df_to_md(coef),
+        "",
+        "拟合与实际（按挂单位置分组）：",
+        "",
+        df_to_md(tab),
+        "",
+        "## 边界",
+        "",
+        "- 负责人 2026-06-09～2026-08-19 的订单（D"
+        "-030 入选段 + 同期撤单 / 过期限价单），以 MU 为主；"
+        "单一交易者、单一券商（长桥）的执行，不代表一般限价单成交率。",
+        "- 订单时间：成交用对账单成交时刻（秒级），撤单 / 过期用订单最后更新时刻；tick 为毫秒级，"
+        "存在对时误差。",
+        "- 「最近 30 秒中间价方向」只用提交前的报价；"
+        "成交后 / 撤单后的变化是事后统计，不进模型特征。",
+        "",
+    ]
 
 
 if __name__ == "__main__":
