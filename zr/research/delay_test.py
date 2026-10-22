@@ -22,7 +22,7 @@ from pathlib import Path
 import pandas as pd
 
 from zr.config import get_settings
-from zr.features.bars import load_bars
+from zr.features.bars import load_extended_bars
 from zr.features.option_features import option_days
 from zr.features.regime import load_config
 from zr.ops.markdown import df_to_md
@@ -39,7 +39,7 @@ def run(und: str, top_n: int = 20) -> tuple[str, pd.DataFrame]:
     t0 = time.monotonic()
     cfg = load_config()
     root = get_settings().zr_data_root
-    stock = load_bars(root, und)
+    stock = load_extended_bars(root, und)
     days = option_days(root, und)
 
     base = sv.run_grid(root, und, stock, cfg, [PERIOD], days, macd_key=MACD_KEY)
