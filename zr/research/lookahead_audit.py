@@ -45,9 +45,9 @@ from zr.research import patterns_v3 as pt
 from zr.research import sim_v3 as sv
 
 log = logging.getLogger("zr.research.lookahead_audit")
-N_FAST = 10  # 每标的；MU+QQQ 合计 500
-N_OPT = 10  # 每标的（期权链特征 I/O 昂贵，见模块 docstring）
-N_PICK_DAYS = 2  # 合约选择核对的交易日数（每日抽样多个决策分钟）
+N_FAST = 250  # 每标的；MU+QQQ 合计 500
+N_OPT = 15  # 每标的（期权链特征 I/O 昂贵，见模块 docstring；原定 20，按实测耗时下调）
+N_PICK_DAYS = 15  # 合约选择核对的交易日数（每日抽样多个决策分钟）
 RTOL = 1e-9
 
 

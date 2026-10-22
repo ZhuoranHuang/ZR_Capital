@@ -173,12 +173,29 @@ class PeriodData:
     rules: list
 
 
+def shift_signal_within_day(sig: np.ndarray, day: np.ndarray, k: int) -> np.ndarray:
+    """把信号数组在同一交易日内后移 k 根（跨日边界的丢弃，不回绕到下一天/上一天）。
+
+    用于前视审计的「延迟测试」（fix/lookahead-audit 第 1 节）：若延迟 k 根后结果反而显著变好，
+    说明原版对齐可能有前视或执行时点问题。k=0 原样返回。
+    """
+    if k == 0:
+        return sig
+    out = np.zeros_like(sig)
+    for d in np.unique(day):
+        idx = np.flatnonzero(day == d)
+        if len(idx) > k:
+            out[idx[k:]] = sig[idx[:-k]]
+    return out
+
+
 def prepare_period(
     stock: pd.DataFrame,
     period: int,
     cfg: dict,
     macd_key: str = "macd",
     extra_entries: dict | None = None,
+    delay_bars: int = 0,
 ) -> PeriodData:
     bars = stock if period == 1 else resample_bars(stock, f"{period}min")
     x = indicators(bars, cfg, macd_key)
@@ -189,11 +206,14 @@ def prepare_period(
     if extra_entries:
         for k, fn in extra_entries.items():
             entries[k] = fn(bars, x, reg)
+    day = np.asarray(bars.index.tz_convert(ET).date)
+    if delay_bars:
+        entries = {k: shift_signal_within_day(v, day, delay_bars) for k, v in entries.items()}
     exs = ex.exit_signals(bars, x, cfg)
     rules = ex.exit_rules(cfg, "E10")  # 全集（含 X4）；非 E10 入场在汇总时去掉 X4
     et = bars.index.tz_convert(ET)
     close_min = (et.hour * 60 + et.minute - 570).to_numpy() + period
-    return PeriodData(period, bars, close_min, np.asarray(et.date), entries, exs, rules)
+    return PeriodData(period, bars, close_min, day, entries, exs, rules)
 
 
 # ---------------- 单日事件评估 ----------------
@@ -364,15 +384,17 @@ def run_grid(
     macd_key: str = "macd",
     extra_entries: dict | None = None,
     collect: set | None = None,
+    delay_bars: int = 0,
 ) -> dict:
     """返回 {period: {"names": [...], "accum": {name: Accum}, "rules": [...], "trades": {...}}}。
 
     collect：需要保留逐笔的 (period, 配置名) 集合（用于规则卡随机对照、提取规则回放）。
+    delay_bars：入场信号延迟 k 根再用（前视审计的延迟测试，见 shift_signal_within_day）。
     """
     exe = cfg["execution"]
     last_entry = hm(exe["last_entry"])
     t0 = time.monotonic()
-    pdats = {p: prepare_period(stock, p, cfg, macd_key, extra_entries) for p in periods}
+    pdats = {p: prepare_period(stock, p, cfg, macd_key, extra_entries, delay_bars) for p in periods}
     log.info("%s 信号准备完成 %.0fs", und, time.monotonic() - t0)
     x6, x7 = cfg["exits"]["X6"], cfg["exits"]["X7"]
     out = {}
