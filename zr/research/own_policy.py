@@ -28,7 +28,7 @@ from sklearn.metrics import roc_auc_score
 from sklearn.tree import DecisionTreeClassifier
 
 from zr.config import get_settings
-from zr.features.bars import ET, load_extended_bars, resample_bars
+from zr.features.bars import ET, load_bars, resample_bars
 from zr.features.option_features import option_days
 from zr.features.regime import STATE_NAMES, indicators, load_config, regimes, state_features
 from zr.journal.analyze_history import fifo_round_trips, load
@@ -131,7 +131,7 @@ def run(und: str = "MU") -> str:
     for u in sorted(rt["und"].unique()):
         sub = rt[rt["und"] == u]
         try:
-            stock = load_extended_bars(root, u)
+            stock = load_bars(root, u)
         except (FileNotFoundError, ValueError):
             stock = pd.DataFrame()
         if stock.empty:
@@ -172,7 +172,7 @@ def run(und: str = "MU") -> str:
         "",
     ]
     # ---- 倾向模型与规则（MU） ----
-    stock = load_extended_bars(root, und)
+    stock = load_bars(root, und)
     bars = resample_bars(stock, f"{PERIOD}min")
     x = indicators(bars, cfg)
     reg = regimes(bars, x, cfg, PERIOD)

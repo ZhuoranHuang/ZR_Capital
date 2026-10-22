@@ -46,18 +46,44 @@ def _consec(flag: np.ndarray) -> np.ndarray:
     return out
 
 
-def indicators(df: pd.DataFrame, cfg: dict, macd_key: str = "macd") -> pd.DataFrame:
-    """周期 P 的 K 线 → BOLL / MACD / 衍生量。"""
-    b = ind.bollinger(df["close"], cfg["boll"]["n"], cfg["boll"]["k"])
+def indicators(
+    df: pd.DataFrame, cfg: dict, macd_key: str = "macd", daily_reset: bool = True
+) -> pd.DataFrame:
+    """周期 P 的 K 线 → BOLL / MACD / 衍生量。
+
+    daily_reset=True（默认，D-027）：BOLL/MACD 每个交易日从头算，不跨日累计——
+    docs/research/INDICATOR_PARITY.md 核实这与长桥 App 的显示值在 3 个独立时刻上精确匹配
+    （BOLL mid/upper/lower 9 个值误差 0%，MACD DIF/DEA 残余误差 <0.0005 绝对值，来自 App 只显示
+    3 位小数的量化，不是口径差异）；daily_reset=False 保留作对照（D-026 的连续累计版，已知与
+    App 不符）。两种模式下 df 都应为 RTH-only bars（不含盘前盘后——核实发现含盘前盘后反而更不
+    匹配，取代 D-026「指标含盘前盘后」的假设）。
+    """
     m = cfg[macd_key]
-    mc = ind.macd(df["close"], m["fast"], m["slow"], m["signal"])
+    boll_n, boll_k = cfg["boll"]["n"], cfg["boll"]["k"]
+
+    def _one_day(g: pd.DataFrame) -> pd.DataFrame:
+        b = ind.bollinger(g["close"], boll_n, boll_k)
+        mc = ind.macd(g["close"], m["fast"], m["slow"], m["signal"])
+        return pd.concat([b, mc], axis=1)
+
+    day = np.asarray(df.index.tz_convert(ET).date)
+    if daily_reset:
+        parts = [_one_day(g) for _, g in df.groupby(day)]
+        raw = pd.concat(parts).sort_index()
+    else:
+        raw = _one_day(df)
     out = pd.DataFrame(index=df.index)
-    out["mid"], out["upper"], out["lower"] = b["mid"], b["upper"], b["lower"]
-    out["hw"] = (b["upper"] - b["lower"]) / 2
-    out["bw"] = b["width"]
-    out["pctb"] = b["pct_b"]
-    out["slope"] = b["mid"].diff() / b["mid"]
-    out["dif"], out["dea"] = mc["dif"], mc["dea"]
+    out["mid"], out["upper"], out["lower"] = raw["mid"], raw["upper"], raw["lower"]
+    out["hw"] = (raw["upper"] - raw["lower"]) / 2
+    out["bw"] = raw["width"]
+    out["pctb"] = raw["pct_b"]
+    # 斜率按日分组求 diff：daily_reset 下每日第一根没有同日前值，NaN（不跨日比较）
+    out["slope"] = (
+        raw.groupby(day)["mid"].diff() / raw["mid"]
+        if daily_reset
+        else (raw["mid"].diff() / raw["mid"])
+    )
+    out["dif"], out["dea"] = raw["dif"], raw["dea"]
     out["hist"] = out["dif"] - out["dea"]
     return out
 

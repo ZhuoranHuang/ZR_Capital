@@ -32,7 +32,7 @@ from sklearn.metrics import roc_auc_score
 from sklearn.tree import DecisionTreeClassifier
 
 from zr.config import get_settings
-from zr.features.bars import ET, load_bars, load_extended_bars
+from zr.features.bars import ET, load_bars
 from zr.features.calendar_features import compute_calendar
 from zr.features.channel import channel_states
 from zr.features.cross_asset import compute_cross_asset
@@ -71,9 +71,10 @@ def v2_frame(root: Path, und: str, df: pd.DataFrame) -> pd.DataFrame:
 
 def build_dataset(root: Path, und: str, cfg: dict) -> pd.DataFrame:
     t0 = time.monotonic()
-    stock = load_bars(root, und)  # RTH-only：v2_frame / depth_features 用这个
-    stock_ext = load_extended_bars(root, und)  # 含盘前盘后：v3 状态层指标用这个（D-026）
-    pdat = sv.prepare_period(stock_ext, PERIOD, cfg)
+    stock = load_bars(root, und)  # RTH-only；v2_frame / depth_features / v3 状态层都用这个
+    # （D-027 取代 D-026：核实发现 App 的 BOLL/MACD 不含盘前盘后，也不跨日累计，见
+    # docs/research/INDICATOR_PARITY.md；regime.indicators 默认 daily_reset=True）
+    pdat = sv.prepare_period(stock, PERIOD, cfg)
     x6, x7 = cfg["exits"]["X6"], cfg["exits"]["X7"]
     ti, si, ci = x6["tp"].index(TP), x6["sl"].index(SL), x7["cap_min"].index(CAP)
     fam_of = {n: n.split("|")[0] for n in pdat.entries}
