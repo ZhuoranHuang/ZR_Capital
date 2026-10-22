@@ -20,6 +20,7 @@ import pandas as pd
 
 from zr.config import get_settings
 from zr.data.calendar import trading_days
+from zr.features.bars import ET, load_bars
 from zr.features.option_features import option_days
 from zr.ops.markdown import df_to_md
 from zr.research import (
@@ -38,30 +39,20 @@ START, END = dt.date(2023, 10, 2), dt.date(2026, 10, 21)
 
 
 def coverage(root: Path) -> pd.DataFrame:
+    """每月：交易日数（交易日历）、各标的正股 1 分钟日数（RTH 过滤后实有）、期权日数。"""
     tds = trading_days(START, END)
-    rows = []
+    month = pd.Series(pd.to_datetime(tds).to_period("M").astype(str), index=tds)
+    out = month.value_counts().sort_index().rename("trading_days").to_frame()
     for und in ("MU", "QQQ", "SPY"):
+        try:
+            b = load_bars(root, und)
+            sd = set(np.asarray(b.index.tz_convert(ET).date))
+        except (FileNotFoundError, ValueError):
+            sd = set()
         od = set(option_days(root, und))
-        bars = root / "bars_1m" / f"underlying={und}"
-        for m, g in pd.Series(tds, index=pd.to_datetime(tds)).groupby(
-            pd.to_datetime(tds).to_period("M")
-        ):
-            days = list(g)
-            rows.append(
-                {
-                    "symbol": und,
-                    "month": str(m),
-                    "trading_days": len(days),
-                    "stock_1m": len(days) if bars.is_dir() else 0,
-                    "option_days": sum(d in od for d in days),
-                }
-            )
-    t = pd.DataFrame(rows)
-    piv = t.pivot_table(
-        index="month", columns="symbol", values="option_days", aggfunc="sum"
-    ).reset_index()
-    piv.insert(1, "trading_days", t.groupby("month")["trading_days"].first().to_numpy())
-    return piv
+        out[f"{und}_stock"] = [sum(d in sd for d in month.index[month == m]) for m in out.index]
+        out[f"{und}_opt"] = [sum(d in od for d in month.index[month == m]) for m in out.index]
+    return out.rename_axis("month").reset_index()
 
 
 def strat(ds: pd.DataFrame, key: pd.Series, name: str) -> pd.DataFrame:
@@ -124,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
     n_opt_days = len(lk.days)
     first_opt, last_opt = (min(lk.days), max(lk.days)) if n_opt_days else (None, None)
     bound = (
-        f"标的 {und}；正股 {START}～{END}（RTH、交易日历过滤）；期权日 "
+        f"标的 {und}；事件样本 {ds['day'].min()}～{ds['day'].max()}（RTH、交易日历过滤）；期权日 "
         f"{n_opt_days}（{first_opt}～{last_opt}）；"
         f"事件 {len(ds)}（含多检测器重复）；费用 D-013 + 买 ask 卖 bid"
     )
@@ -218,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
         f"{time.monotonic() - t0:.0f}s · "
         "规格见 docs/METHOD_V2.md，假设预登记见 docs/RESEARCH_LOG.md（R-017～R-027）",
         "",
-        "## 0. 覆盖矩阵（各月期权日数；QQQ / SPY 全量拉取进行中）",
+        "## 0. 覆盖矩阵（各月交易日 / 正股 1 分钟日 / 期权日）",
         "",
         df_to_md(cov),
         "",
