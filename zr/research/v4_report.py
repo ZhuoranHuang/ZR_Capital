@@ -16,18 +16,20 @@ import numpy as np
 import pandas as pd
 
 from zr.config import get_settings
-from zr.features.bars import load_bars, load_extended_bars, resample_bars
-from zr.features.regime import STATE_NAMES, indicators, regimes
 from zr.ops.markdown import df_to_md
+from zr.research import intraday_single_leg as isl
 from zr.research import v4_decisive as v4d
-from zr.research.own_policy import decision_bars, owner_trades
+from zr.research import v4_rules_test as rt
 
 REPO = Path(__file__).resolve().parents[2]
 OUT = REPO / "docs" / "research" / "V4_DECISIVE.md"
 PERIODS = ("2023", "2024", "2025", "2026H1", "2026-07+")
 HYP_DESC = {"H1": "E10 顺点火", "H2": "E1 通道回踩", "H3": "E11 突破延迟一根"}
-EXIT_DESC = {"a": "连续 2 根收盘越过中轨", "b": "MACD 柱连续 2 根缩短",
-             "c": "H1 %b 回到带内 / H2·H3 跌破更高低点"}
+EXIT_DESC = {
+    "a": "连续 2 根收盘越过中轨",
+    "b": "MACD 柱连续 2 根缩短",
+    "c": "H1 %b 回到带内 / H2·H3 跌破更高低点",
+}
 
 
 def _load(root: Path, conv: str):
@@ -44,12 +46,24 @@ def main_table(cells: pd.DataFrame) -> pd.DataFrame:
     c["格子"] = c["hyp"] + "·" + c["exit"] + "·" + c["dir"] + "·" + c["und"]
     c["p"] = c["p"].map(lambda v: f"{v:.4f}")
     c["FDR"] = np.where(c["fdr_pass"], "通过", "—")
-    c["随机分位"] = [f"{p}（{n}）" if n else "—" for p, n in
-                  zip(c["random_pctile"], c["random_n"], strict=True)]
-    cols = {"格子": "格子", "n": "笔数", "win_rate": "胜率", "payoff": "盈亏比",
-            "mean_pct": "均值%", "median_pct": "中位%", "sum_usd": "合计 USD",
-            "max_dd_usd": "最大回撤 USD", "mean_pct_ex_top5": "去前5盈利均值%",
-            "随机分位": "随机分位（笔）", "t": "t", "p": "p", "FDR": "FDR"}
+    c["随机分位"] = [
+        f"{p}（{n}）" if n else "—" for p, n in zip(c["random_pctile"], c["random_n"], strict=True)
+    ]
+    cols = {
+        "格子": "格子",
+        "n": "笔数",
+        "win_rate": "胜率",
+        "payoff": "盈亏比",
+        "mean_pct": "均值%",
+        "median_pct": "中位%",
+        "sum_usd": "合计 USD",
+        "max_dd_usd": "最大回撤 USD",
+        "mean_pct_ex_top5": "去前5盈利均值%",
+        "随机分位": "随机分位（笔）",
+        "t": "t",
+        "p": "p",
+        "FDR": "FDR",
+    }
     return c[list(cols)].rename(columns=cols)
 
 
@@ -60,12 +74,23 @@ def period_table(trades: pd.DataFrame, cells: pd.DataFrame) -> pd.DataFrame:
         t["period"] = [v4d.period_of(d) for d in t["day"]]
     for _, c in cells.iterrows():
         r = {"格子": f"{c['hyp']}·{c['exit']}·{c['dir']}·{c['und']}"}
-        sub = t[(t["hyp"] == c["hyp"]) & (t["exit"] == c["exit"]) & (t["dir"] == c["dir"])
-                & (t["und"] == c["und"])] if len(t) else t
+        sub = (
+            t[
+                (t["hyp"] == c["hyp"])
+                & (t["exit"] == c["exit"])
+                & (t["dir"] == c["dir"])
+                & (t["und"] == c["und"])
+            ]
+            if len(t)
+            else t
+        )
         for p in PERIODS:
             s = sub[sub["period"] == p] if len(sub) else sub
-            r[p] = (f"{len(s)} 笔 · {s['net_pct'].mean():+.1f}% · {s['net_usd'].sum():+.0f}"
-                    if len(s) else "—")
+            r[p] = (
+                f"{len(s)} 笔 · {s['net_pct'].mean():+.1f}% · {s['net_usd'].sum():+.0f}"
+                if len(s)
+                else "—"
+            )
         rows.append(r)
     return pd.DataFrame(rows)
 
@@ -78,65 +103,131 @@ def exit_mix(trades: pd.DataFrame) -> pd.DataFrame:
     out["止盈减半比例"] = g["tp_used"].mean().round(2)
     out["0DTE 比例"] = g["dte"].apply(lambda s: round(float((s == 0).mean()), 2))
     out["中位持仓 分钟"] = g.apply(
-        lambda s: round(float(np.median((s["exit_ns"] - s["entry_ns"]) / 6e10)), 1))
+        lambda s: round(float(np.median((s["exit_ns"] - s["entry_ns"]) / 6e10)), 1)
+    )
     return out.reset_index()
 
 
-# ---------------- H4 ----------------
-
-
-def classify_157(root: Path, conv_key: str, v4: dict) -> pd.DataFrame:
-    rt = owner_trades(root)
-    conv = v4["conventions"][conv_key]
-    cfg = v4d.state_cfg(v4, conv_key)
-    rows = []
-    for u in sorted(rt["und"].unique()):
-        sub = rt[rt["und"] == u]
-        try:
-            s = (load_extended_bars(root, u, clean=conv.get("clean", True)) if conv["ext"]
-                 else load_bars(root, u))
-        except (FileNotFoundError, ValueError):
-            s = pd.DataFrame()
-        if s.empty:
-            rows += [{"und": u, "state": "未覆盖（无正股 1 分钟 K）", "pnl": p}
-                     for p in sub["pnl_net"]]
-            continue
-        b = resample_bars(s, "2min")
-        x = indicators(b, cfg, daily_reset=conv["reset"], warmup=conv["warmup"])
-        reg = regimes(b, x, cfg, 2)
-        pos = decision_bars(sub, b)
-        for (_, r), p in zip(sub.iterrows(), pos, strict=True):
-            if p < 0:
-                st = "未覆盖（入场在首根 K 收盘前）"
-            elif np.isnan(x["pctb"].iat[p]):
-                st = "无有效 BOLL（开盘前 20 根）"
-            else:
-                k, d = int(reg["state"].iat[p]), int(reg["dir"].iat[p])
-                st = STATE_NAMES[k] + ("" if d == 0 else (" 同向" if d == r["dir"] else " 反向"))
-            rows.append({"und": u, "state": st, "pnl": r["pnl_net"]})
-    return pd.DataFrame(rows)
+# ---------------- H4（D-029：只用日内单腿样本） ----------------
 
 
 def old_table() -> pd.DataFrame:
     md = (REPO / "docs" / "research" / "OWN_POLICY_EXTRACTED.md").read_text(encoding="utf-8")
     sec = md.split("## 157 笔按状态分类")[1].split("\n## ")[0]
     rows = re.findall(r"^\| (.+?) \| (\d+) \| ([\d.]+) \| ([-\d.]+) \| ([-\d.]+) \|$", sec, re.M)
-    return pd.DataFrame([{"state": s, "n": int(n), "win_rate": float(w), "sum_pnl": float(p)}
-                         for s, n, w, p, _ in rows])
+    return pd.DataFrame(
+        [
+            {"state": s, "n": int(n), "win_rate": float(w), "sum_pnl": float(p)}
+            for s, n, w, p, _ in rows
+        ]
+    )
 
 
-def h4_table(root: Path, v4: dict) -> pd.DataFrame:
-    def agg(cls: pd.DataFrame) -> pd.DataFrame:
-        g = cls.groupby("state")["pnl"]
-        return pd.DataFrame({"n": g.size(), "win_rate": g.apply(lambda s: (s > 0).mean()).round(2),
-                             "sum_pnl": g.sum().round(0)})
-
-    parts = {"旧（D-026）": old_table().set_index("state")}
-    for k in (v4["primary"], v4["sensitivity"]):
-        parts[f"口径 {k}"] = agg(classify_157(root, k, v4))
+def h4_table(root: Path) -> pd.DataFrame:
+    t = pd.read_parquet(root / "research" / "v4" / "owner_intraday_review.parquet")
+    pos = isl.positions(t)
+    parts = {"旧 157 行（D-026）": old_table().set_index("state")}
+    for conv in ("A", "C"):
+        g = pos.groupby(f"{conv}_state")
+        parts[f"D-029 口径 {conv}"] = pd.DataFrame(
+            {
+                "入场": g.size(),
+                "FIFO 行": g["lots"].sum(),
+                "胜率": g["pnl_net"].apply(lambda s: round(float((s > 0).mean()), 2)),
+                "合计": g["pnl_net"].sum().round(0),
+            }
+        )
     out = pd.concat(parts, axis=1)
     out.columns = [f"{a} {b}" for a, b in out.columns]
     return out.reset_index().rename(columns={"index": "state"}).fillna("—")
+
+
+# ---------------- R-035 ----------------
+
+
+def rules_tables(root: Path, v4: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    base = root / "research" / "v4"
+    spec, _ = rt.load_spec()
+    A, C = spec["base"], spec["contrast"]
+    keys = ["hyp", "exit", "dir", "und"]
+    cols = [
+        "n",
+        "win_rate",
+        "payoff",
+        "mean_pct",
+        "median_pct",
+        "sum_usd",
+        "max_dd_usd",
+        "mean_pct_ex_top5",
+        "random_pctile",
+        "p",
+    ]
+    out = {}
+    for part in ("main", "extract"):
+        a = pd.read_parquet(base / f"rules_cells_{A}_{part}.parquet").set_index(keys)[cols]
+        c = pd.read_parquet(base / f"rules_cells_{C}_{part}.parquet").set_index(keys)[cols]
+        m = a.add_suffix(f"_{A}").join(c.add_suffix(f"_{C}")).reset_index()
+        m["p"] = m[[f"p_{A}", f"p_{C}"]].max(axis=1)
+        out[part] = m
+    # H1–H3 在 R-035 同一窗口（MU 主检验日期）上的对照
+    w0, w1 = (dt.date.fromisoformat(spec["window"][k]) for k in ("from", "to"))
+    e0, e1 = (dt.date.fromisoformat(spec["extraction_window"][k]) for k in ("from", "to"))
+    rows = []
+    for conv in (A, C):
+        p = base / f"trades_{conv}.parquet"
+        if not p.exists():
+            continue
+        t = pd.read_parquet(p)
+        t = t[(t["und"] == "MU") & t["day"].map(lambda d: w0 <= d <= w1 and not e0 <= d <= e1)]
+        for (h, x, d), g in t.groupby(["hyp", "exit", "dir"]):
+            rows.append(
+                {
+                    "口径": conv,
+                    "格子": f"{h}·{x}·{d}",
+                    "笔数": len(g),
+                    "均值%": round(float(g["net_pct"].mean()), 2),
+                    "合计 USD": round(float(g["net_usd"].sum()), 0),
+                }
+            )
+    return out["main"], out["extract"], pd.DataFrame(rows)
+
+
+def rules_and_fdr(root: Path, v4: dict, cp: pd.DataFrame) -> list[str]:
+    base = root / "research" / "v4"
+    main_t, ext_t, h13 = rules_tables(root, v4)
+    h5p = base / "h5_cells.parquet"
+    h5 = pd.read_parquet(h5p) if h5p.exists() else pd.DataFrame(columns=["p"])
+    fam = np.r_[cp["p"].to_numpy(), h5["p"].to_numpy(), main_t["p"].to_numpy()]
+    rej = v4d.bh(fam, v4["stats"]["fdr_q"])
+    n33, n5 = len(cp), len(h5)
+    main_t[f"FDR（全部 {len(fam)} 格）"] = np.where(rej[n33 + n5 :], "通过", "—")
+    L = [
+        "## 6b. R-035：日内单腿规则在两年 MU 上回放（口径 A 提取、C 对照）",
+        "",
+        "规则（`config/v4_rules.yaml`，冻结）由 `INTRADAY_SINGLE_LEG.md` 的决策树提取；特征方向化，"
+        "**规则本身不含方向**，多空两个方向分开回放。主检验日期 = 2024-10-22～2026-10-21 中剔除"
+        "规则提取期（2026-06-09～2026-08-18）；p = 两口径较大者。",
+        "",
+        df_to_md(main_t.round(3)),
+        "",
+        "规则提取期（样本内，描述性，不进 FDR）：",
+        "",
+        df_to_md(ext_t.round(3)),
+        "",
+        "同一窗口（MU 主检验日期）上 H1–H3 的表现（来自 R-033 的成交明细，仅作并列对照）：",
+        "",
+        df_to_md(h13) if len(h13) else "无",
+        "",
+        "## 6c. 多重比较汇总",
+        "",
+        f"- R-033 预登记族（口径 C 36 格）：通过 {int(cp['fdr_pass'].sum())} 格。",
+        f"- R-034 预登记族（R-033 36 + H5 {n5} 格）：见 V4_H5.md。",
+        f"- 全部（R-033 {n33} + H5 {n5} + R-035 {len(main_t)} = {len(fam)} 格，BH q="
+        f"{v4['stats']['fdr_q']}）：通过 {int(rej.sum())} 格（R-033 {int(rej[:n33].sum())}、"
+        f"H5 {int(rej[n33 : n33 + n5].sum())}、R-035 {int(rej[n33 + n5 :].sum())}）。",
+        "",
+    ]
+    return L
 
 
 # ---------------- 主流程 ----------------
@@ -164,9 +255,11 @@ def main() -> int:
         "",
     ]
     if passed.empty:
-        L += [f"**没有格子通过。** 最小 p = {cp['p'].min():.4f}"
-              f"（{cp.loc[cp['p'].idxmin(), ['hyp', 'exit', 'dir', 'und']].str.cat(sep='·')}）。",
-              ""]
+        L += [
+            f"**没有格子通过。** 最小 p = {cp['p'].min():.4f}"
+            f"（{cp.loc[cp['p'].idxmin(), ['hyp', 'exit', 'dir', 'und']].str.cat(sep='·')}）。",
+            "",
+        ]
     else:
         L += ["通过的格子：", "", df_to_md(main_table(passed)), ""]
     L += [
@@ -192,14 +285,16 @@ def main() -> int:
         "",
         df_to_md(main_table(cs)),
         "",
-        "## 6. H4：负责人 157 笔按新口径重做状态分类",
+        "## 6. H4：负责人交易按新口径重做状态分类（D-029：只用日内单腿样本）",
         "",
-        "决策 K = 入场前最后一根已收盘的 2 分钟 K；「同向 / 反向」= 状态方向与所买 call / put "
-        "是否一致；盈亏为实际成交扣费后（USD）。旧表取自 OWN_POLICY_EXTRACTED.md（D-026 口径，"
-        "含分箱 bug）。",
+        "按负责人指令，H4 以 `docs/research/INTRADAY_SINGLE_LEG.md` 为准：157 个 FIFO 行中只保留"
+        "日内单腿 89 行（= 54 次入场，全部 MU），按入场决策统计。决策 K = 入场前最后一根已完成的 "
+        "2 分钟 K；「同向 / 反向」= 状态方向与所买 call / put 是否一致；盈亏为实际成交扣费后 USD。"
+        "旧表是 157 行全样本、D-026 口径（含分箱 bug），只作对照。",
         "",
-        df_to_md(h4_table(root, v4)),
+        df_to_md(h4_table(root)),
         "",
+        *rules_and_fdr(root, v4, cp),
         "## 7. 数据与运行",
         "",
         f"- 口径 {P}：{json.dumps(rp['info'], ensure_ascii=False)}",

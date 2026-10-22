@@ -202,7 +202,8 @@ def ns(x) -> np.ndarray:
 # ---------------- 事件 ----------------
 
 
-def build_events(root: Path, und: str, conv_key: str, v4: dict) -> tuple[pd.DataFrame, dict]:
+def build_events(root: Path, und: str, conv_key: str, v4: dict, sig_fn=None, hyps=HYPS,
+                 days: list | None = None) -> tuple[pd.DataFrame, dict]:
     """返回事件表（每行 = 一个可入场 K × 方向 × 所选合约，含实际信号与随机候选）与离场触发。
 
     列：bar_i、day、decision_ts（K 收盘，UTC）、direction、spot、symbol…、flat_ts、
@@ -210,11 +211,15 @@ def build_events(root: Path, und: str, conv_key: str, v4: dict) -> tuple[pd.Data
     """
     conv = v4["conventions"][conv_key]
     cfg = state_cfg(v4, conv_key)
-    days = sample_days(root, und, v4)
+    days = sample_days(root, und, v4) if days is None else days
     df = build_bars(root, und, conv, max(days))
     x = indicators(df, cfg, daily_reset=conv["reset"], warmup=conv["warmup"])
     reg = regimes(df, x, cfg, v4["period"])
-    sig = hypothesis_signals(df, x, reg, cfg, v4)
+    if sig_fn is None:
+        raw = hypothesis_signals(df, x, reg, cfg, v4)
+        sig = {h: (raw[h] == 1, raw[h] == -1) for h in hyps}
+    else:  # {名称: (多头布尔, 空头布尔)}；同一根 K 两个方向可以同时为真
+        sig = sig_fn(df, x, reg, cfg, conv)
     exits = exit_arrays(df, x, cfg)
     time_ok, ok_l, ok_s = guard_mask(df, reg, v4, set(days))
     et = df.index.tz_convert(ET)
@@ -230,7 +235,7 @@ def build_events(root: Path, und: str, conv_key: str, v4: dict) -> tuple[pd.Data
     chains: dict = {}
     for direction, ok in ((1, ok_l), (-1, ok_s)):
         elig = time_ok & ok
-        is_sig = {h: elig & (sig[h] == direction) for h in HYPS}
+        is_sig = {h: elig & sig[h][0 if direction == 1 else 1] for h in hyps}
         any_sig = np.flatnonzero(np.logical_or.reduce(list(is_sig.values())))
         need = np.zeros(len(df), bool)
         for i in any_sig:  # 实际信号 K 及其 ±window 内的随机候选（同日、同方向、满足护栏）
@@ -249,13 +254,14 @@ def build_events(root: Path, und: str, conv_key: str, v4: dict) -> tuple[pd.Data
                 continue
             rows.append({"bar_i": int(i), "day": d, "decision_ts": close_utc[i],
                          "direction": direction, "spot": spot[i], **pk, "flat_ts": flat,
-                         **{f"hyp_{h}": bool(is_sig[h][i]) for h in HYPS}})
+                         **{f"hyp_{h}": bool(is_sig[h][i]) for h in hyps}})
     ev = pd.DataFrame(rows)
     trig = {}
-    for rule in {r for v in v4["exits"].values() for r in v.values()}:
+    for rule in exits:
         lg, sh = exits[rule]
         trig[rule] = {1: cns[lg], -1: cns[sh]}
-    meta = {"n_bars": len(df), "days": days, "signals": {h: int((sig[h] != 0).sum()) for h in HYPS}}
+    meta = {"n_bars": len(df), "days": days,
+            "signals": {h: int(sig[h][0].sum() + sig[h][1].sum()) for h in hyps}}
     return ev, {"trig": trig, "meta": meta}
 
 
@@ -532,10 +538,13 @@ def random_percentile(t: pd.DataFrame, cand: dict, v4: dict) -> tuple[float, int
 # ---------------- 主流程 ----------------
 
 
-def run_conv(root: Path, conv_key: str, v4: dict, pull: bool = True) -> dict:
+def run_conv(root: Path, conv_key: str, v4: dict, pull: bool = True, sig_fn=None, hyps=HYPS,
+             exit_map: dict | None = None, days_fn=None, unds: list | None = None) -> dict:
+    exit_map = v4["exits"] if exit_map is None else exit_map
     trades_all, cells, pull_stats, info = [], [], {}, {}
-    for und in v4["sample"]["underlyings"]:
-        ev, aux = build_events(root, und, conv_key, v4)
+    for und in (v4["sample"]["underlyings"] if unds is None else unds):
+        days = days_fn(root, und) if days_fn else None
+        ev, aux = build_events(root, und, conv_key, v4, sig_fn=sig_fn, hyps=hyps, days=days)
         trig = aux["trig"]
         windows = needed_windows(ev, v4)
         if pull:
@@ -543,13 +552,13 @@ def run_conv(root: Path, conv_key: str, v4: dict, pull: bool = True) -> dict:
         info[und] = {"days": len(aux["meta"]["days"]), "bars": aux["meta"]["n_bars"],
                      "signals_raw": aux["meta"]["signals"], "windows": len(windows),
                      "event_rows": len(ev),
-                     "signal_rows": {h: int(ev[f"hyp_{h}"].sum()) for h in HYPS}}
+                     "signal_rows": {h: int(ev[f"hyp_{h}"].sum()) for h in hyps}}
         ev = ev.reset_index(drop=True)
         ev["decision_ns"] = ns(ev["decision_ts"])
         ev["flat_ns"] = ns(ev["flat_ts"])
         tick_cache: dict = {}
         sims: dict = {}  # (row, rule) -> result
-        rules = sorted({r for v in v4["exits"].values() for r in v.values()})
+        rules = sorted({r for v in exit_map.values() for r in v.values()})
         for i, r in ev.iterrows():
             key = (r["symbol"], r["day"])
             if key not in tick_cache:
@@ -563,9 +572,9 @@ def run_conv(root: Path, conv_key: str, v4: dict, pull: bool = True) -> dict:
                 if res is not None:
                     sims[(i, rule)] = res
         w = pd.Timedelta(minutes=v4["random"]["window_min"]).value
-        for h in HYPS:
+        for h in hyps:
             for xk in EXIT_KEYS:
-                rule = v4["exits"][xk][h]
+                rule = exit_map[xk][h]
                 for direction in (1, -1):
                     m = ev[f"hyp_{h}"] & (ev["direction"] == direction)
                     rows = []
