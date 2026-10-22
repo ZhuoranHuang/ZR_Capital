@@ -70,6 +70,28 @@ def regime_check(root: Path, cfg: dict) -> tuple[pd.DataFrame, str]:
                 "实际分布": ", ".join(f"{k} {v}" for k, v in dist.items()),
             }
         )
+    # 不符原因的量化
+    sday = np.asarray(s.index.tz_convert(ET).date)
+    prev_close = float(s["close"][sday < CHECK_DAY].iloc[-1])
+    day_open = float(s["open"][sday == CHECK_DAY].iloc[0])
+    m1 = on & (hhmm >= "09:30") & (hhmm <= "09:44")
+    w = int(cfg["regime"]["range"]["window_days"] * 390 / 2)
+    pr = lambda v: v.rolling(w, min_periods=max(20, w // 4)).rank(pct=True)  # noqa: E731
+    pcts = pd.DataFrame(
+        {
+            "bw": pr(x["bw"]),
+            "slope": pr(x["slope"].abs()),
+            "hist": pr((x["hist"] / b["close"]).abs()),
+        }
+    )
+    m2 = on & (hhmm >= "10:00") & (hhmm <= "12:30")
+    lim = cfg["regime"]["range"]["bw_pct_max"]
+    why = {
+        "gap_pct": round((day_open / prev_close - 1) * 100, 2),
+        "pctb_min_open": round(float(np.nanmin(x["pctb"].to_numpy()[m1])), 3),
+        "range_pct_median": pcts[m2].median().round(2).to_dict(),
+        "range_joint_share": round(float((pcts[m2] <= lim).all(axis=1).mean()), 3),
+    }
     # E1 回踩核对：2 分钟 K 最低 913.37、中轨 912.69
     lows = b["low"].to_numpy()
     k = np.flatnonzero(on & (np.abs(lows - 913.37) < 0.006))
@@ -92,7 +114,7 @@ def regime_check(root: Path, cfg: dict) -> tuple[pd.DataFrame, str]:
             "识别为回踩的定义 "
             f"{len(fired)} / 36 个：{', '.join(fired) if fired else '无'}。"
         )
-    return pd.DataFrame(rows), txt
+    return pd.DataFrame(rows), txt, why
 
 
 def artifact_summary() -> pd.DataFrame:
@@ -164,11 +186,33 @@ def cards_section(root: Path, und: str, k: int = 10) -> list[str]:
     return L
 
 
+def append_model_rules(root: Path) -> None:
+    """模型提取规则并入 RULE_CARDS_<UND>.md 附录（可重复运行，覆盖旧附录）。"""
+    tag = "## 附录：模型样本外最高十分位提取的规则（第 8 节）"
+    for und in ("MU", "QQQ"):
+        card_md = REPO / "docs" / "research" / f"RULE_CARDS_{und}.md"
+        rp = root / "research" / "v3" / f"model_rules_{und}.parquet"
+        if not card_md.exists():
+            continue
+        text = card_md.read_text(encoding="utf-8").split(tag)[0].rstrip() + "\n\n"
+        body = (
+            df_to_md(pd.read_parquet(rp))
+            if rp.exists() and len(pd.read_parquet(rp))
+            else "待模型运行或无满足条件的叶子。"
+        )
+        text += (
+            f"{tag}\n\n{body}\n\n只作描述：规则在样本外月份上提取并评估，"
+            "不满足规则卡的入选条件时不计为卡。\n"
+        )
+        card_md.write_text(text, encoding="utf-8")
+
+
 def main() -> int:
     cfg = load_config()
     root = get_settings().zr_data_root
+    append_model_rules(root)
     cov = coverage(root)
-    chk, e1txt = regime_check(root, cfg)
+    chk, e1txt, why = regime_check(root, cfg)
     art = artifact_summary()
     own = (REPO / "docs" / "research" / "OWN_POLICY_EXTRACTED.md").read_text(encoding="utf-8")
     own = own.split("\n", 3)[3] if own.count("\n") > 3 else own
@@ -204,12 +248,12 @@ def main() -> int:
         "",
         e1txt,
         "",
-        "不符原因（由数据算出）：(1) 开盘急跌——布林带沿用前一交易日 RTH 的 K 线（本地无盘前数据）"
-        "，"
-        "MU 当日跳空约 +2.5% 开盘，急跌全程 %b 最低 0.14，未到 < 0.1；(2) RANGE——10:00–12:30 "
-        "期间带宽、"
-        "|中轨斜率|、|MACD 柱| 的近 2 日分位中位数 0.52 / 0.55 / 0.57，三者同时 ≤ 30% 的只有 4% "
-        "的 K 线。"
+        "不符原因（由数据算出）：(1) 开盘急跌——布林带沿用前一交易日 RTH 的 K 线（本地无盘前数据），"
+        f"MU 当日开盘相对前收 {why['gap_pct']:+.2f}%，09:30–09:44 %b 最低 {why['pctb_min_open']}，"
+        f"未到 < {cfg['regime']['ignition']['pctb_lo']}；(2) RANGE——10:00–12:30 期间带宽 / "
+        "|中轨斜率| / "
+        f"|MACD 柱| 的近 2 日分位中位数 {why['range_pct_median']}，三者同时 ≤ "
+        f"{cfg['regime']['range']['bw_pct_max']} 的比例 {why['range_joint_share']}。"
         "这两处是定义与负责人看图判断的差异，已写入 STATUS 待确认，本轮按规格定义运行。",
         "",
         "## 3. 规则卡（第 6 节）",
