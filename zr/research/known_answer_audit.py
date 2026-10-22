@@ -101,11 +101,14 @@ def reconcile(root: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
         )
         fills.append(fr)
         # 逐段：模拟按订单汇总下 D-013 费用（最低收费按订单计）
+        # 按张数加权（同一订单的多笔成交数量不同，不能简单平均）
+        fr2 = fr.assign(sim_v=fr["sim_px"] * fr["qty"], act_v=fr["px"] * fr["qty"])
         o = (
-            fr.groupby(["order_id", "side"])
-            .agg(q=("qty", "sum"), sim=("sim_px", lambda s: s.mean()), act=("px", "mean"))
+            fr2.groupby(["order_id", "side"])
+            .agg(q=("qty", "sum"), sim_v=("sim_v", "sum"), act_v=("act_v", "sum"))
             .reset_index()
         )
+        o["sim"], o["act"] = o["sim_v"] / o["q"], o["act_v"] / o["q"]
         for _, z in o.iterrows():
             side = "Buy" if z["side"] == "Buy" else "Sell"
             k = -1 if side == "Buy" else 1
