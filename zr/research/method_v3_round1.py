@@ -227,7 +227,7 @@ def main() -> int:
         "全量。",
         "",
         "## 1. 状态层人工核对（MU 2026-10-21，2 分钟 K，MACD(6,13,6)、BOLL(20,2)，"
-        "fix/lookahead-audit 修复后：含盘前盘后连续 K 线 + RANGE 打分制 D-025）",
+        "fix/lookahead-audit 修复后：含盘前盘后连续 K 线 + RANGE 打分制 D-026）",
         "",
         df_to_md(chk),
         "",
@@ -239,7 +239,7 @@ def main() -> int:
         f"pctb_lo={cfg['regime']['ignition']['pctb_lo']}。",
         "",
         f"第 2 点（10:00–12:30 RANGE）符合比例 {chk['符合比例'].iloc[1]:.2f}：该时段 RANGE 打分"
-        f"（D-025，带宽/|斜率|/|MACD 柱| 百分位秩加权和）中位数 {why['range_score_median']}，"
+        f"（D-026，带宽/|斜率|/|MACD 柱| 百分位秩加权和）中位数 {why['range_score_median']}，"
         f"阈值 {why['range_score_threshold']}（MU 2024 年标定，覆盖率目标 [20%,40%]），"
         f"≤ 阈值的比例 {why['range_share_le_threshold']}。",
         "",
