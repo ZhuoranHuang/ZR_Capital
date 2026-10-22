@@ -327,7 +327,7 @@ def run_one(root: Path, und: str, conv: str, v4: dict, h5: dict, v2, depth) -> d
     for x in EXITS:
         y = (ev[f"net_usd_{x}"] > 0).astype(int).to_numpy()
         p, folds = walk_forward(X, y, ev["day"], h5)
-        o = pd.concat([ev, F[cols]], axis=1).assign(p=p, y=y)
+        o = pd.concat([ev, F[[c for c in cols if c not in ev.columns]]], axis=1).assign(p=p, y=y)
         o = o[np.isfinite(p)].reset_index(drop=True)
         r = {
             "oos": o,

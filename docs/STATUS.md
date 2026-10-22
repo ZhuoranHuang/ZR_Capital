@@ -48,14 +48,16 @@
 
 0. ~~QQQ 期权结果表伪影~~ → 已查明并修复（D-023）。
 0a. **状态层口径两次修订，最终定为 D-027**：D-026（fix/lookahead-audit）先改成「RANGE 打分制 + 含盘前盘后连续 K 线」；diag/indicator-parity 用 App 截图的精确数值核实后发现「含盘前盘后连续」是错的，改为 D-027（RTH-only、BOLL/MACD **按日重置**）——这个口径让 BOLL/MACD 与 App 截图精确匹配（9 个 BOLL 值误差 0%，MACD 残余 <0.0005 绝对值）。D-027 下 13:00 回踩 K 被 E1 识别恢复到 12/36（与 D-026 的 0/36 相比，证实 D-026 把中轨算偏了）；09:30 急跌→IGNITION 在 D-027 下是「无法判定」（BOLL 按日重置后开盘前 40 分钟没有有效值），比 D-026 的「0.71」更诚实但不算通过；RANGE/CHANNEL 两个比例型校验点两种口径下都远低于 1，是状态定义问题，不是指标数值问题。**只重算了状态层与校验点，没有重跑全部网格**，见下一条。
-0a-stale. **以下产出都是 D-026（已知错误口径）算出来的，现已过时，待重新跑**：`docs/research/RULE_CARDS_MU.md`、`RULE_CARDS_QQQ.md`、`METHOD_V3_ROUND1.md`、`OWN_POLICY_EXTRACTED.md`、`research/v3/model_{MU,QQQ}.md`、`docs/research/LOOKAHEAD_AUDIT.md`（延迟测试部分）、`docs/research/DELAY_TEST_{MU,QQQ}.md`、`docs/research/LOOKAHEAD_FIX_COMPARISON.md`。下面 0b、0d 两条结论也是基于这些过时文件得出的，**需要在 D-027 口径下重新验证才能相信**。
-0b. ~~QQQ E1 空头 5 分钟线索，D-026 口径下修复后基本消失~~ → 这个对比本身用的是 D-026（已知错误）口径，结论待 D-027 口径下重新验证，暂不采信。
-0d. ~~延迟测试发现 E11 做空类配置延迟 1 根反而更赚~~ → 同上，用的是 D-026 口径下的网格/规则卡，待 D-027 口径下重新验证。
-0e. **fill-resolution 诊断的 V4 方案是否立项，待负责人决定**：`docs/research/FILL_RESOLUTION.md`
-提出三条未实施的建议——(1) 0/1-DTE 规则卡宣布「有边」前用 tick 级数据独立复核；
-(2) `sim_v3.py` 成交函数加一个默认关闭的按 DTE 分层滑点缓冲参数；(3) DTE≥2 桶 1 分钟
-快照结果不必重做。这些只是诊断性抽样（MU/QQQ 54 个 contract-day）得出的建议，不是已验证
-结论，本代理未改动 `sim_v3.py` 或任何回放结果（规则 11）。
+0a-stale. **需按新口径（D-028 主 / D-027 敏感性）重跑、本轮不重跑的报告**（全部在 D-027 之前或之中产生；D-028 修了分箱锚点与清洗两个 bug，D-026 时期含盘前盘后的状态层在约 37% 的天里分箱错位）：
+  - **W2（RTH-only 跨日连续的 1 分钟 BOLL/MACD——恰是截图唯一排除的口径；MACD 还是 12/26/9 不是 App 的 6/13/6）**：`EVENT_LABEL_TABLE.md`（E1、E6 部分）、`SCAN_TABLE.md`（E1/E6/E9 扫描）、`CONDITIONAL_TABLE.md`、`META_MODEL.md`、`BASELINE_IC.md`（MACD/BOLL 特征部分）；E2/E3/E5/E7/E8 不依赖 BOLL/MACD，不受影响。
+  - **v2**：`METHOD_V2_ROUND1.md`、`METHOD_V2_ROUND1_QQQ.md`（期权盈亏已按 D-023 作废）、`E1_PULLBACK_SWEEP_{MU,QQQ}.md`、`REPLAY_RULE_{MU,QQQ}.md`、`OPTION_FEATURES_PILOT.md`（事件来自 v2 检测器）。
+  - **v3 网格、模型、规则卡**：`RULE_CARDS_{MU,QQQ}.md`、`METHOD_V3_ROUND1.md`、`research/v3/model_{MU,QQQ}.md`、`OWN_POLICY_EXTRACTED.md`（157 笔分类已在 V4 H4 按新口径重做，规则提取部分未重做）、`DELAY_TEST_{MU,QQQ}.md`、`LOOKAHEAD_FIX_COMPARISON.md`、`LOOKAHEAD_AUDIT.md` 的延迟测试部分（截断/成交时点审计是机制测试，与口径无关，仍有效）。
+  - **其他用到 K 线指标的**：`SCREENSHOT_STRATEGIES.md`（E9 YaleV3 用 BOLL；E4 用 SMA/KDJ/RSI，同样面临「是否含盘前、是否跨日」的口径问题）、`E4_MU_STOCK.md`（SMA120/ATR，同上，优先级低）。
+  - 不受影响：`RV_VS_IV.md`、`QQQ_ARTIFACT.md`（成交时点机制）、`FILL_RESOLUTION.md`、`INDICATOR_PARITY.md`（结论已由 V4_CHECKPOINTS 修正）。
+0b. ~~QQQ E1 空头 5 分钟线索，D-026 口径下修复后基本消失~~ → 这个对比用的是 D-026（分箱错位）口径，暂不采信；待 v3 网格按 D-028 重跑。
+0d. ~~延迟测试发现 E11 做空类配置延迟 1 根反而更赚~~ → 已作为 V4 H3（R-033）预登记检验，结果见 V4_DECISIVE.md。
+0e. ~~fill-resolution 的 V4 方案是否立项~~ → 负责人 10-22 采纳：0/1 DTE 一律 tick 级成交，已在 V4（R-033/R-034）实施。
+0f. **D-028 口径需要一张截图核实（开盘前 40 分钟）**：截图区分不了「RTH-only 按日重置」（D-027）与「含盘前盘后连续」（D-028 主口径 C），开盘前 20 根 2 分钟 K 三种处理（空值 / 部分窗口 / 窗口延伸到盘前）数值完全不同。请负责人提供任一交易日 **09:32–10:08 ET** 之间某根 2 分钟 K 在 App 上的 BOLL(20,2) MID/UPPER/LOWER 与 MACD(6,13,6) DIF/DEA（与之前三张截图同样设置），并注明图表是否显示盘前。若结果是 A，V4 以 V4_DECISIVE.md 第 5 节（口径 A）为准，CLAUDE.md 指标口径改回。见 docs/research/V4_CHECKPOINTS.md。
 0c. **长桥 token 的 JWT `ac` 字段未独立核实（D-025）**：按负责人说法实现了 live/paper 的 `ac` 校验，但本代理没有、也不应该读取真实 token 去核实格式。解码失败（非 3 段式、字段缺失）时的处理是实现方选的：paper 模式按「不符」拒绝，live 模式按「不是模拟盘 token」放行——这个「失败放行」的选择没有逐条确认过。请负责人找一次低风险时机（例如 `api_facts` 核验时）确认：(1) access_token 确实是 JWT 且能被 `_jwt_claim` 解出 `ac`；(2) live 模式下解码失败时应放行还是拒绝。
 
 1. **10-21 定稿的「门」的具体条件写进 DECISIONS**——仓库里没有书面记录，D-017 只引用了 W2 数字；请负责人给出原文，我补一条 D-018。
