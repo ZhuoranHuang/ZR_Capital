@@ -2,7 +2,7 @@
 <!-- 每小时触发一次 deploy/sync_from_vps.sh；脚本自己用 TZ=Asia/Singapore 判断是否为 09 点且当天未同步。
      不依赖本机系统时区（本机被锁定为 US/Pacific）。
      安装：
-       sed "s#__REPO__#$PWD#g" deploy/launchd/com.zr.sync-from-vps.plist > ~/Library/LaunchAgents/com.zr.sync-from-vps.plist
+       sed -e "s#__REPO__#$PWD#g" -e "s#__DATA_ROOT__#<数据根，例如 /Volumes/…/zr_data>#g" deploy/launchd/com.zr.sync-from-vps.plist > ~/Library/LaunchAgents/com.zr.sync-from-vps.plist
        launchctl unload ~/Library/LaunchAgents/com.zr.sync-from-vps.plist 2>/dev/null; launchctl load ~/Library/LaunchAgents/com.zr.sync-from-vps.plist
      手动立即同步：bash deploy/sync_from_vps.sh --now -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -22,7 +22,7 @@
         <key>PATH</key>
         <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
         <key>ZR_DATA_ROOT</key>
-        <string>__REPO__/data_store</string>
+        <string>__DATA_ROOT__</string>
     </dict>
     <key>StartInterval</key>
     <integer>3600</integer>

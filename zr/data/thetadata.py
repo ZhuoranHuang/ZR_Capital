@@ -56,6 +56,10 @@ MAX_DTE = 5
 _CONTRACT_RE = re.compile(r"^(?P<und>[A-Z.\-]+?)(?P<exp>\d{6})(?P<right>[CP])(?P<strike>\d+)\.US$")
 
 
+CONNECT_ERROR = 599  # 伪状态码：连接失败
+OUTAGE_STATUSES = (CONNECT_ERROR, 474, 571)  # 不可达 / DISCONNECTED / SERVER_STARTING
+
+
 class ThetaError(RuntimeError):
     def __init__(self, status: int, body: str, url: str):
         super().__init__(f"HTTP {status} {body[:200]} <- {url}")
@@ -93,6 +97,10 @@ class ThetaClient:
     timeout_s: float = 120.0
     concurrency: int = DEFAULT_CONCURRENCY
     retries: int = 3
+    # 终端不可达（重启 / 474 DISCONNECTED / 571 SERVER_STARTING）时的等待：总共最多 outage_wait_s 秒
+    outage_wait_s: float = 600.0
+    outage_poll_s: float = 10.0
+    sleep: Callable[[float], None] = time.sleep
     # 可注入的 GET，测试用假数据
     getter: Callable[[str], tuple[int, str]] | None = None
 
@@ -106,6 +114,9 @@ class ThetaClient:
                 return resp.status, resp.read().decode("utf-8")
         except urllib.error.HTTPError as e:
             return e.code, e.read().decode("utf-8", "replace")
+        except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
+            # 终端未运行 / 正在重启：用伪状态码 599 交给 get_json 等待重试
+            return CONNECT_ERROR, repr(e)
 
     def get_json(self, path: str, **params) -> list[dict]:
         clean = {k: v for k, v in params.items() if v is not None}
@@ -113,8 +124,21 @@ class ThetaClient:
         url = f"{self.base_url}{path}?{urllib.parse.urlencode(clean)}"
         getter = self.getter or self._http_get
         with self._sem:
-            for attempt in range(self.retries):
+            waited = 0.0
+            attempt = 0
+            while True:
                 status, body = getter(url)
+                if status in OUTAGE_STATUSES and waited < self.outage_wait_s:
+                    if waited == 0:
+                        log.warning(
+                            "Theta 终端不可用（%s），最多等待 %.0fs：%s",
+                            status,
+                            self.outage_wait_s,
+                            path,
+                        )
+                    self.sleep(self.outage_poll_s)
+                    waited += self.outage_poll_s
+                    continue
                 if status == 200:
                     # 实测（2026-10-22）：无数据时可能返回 200 + 文本
                     # "No data found for your request"
@@ -128,11 +152,11 @@ class ThetaClient:
                     return _flatten(data.get("response", data.get("data", [])))
                 if status == 472:  # NO_DATA
                     return []
-                if status in (429, 474, 571) and attempt < self.retries - 1:
-                    time.sleep(1.0 + attempt)
+                if status == 429 and attempt < self.retries - 1:
+                    self.sleep(1.0 + attempt)
+                    attempt += 1
                     continue
                 raise ThetaError(status, body, url)
-        raise ThetaError(status, body, url)
 
     # ---- 端点 ----
     def list_expirations(self, symbol: str) -> list[dt.date]:

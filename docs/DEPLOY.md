@@ -14,6 +14,8 @@ VPS：AWS Lightsail 悉尼（ap-southeast-2），Ubuntu 24.04，2 GB，SSH 别�
 | `deploy/systemd/zr-universe.{service,timer}` | VPS | 每周五 21:30 UTC 写 universe 快照到 `~/zr_data/universe/` |
 | `deploy/systemd/zr-healthcheck.{service,timer}` | VPS | 每 5 分钟；盘中无进程或 5 分钟无新文件 → `~/zr_data/alerts/` + journald |
 | `deploy/sync_from_vps.sh` | Mac | rsync `~/zr_data/`（排除 logs）到 `$ZR_DATA_ROOT` |
+| `scripts/lib/data_root.sh` | Mac | 本机脚本统一解析数据根（环境变量 → `.env` → `./data_store`）；路径在 `/Volumes/<卷>` 下而卷未挂载时失败退出 |
+| `scripts/theta_full_pull.sh` | Mac | ThetaData 全量拉取（SPY→QQQ→MU，按月，续传，进度写 DATA_INVENTORY）；`nohup caffeinate -i bash scripts/theta_full_pull.sh &` |
 | `deploy/launchd/com.zr.sync-from-vps.plist` | Mac | 每小时调用同步脚本；脚本用 `TZ=Asia/Singapore` 判断 09 点且当天未同步才执行（`$ZR_DATA_ROOT/.last_sync`） |
 
 数据目录 `/home/ubuntu/zr_data/`：`recorder/`（Parquet）、`recorder_qa/`、`universe/`、`journal/`、`alerts/`、`logs/`、`raw/`。
@@ -60,6 +62,12 @@ ssh zr 'cd ZR_Capital && ZR_DATA_ROOT=~/zr_data ~/.local/bin/uv run python -m zr
 ssh zr 'cd ZR_Capital && ZR_DATA_ROOT=~/zr_data ~/.local/bin/uv run python -m zr.ops.healthcheck --force'
 ssh zr 'cd ZR_Capital && ZR_DATA_ROOT=~/zr_data ~/.local/bin/uv run python -m zr.data.universe'
 ```
+
+## 本机数据根（Mac）
+
+2026-10-22 起 `ZR_DATA_ROOT="/Volumes/ZHITAI TiPlus9100 2TB Media/zr_data"`（外接 APFS SSD，`Owners: Disabled`，即卷上不强制文件属主——单用户数据目录无影响）。
+旧目录 `./data_store` 保留到 2026-10-25（SGT）后删除。外接盘未插时，所有本机脚本（同步、录制、全量拉取）直接报错退出，不会在系统盘上建假目录；Python 侧读写会因路径不存在而失败。
+路径含空格：shell 里一律加引号；`.env` 里值带双引号。
 
 ## 网络（Mac 侧）
 

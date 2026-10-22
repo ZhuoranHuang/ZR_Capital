@@ -200,3 +200,34 @@ def test_ticks_window_uses_tick_interval_and_contract_fields(tmp_path):
     assert q["interval"] == ["tick"] and q["strike"] == ["640.000"] and q["right"] == ["call"]
     assert q["start_time"] == ["09:45:00.000"] and q["end_time"] == ["10:15:00.000"]
     assert len(pd.read_parquet(p)) == 1
+
+
+def test_client_waits_through_terminal_restart_then_succeeds():
+    calls = []
+    seq = [
+        (599, "refused"),
+        (571, "SERVER_STARTING"),
+        (474, "DISCONNECTED"),
+        (200, json.dumps({"response": [{"symbol": "SPY", "expiration": "2026-09-02"}]})),
+    ]
+
+    def getter(url):
+        calls.append(url)
+        return seq[len(calls) - 1]
+
+    slept = []
+    c = td.ThetaClient(getter=getter, outage_wait_s=60, outage_poll_s=10, sleep=slept.append)
+    assert c.list_expirations("SPY") == [dt.date(2026, 9, 2)]
+    assert len(calls) == 4 and slept == [10, 10, 10]
+
+
+def test_client_gives_up_after_outage_budget():
+    c = td.ThetaClient(
+        getter=lambda url: (599, "refused"),
+        outage_wait_s=30,
+        outage_poll_s=10,
+        sleep=lambda s: None,
+    )
+    with pytest.raises(td.ThetaError) as e:
+        c.list_expirations("SPY")
+    assert e.value.status == 599

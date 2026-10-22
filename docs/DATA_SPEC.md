@@ -1,6 +1,6 @@
 # 数据规范
 
-根目录 `ZR_DATA_ROOT`（默认 `./data_store`，不入库）。原始数据只增不改；修正写新分区或新版本，不覆盖。
+根目录 `ZR_DATA_ROOT`（默认 `./data_store`，不入库；Mac 自 2026-10-22 起为外接 SSD `/Volumes/ZHITAI TiPlus9100 2TB Media/zr_data`，VPS 为 `/home/ubuntu/zr_data`）。原始数据只增不改；修正写新分区或新版本，不覆盖。
 
 ## 1. 正股 1 分钟 bar
 
