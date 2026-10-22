@@ -1,6 +1,6 @@
 # 状态
 
-更新：2026-10-22 10:40 PT · fix/lookahead-audit → main
+更新：2026-10-22 11:53 PT · diag/indicator-parity → main
 
 ## 阶段
 
@@ -29,6 +29,14 @@
 - 方法论 v2 第一轮（`METHOD_V2_ROUND1*.md`）的期权盈亏数字含前视偏差，按 D-023 作废为绝对值结论。
 - **数据根已迁到外接 SSD**（APFS）：`/Volumes/ZHITAI TiPlus9100 2TB Media/zr_data`，4,141 个文件 / 345,158,096 字节核对一致；`.env` 只改了 `ZR_DATA_ROOT` 一行；同步、录制、全量拉取脚本经 `scripts/lib/data_root.sh` 解析，盘未挂载时报错退出。
 - 录制器：VPS 10-22 13:20 UTC 起按 timer 运行（SPY/QQQ/MU，239 订阅）。
+- **指标标准口径核定（D-027）+ fill-resolution 诊断**（`diag/indicator-parity`）：用 MU
+  2026-10-21 三个独立截图时刻核对后确定 BOLL/MACD 标准口径（RTH-only、按日重置，见
+  CLAUDE.md「指标标准口径」一节、`docs/research/INDICATOR_PARITY.md`），新增
+  `tests/test_indicator_parity.py` 固定回归测试（冻结 fixture，不连网）。按口径重算状态层
+  与 4 个校验点（见 0a），未重跑全部网格。另做 `docs/research/FILL_RESOLUTION.md`：1 分钟
+  快照 vs tick 级 NBBO 按 DTE 分层比较，0-DTE 在 30s 延迟下买价中位数误差 3.01%，是
+  8+DTE（0.79%）的 3.8 倍，延迟拉到 30 分钟分别涨到 22.18%/5.37%；V4 方案草案（按 DTE
+  滑点缓冲、0/1-DTE 规则卡发布前 tick 级复核）未实施，见下「待确认」。
 
 ## 待办
 
@@ -43,6 +51,11 @@
 0a-stale. **以下产出都是 D-026（已知错误口径）算出来的，现已过时，待重新跑**：`docs/research/RULE_CARDS_MU.md`、`RULE_CARDS_QQQ.md`、`METHOD_V3_ROUND1.md`、`OWN_POLICY_EXTRACTED.md`、`research/v3/model_{MU,QQQ}.md`、`docs/research/LOOKAHEAD_AUDIT.md`（延迟测试部分）、`docs/research/DELAY_TEST_{MU,QQQ}.md`、`docs/research/LOOKAHEAD_FIX_COMPARISON.md`。下面 0b、0d 两条结论也是基于这些过时文件得出的，**需要在 D-027 口径下重新验证才能相信**。
 0b. ~~QQQ E1 空头 5 分钟线索，D-026 口径下修复后基本消失~~ → 这个对比本身用的是 D-026（已知错误）口径，结论待 D-027 口径下重新验证，暂不采信。
 0d. ~~延迟测试发现 E11 做空类配置延迟 1 根反而更赚~~ → 同上，用的是 D-026 口径下的网格/规则卡，待 D-027 口径下重新验证。
+0e. **fill-resolution 诊断的 V4 方案是否立项，待负责人决定**：`docs/research/FILL_RESOLUTION.md`
+提出三条未实施的建议——(1) 0/1-DTE 规则卡宣布「有边」前用 tick 级数据独立复核；
+(2) `sim_v3.py` 成交函数加一个默认关闭的按 DTE 分层滑点缓冲参数；(3) DTE≥2 桶 1 分钟
+快照结果不必重做。这些只是诊断性抽样（MU/QQQ 54 个 contract-day）得出的建议，不是已验证
+结论，本代理未改动 `sim_v3.py` 或任何回放结果（规则 11）。
 0c. **长桥 token 的 JWT `ac` 字段未独立核实（D-025）**：按负责人说法实现了 live/paper 的 `ac` 校验，但本代理没有、也不应该读取真实 token 去核实格式。解码失败（非 3 段式、字段缺失）时的处理是实现方选的：paper 模式按「不符」拒绝，live 模式按「不是模拟盘 token」放行——这个「失败放行」的选择没有逐条确认过。请负责人找一次低风险时机（例如 `api_facts` 核验时）确认：(1) access_token 确实是 JWT 且能被 `_jwt_claim` 解出 `ac`；(2) live 模式下解码失败时应放行还是拒绝。
 
 1. **10-21 定稿的「门」的具体条件写进 DECISIONS**——仓库里没有书面记录，D-017 只引用了 W2 数字；请负责人给出原文，我补一条 D-018。
