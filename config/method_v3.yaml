@@ -16,7 +16,7 @@ regime:
     side_frac: 0.7          # 收盘在中轨同侧比例
     bw_shrink_tol: 0.9      # 「带宽未收缩」：bw[t] ≥ 0.9 × bw[t−N]（实现方口径）
     default: [5, 10]        # 状态特征与汇总用的默认 (N, M)
-  range:  # D-025：三条件同时满足（AND）覆盖率只有 4%，改为打分制
+  range:  # D-026：三条件同时满足（AND）覆盖率只有 4%，改为打分制
     window_days: 2          # 分位数窗口（交易日，按数据实际 bar/日 折算，不写死 390）
     weights: {bw: 0.3333, slope: 0.3333, hist: 0.3334}  # 三项百分位秩的加权和（等权，实现方口径）
     score_threshold: 0.3487  # uv run python -m zr.features.range_calibration：MU 2024 年 score 的

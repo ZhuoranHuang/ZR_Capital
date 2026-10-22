@@ -1,4 +1,4 @@
-"""RANGE 打分阈值标定（D-025，fix/lookahead-audit 第 3 节）。
+"""RANGE 打分阈值标定（D-026，fix/lookahead-audit 第 3 节）。
 
 在 MU 2024 年 2 分钟 K 上，取 `range_score` 的 30% 分位（[20%, 40%] 区间中点）作为
 `config/method_v3.yaml` 的 `regime.range.score_threshold`；只在 2024 年数据上标定一次，

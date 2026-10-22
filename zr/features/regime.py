@@ -8,7 +8,7 @@
   状态延续。
 - CHANNEL(N, M)：中轨斜率连续 ≥ N 根同向；近 M 根中 ≥ side_frac 收盘在中轨同侧；带宽未收缩
   （bw[t] ≥ bw_shrink_tol × bw[t−N]）。
-- RANGE（D-025 打分制，取代三条件同时满足——AND 版覆盖率只有 4%，过严）：带宽、|中轨斜率|
+- RANGE（D-026 打分制，取代三条件同时满足——AND 版覆盖率只有 4%，过严）：带宽、|中轨斜率|
   （÷ 中轨）、|MACD 柱|（÷ 收盘）各自在近 window_days 个交易日的百分位秩（0–1，越低越「不活跃」），
   按 weights 加权求和，分数 ≤ score_threshold 即 RANGE。窗口的 bar 数由数据的实际 bar/日折算
   （不写死 390，兼容含盘前盘后的连续 K 线）。阈值固定为一个常数，在 2024 年数据上标定后用于全部年份
@@ -72,7 +72,7 @@ def bars_per_day(df: pd.DataFrame) -> float:
 
 
 def range_score(x: pd.DataFrame, df: pd.DataFrame, rg: dict, period: int) -> pd.Series:
-    """RANGE 打分（D-025）：三项百分位秩的加权和，越低越「不活跃」。只用 ≤t 的滚动窗口。"""
+    """RANGE 打分（D-026）：三项百分位秩的加权和，越低越「不活跃」。只用 ≤t 的滚动窗口。"""
     w = max(1, round(rg["window_days"] * bars_per_day(df) / period))
     pr = lambda s: s.rolling(w, min_periods=max(20, w // 4)).rank(pct=True)  # noqa: E731
     wt = rg["weights"]
