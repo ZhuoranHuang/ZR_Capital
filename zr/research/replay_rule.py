@@ -270,6 +270,7 @@ def run(
                 s.update(
                     random_control(lk, t, direction, cap, elig_ex if ex else eligible_all, n_random)
                 )
+                s.update(random_control_local(lk, t, direction, cap, n=n_random))
             summary.append(s)
             trades.append(t.assign(config=name))
     tr = pd.concat(trades, ignore_index=True)
@@ -304,7 +305,8 @@ def run(
         "## 16 组配置（通道 × 方向 × 持仓上限 × 是否排除 09:30–10:00）",
         "",
         "no_contract = 决策分钟没有可买合约（DTE≤5 内都无 ask）的事件数；real_pctile = 真实合计在 "
-        "1,000 次同日同笔数随机入场中的分位。",
+        "1,000 次同日同笔数随机入场中的分位；real_pctile_local = 每笔换成同日 ±15 分钟内随机分钟"
+        "（时段匹配）后的分位。",
         "",
         df_to_md(summ),
         "",
