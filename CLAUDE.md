@@ -54,6 +54,7 @@ uv run pytest -q
 - 当日数据必须指定 `expiration`；无数据可能返回 200 + 文本；`interval=1m` 时间戳 t 的报价 = t 时刻 NBBO。
 - 单到期日 `strike=*` 1 分钟 quote ≈ 22 MB / 5 s；SPY 一天（DTE≤5）≈ 31 s、1.9 MB parquet。
 - 本机 LightGBM 缺 `libomp`（无 Homebrew），`zr/research/meta_model.py` 自动回退 sklearn HistGradientBoosting。
+- 终端连上游用 gRPC，只认 HTTP CONNECT 代理；SOCKS 会导致 `MDDS upstream unavailable`。默认直连，`run_theta_terminal.sh --proxy` 才启用（需 `THETA_HTTP_PROXY`）。
 
 ## 运行环境
 

@@ -19,8 +19,6 @@
     <dict>
         <key>PATH</key>
         <string>/usr/local/bin:/usr/bin:/bin</string>
-        <key>THETA_VIA_SOCKS</key>
-        <string>1</string>
     </dict>
     <key>KeepAlive</key>
     <true/>

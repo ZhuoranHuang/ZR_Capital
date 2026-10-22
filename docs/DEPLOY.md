@@ -105,10 +105,16 @@ Options Standard 档：tick 级，2016 起，账户并发 4（本项目用 2）�
 |---|---|---|
 | Temurin JDK 21 | `~/thetadata/jdk/`（用户目录，无需 sudo） | `~/thetadata/jdk/Contents/Home/bin/java -version` → 21.0.12.1 |
 | `ThetaTerminalv3.jar` | `~/thetadata/` | 来自 https://downloads.thetadata.us/ThetaTerminalv3.jar，启动时自动更新 |
-| `scripts/run_theta_terminal.sh` | 仓库 | 启动终端（REST `127.0.0.1:25503`），默认经 SOCKS 跳板（`THETA_VIA_SOCKS=0` 关闭）；日志 `~/thetadata/logs/` |
+| `scripts/run_theta_terminal.sh` | 仓库 | 启动终端（REST `127.0.0.1:25503`），**默认直连、不走代理**；`--proxy` 显式开启 HTTP CONNECT 代理（见下）；日志 `~/thetadata/logs/` |
 | `deploy/launchd/com.zr.theta-terminal.plist.example` | 仓库 | 常驻示例，**未安装**；需先用 API key 方式认证（`~/thetadata/.env` 的 `THETADATA_API_KEY`，负责人自己写） |
 | `zr/data/thetadata.py` | 仓库 | `bulk_quotes_1m` / `ticks_window`；CLI `uv run python -m zr.data.thetadata --start 2026-09-01 --end 2026-09-30 --symbols SPY.US` |
 | `zr/data/theta_vs_recorder.py` | 仓库 | 与录制器同一合约同一分钟 bid/ask 对比 |
+
+**网络 / 代理**（2026-10-22 负责人实测）：
+- Theta 终端连上游 MDDS 用 **gRPC**，只认 **HTTP CONNECT** 代理。设 `socksProxyHost`（SOCKS）会导致 `MDDS upstream unavailable`——**不要让终端走 `com.zr.socks` 跳板，也不要用 `zrproxy` 启动终端**。
+- 默认直连：本机经公司 VPN 直连已验证可用（10-21 17:02 启动的终端完成 22 天拉取）。
+- 确需代理时只能用 HTTP CONNECT 代理：`THETA_HTTP_PROXY=host:port bash scripts/run_theta_terminal.sh --proxy`，脚本设置 `-Dhttps.proxyHost/-Dhttps.proxyPort`（及 `http.*`），并通过 `JAVA_TOOL_OPTIONS` 传给引导 JAR 拉起的子 JVM。现有 SSH `-D` 跳板是 SOCKS，不能直接用；若要经 VPS，需要在 VPS 上另起 HTTP CONNECT 代理（未部署）。
+- Python 侧访问终端是 `127.0.0.1:25503` 本地 HTTP，不需要也不应该加代理。
 
 `~/thetadata/config.toml`：`host` 应为 `127.0.0.1`（默认 `0.0.0.0` 会监听所有网卡）；MCP server 与 REST 同端口（日志 `Starting MCP server at: http://<host>:25503/mcp/sse`），**config.toml 与 jar 内置模板都没有关闭 MCP 的键**，把 host 改成 127.0.0.1 即把 MCP 一并限制在本机（未验证是否有命令行开关）。
 

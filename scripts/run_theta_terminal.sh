@@ -1,10 +1,25 @@
 #!/usr/bin/env bash
-# 启动 Theta Terminal v3（本机）。REST 监听 127.0.0.1:25503。
+# 启动 Theta Terminal v3（本机）。REST 监听 127.0.0.1:25503（~/thetadata/config.toml 的 host）。
 # 引导 JAR 会用 PATH 里的 `java` 再拉起真正的终端，所以必须先把用户目录 JDK 的 bin 放到 PATH 最前并设 JAVA_HOME。
 # 首次启动需登录：由负责人在这个终端里输入（或按官方文档用 --api-key / THETADATA_API_KEY / ~/thetadata/.env）。
 # 本脚本不读取、不传递任何凭据。
 # 来源：https://thetadata.net/docs/Articles/Getting-Started/Getting-Started.html（2026-10-22）
+#
+# 网络：默认直连（本机经公司 VPN 直连已验证可用，2026-10-21 22 天拉取）。
+# 终端连上游 MDDS 用 gRPC，只认 HTTP CONNECT 代理；SOCKS（socksProxyHost）会导致
+# "MDDS upstream unavailable"，不要用。确需代理时：
+#   THETA_HTTP_PROXY=host:port bash scripts/run_theta_terminal.sh --proxy
+# 会设置 -Dhttps.proxyHost/-Dhttps.proxyPort（及 http.*）。--proxy 由本脚本消费，不传给终端。
 set -euo pipefail
+
+USE_PROXY=0
+ARGS=()
+for a in "$@"; do
+    case "$a" in
+        --proxy) USE_PROXY=1 ;;
+        *) ARGS+=("$a") ;;
+    esac
+done
 
 THETA_DIR="${THETA_DIR:-$HOME/thetadata}"
 JAR="$THETA_DIR/ThetaTerminalv3.jar"
@@ -21,13 +36,22 @@ export PATH="$JDK_BIN:$PATH"
 echo "JAVA_HOME=$JAVA_HOME"
 java -version 2>&1 | head -1
 
-cd "$THETA_DIR"
-# 终端启动时会自动更新；网络经 SOCKS 跳板时用 -DsocksProxyHost（公司 VPN 下需要）
 JAVA_OPTS="${JAVA_OPTS:-}"
-if [ "${THETA_VIA_SOCKS:-1}" = "1" ]; then
-    JAVA_OPTS="$JAVA_OPTS -DsocksProxyHost=127.0.0.1 -DsocksProxyPort=1080"
-    export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -DsocksProxyHost=127.0.0.1 -DsocksProxyPort=1080"
+if [ "$USE_PROXY" = "1" ]; then
+    : "${THETA_HTTP_PROXY:?--proxy 需要 THETA_HTTP_PROXY=host:port（HTTP CONNECT 代理，不能是 SOCKS）}"
+    PHOST="${THETA_HTTP_PROXY%:*}"
+    PPORT="${THETA_HTTP_PROXY##*:}"
+    PROXY_OPTS="-Dhttps.proxyHost=$PHOST -Dhttps.proxyPort=$PPORT -Dhttp.proxyHost=$PHOST -Dhttp.proxyPort=$PPORT"
+    JAVA_OPTS="$JAVA_OPTS $PROXY_OPTS"
+    # 引导 JAR 拉起的子 JVM 也要继承代理设置
+    export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} $PROXY_OPTS"
+    echo "代理：HTTP CONNECT $PHOST:$PPORT"
+else
+    echo "代理：无（直连）"
 fi
+
+cd "$THETA_DIR"
 echo "[$(TZ=America/New_York date -Iseconds) ET] start ThetaTerminal (log: $LOG_DIR)"
 # shellcheck disable=SC2086
-exec java $JAVA_OPTS -jar "$JAR" "$@" 2>&1 | tee -a "$LOG_DIR/terminal_$(TZ=America/New_York date +%F).log"
+exec java $JAVA_OPTS -jar "$JAR" ${ARGS[@]+"${ARGS[@]}"} 2>&1 \
+    | tee -a "$LOG_DIR/terminal_$(TZ=America/New_York date +%F).log"
