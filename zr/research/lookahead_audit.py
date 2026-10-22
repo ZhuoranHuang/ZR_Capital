@@ -329,6 +329,78 @@ def run_contract_selection_audit(root: Path, und: str, n_days: int, seed: int) -
     return pd.DataFrame(rows)
 
 
+def narrative_sections(syms: list[str]) -> list[str]:
+    """ThetaData 时间戳、日/全样本统计审计、模型 purge/embargo——代码审查结论，非脚本输出数值。"""
+    from zr.research.meta_model import EMBARGO_DAYS, TRAIN_MONTHS
+
+    return [
+        "",
+        "## ThetaData 1 分钟快照时间戳",
+        "",
+        "官方文档原文（<https://thetadata.net/docs/operations/option_history_quote.html>）："
+        "「the quote for each interval represents the last quote at the interval's "
+        "timestamp」——时间戳 t 的报价是「t 时刻之前最近一次真实报价」，不是 [t, t+1) 或 "
+        "[t−1, t) 的区间聚合。用 2026-10-21 录制器逐笔数据交叉验证 MU261023P940000 "
+        "的 5 个比对分钟：3 个与 recorder 在 t 之后几秒内收到的首个推送精确相等、2 个更接近 "
+        "t 之前最后一次推送，与文档一致。CLAUDE.md 已记录来源与核实过程。结论：现有对齐"
+        "（决策分钟 = 信号 bar 收盘分钟 + 1）正确，不需要改。",
+        "",
+        "## 当日 / 全样本统计审计",
+        "",
+        "逐一排查用到 `.mean()/.std()/.median()/.quantile()/.rank()` 且未配合 `rolling`/`groupby`"
+        "（即可能用到未来数据）的位置：",
+        "",
+        "| 位置 | 用途 | 结论 |",
+        "|---|---|---|",
+        "| `zr/features/regime.py` RANGE（修复前） | 近 2 日百分位秩，`rolling().rank(pct=True)` | "
+        "已经是滚动窗口，causal；覆盖率过低（4%）是阈值设计问题，不是前视——已按 D-026 改打分制 |",
+        "| `zr/research/events.py:143` E6 布林挤压阈值 `width.groupby(day).quantile(pct)` | "
+        "每日带宽低分位 | `.shift(1)` 作用在按天聚合后的序列上，当天阈值只用严格更早的日子，"
+        "causal，无需改 |",
+        "| `zr/features/features.py` 当日首根 close/open、前一日收盘/已实现波动 | "
+        '`groupby(day).transform("first")` / `.last().shift(1)` | '
+        "「first」在组内第 0 行即可得（当日开盘即已知）；「shift(1)」用严格更早的日子，均 causal |",
+        "| `zr/research/model_v3.py` 十分位表、样本外最高十分位规则提取 | "
+        "`pd.qcut(...)`、`.quantile(0.9)` | 分位边界用整个样本外集合算，属于**事后评估报表 / "
+        "描述性规则提取**，不是因果特征、不是实盘可用的交易阈值（已在对应函数 docstring 注明"
+        "「仅作描述，不作特征」）；实际决策用的是固定阈值（如 X6 的 ±20%/±30%），不是相对"
+        "同批数据的分位 |",
+        "",
+        "未发现：全样本统计被当作交易特征或入场/出场判据使用的情况。",
+        "",
+        "## 模型 purge / embargo / Optuna 隔离",
+        "",
+        f"`zr/research/meta_model.py`：`TRAIN_MONTHS={TRAIN_MONTHS}`、`EMBARGO_DAYS={EMBARGO_DAYS}`"
+        f"（训练窗口只取到 `测试月第一天 − {EMBARGO_DAYS} 天`之前）。v3 的标签窗口最长是 "
+        "X7 持仓上限 30 分钟（同日内，15:50 前强平，不跨日），远小于 1 天的 embargo，足够覆盖。"
+        "`zr/research/model_v3.py::tune()` 的 Optuna 内层切分只在**已经是训练窗口的** "
+        "`Xtr/ytr/dtr`（已排除测试月与 embargo 区间）内部再切「训练窗最后 2 个月」作内层验证，"
+        "从未传入测试月的数据——代码读查确认符合「只在训练窗口内部切分」的要求。",
+        "",
+        "边界：以上三节是代码审查结论，没有新脚本产出数字；purge/embargo 的「足够覆盖」判断"
+        "基于「v3 持仓不跨日」这一事实（`zr/research/sim_v3.py` 的 flat/d001_flat_0dte 配置），"
+        "若未来允许跨日持仓需重新评估 EMBARGO_DAYS。",
+    ]
+
+
+def delay_test_sections(root: Path, syms: list[str]) -> list[str]:
+    L = ["", "## 延迟测试（入场延迟 1 根 K 线）", ""]
+    for und in syms:
+        p = Path(__file__).resolve().parents[2] / "docs" / "research" / f"DELAY_TEST_{und}.md"
+        if not p.exists():
+            L += [
+                f"### {und}",
+                "",
+                f"未运行（`uv run python -m zr.research.delay_test --symbol {und}.US`）。",
+                "",
+            ]
+            continue
+        text = p.read_text(encoding="utf-8")
+        body = text.split("\n", 1)[1] if "\n" in text else text
+        L += [f"### {und}", "", body.strip(), ""]
+    return L
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--symbol", action="append", default=None)
@@ -396,6 +468,8 @@ def main(argv: list[str] | None = None) -> int:
         "边界：覆盖 MU、QQQ；未覆盖 SPY（期权拉取暂停）；容差 1e-9（浮点舍入）；"
         "「缺失」行表示截断点落在该周期尚未收盘的 bar 内，属正常（不计入不一致）。",
     ]
+    L += narrative_sections(syms)
+    L += delay_test_sections(root, syms)
     out = Path(__file__).resolve().parents[2] / "docs" / "research" / "LOOKAHEAD_AUDIT.md"
     out.write_text("\n".join(L), encoding="utf-8")
     log.info("写入 %s", out)
