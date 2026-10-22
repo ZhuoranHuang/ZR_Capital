@@ -70,7 +70,8 @@ def existing_min_ts(root: Path, symbol: str) -> pd.Timestamp | None:
 
 def write_merged(root: Path, symbol: str, df: pd.DataFrame) -> dict[int, int]:
     """按年合并写入，去重（同一 ts 以本次拉到的为准：长桥会事后修订 bar，例如 MU 2026-10-21
-    09:30 的 open 由 925.42 改为 923.735，见 BASE_FINAL_AUDIT.md 第 1 节）；返回 {year: 合并后行数}。"""
+    09:30 的 open 由 925.42 改为 923.735，见 BASE_FINAL_AUDIT.md 第 1 节）。
+    返回 {year: 合并后行数}。"""
     out: dict[int, int] = {}
     if df.empty:
         return out
