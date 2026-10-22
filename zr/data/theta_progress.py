@@ -18,10 +18,10 @@ from zr.config import get_settings
 
 TABLE_HEADER = "## 全量拉取进度（scripts/theta_full_pull.sh 自动追加）"
 COLUMNS = (
-    "| 标的 | 月份 | 交易日 | 失败日 | quotes 行 | ohlc 行 | oi 行 | 拉取秒数 | parquet MB "
-    "| 完成时间 (ET) |"
+    "| 标的 | 月份 | 交易日 | 失败日 | 覆盖/未覆盖 | quotes 行 | ohlc 行 | oi 行 | 拉取秒数 "
+    "| parquet MB | 完成时间 (ET) |"
 )
-SEP = "|---|---|---|---|---|---|---|---|---|---|"
+SEP = "|---|---|---|---|---|---|---|---|---|---|---|"
 
 
 def month_summary(root: Path, und: str, start: dt.date, end: dt.date) -> dict:
@@ -36,6 +36,11 @@ def month_summary(root: Path, und: str, start: dt.date, end: dt.date) -> dict:
             if start <= d <= end:
                 latest[d.isoformat()] = r  # 同一天以最后一次为准
     ok = [r for r in latest.values() if "error" not in r]
+    from zr.data.thetadata import coverage_report
+
+    cov = coverage_report(root, und, [dt.date.fromisoformat(d) for d in latest])
+    n_cov = int((cov["covered"] == True).sum()) if len(cov) else 0  # noqa: E712
+    n_unc = int((cov["covered"] == False).sum()) if len(cov) else 0  # noqa: E712
     size = 0
     for d in latest:
         p = root / "options_1m" / f"underlying={und}" / f"date={d}"
@@ -48,12 +53,15 @@ def month_summary(root: Path, und: str, start: dt.date, end: dt.date) -> dict:
         "ohlc": sum(r.get("rows_ohlc", 0) for r in ok),
         "oi": sum(r.get("rows_oi", 0) for r in ok),
         "mb": round(size / 1e6, 1),
+        "covered": n_cov,
+        "uncovered": n_unc,
     }
 
 
 def format_row(und: str, start: dt.date, s: dict, seconds: int, finished: str) -> str:
     return (
-        f"| {und} | {start.strftime('%Y-%m')} | {s['days']} | {s['failed']} | {s['quotes']} | "
+        f"| {und} | {start.strftime('%Y-%m')} | {s['days']} | {s['failed']} | "
+        f"{s.get('covered', 0)}/{s.get('uncovered', 0)} | {s['quotes']} | "
         f"{s['ohlc']} | {s['oi']} | {seconds} | {s['mb']} | {finished} |"
     )
 

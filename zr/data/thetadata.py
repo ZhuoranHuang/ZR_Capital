@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
 
 from zr.config import get_settings
@@ -280,24 +281,34 @@ def select_expirations(
     return sorted(e for e in expirations if 0 <= (e - day).days <= max_dte)
 
 
-def strike_filter(df: pd.DataFrame, open_px: float, band: float) -> pd.DataFrame:
+def band_bounds(px_range: tuple[float, float, float], band: float) -> tuple[float, float]:
+    """行权价保留区间 = [当日最低价×(1−band), 当日最高价×(1+band)]。
+
+    用全天高低点而不是开盘价：盘中价格跑出开盘价±band 时，需要的行权价已经在原始响应里
+    （请求本来就是 strike=*），只是本地过滤要放宽，不必补拉。
+    """
+    _, lo, hi = px_range
+    return lo * (1 - band), hi * (1 + band)
+
+
+def strike_filter(df: pd.DataFrame, lo: float, hi: float) -> pd.DataFrame:
     if df.empty:
         return df
-    lo, hi = open_px * (1 - band), open_px * (1 + band)
     return df[(df["strike"] >= lo) & (df["strike"] <= hi)].reset_index(drop=True)
 
 
-def open_price_from_bars(root: Path, und: str, day: dt.date) -> float | None:
-    """当日 09:30 ET 第一根 1 分钟 K 的开盘价（长桥 bars_1m）。"""
+def day_price_range(root: Path, und: str, day: dt.date) -> tuple[float, float, float] | None:
+    """当日盘中 (开盘价, 最低价, 最高价)，来自长桥 bars_1m；没有正股 K 的日期返回 None。"""
     f = root / "bars_1m" / f"underlying={und}" / f"year={day.year}" / "bars.parquet"
     if not f.exists():
         return None
-    bars = pd.read_parquet(f, columns=["ts", "open", "session"])
+    bars = pd.read_parquet(f, columns=["ts", "open", "high", "low", "session"])
     t = bars["ts"].dt.tz_convert(ET)
     sel = bars[(t.dt.date == day) & (bars["session"] == "Intraday")]
     if sel.empty:
         return None
-    return float(sel.sort_values("ts")["open"].iloc[0])
+    sel = sel.sort_values("ts")
+    return float(sel["open"].iloc[0]), float(sel["low"].min()), float(sel["high"].max())
 
 
 # ---------- 落盘 ----------
@@ -337,11 +348,12 @@ def fetch_day(
     und: str,
     day: dt.date,
     expirations: list[dt.date],
-    open_px: float | None,
+    px_range: tuple[float, float, float] | None,
 ) -> dict:
     t0 = time.monotonic()
     exps = select_expirations(expirations, day)
     band = STRIKE_BAND.get(und, 0.05)
+    bounds = band_bounds(px_range, band) if px_range else None
     quotes, ohlc = [], []
     # 每个到期日一次请求（strike=*），本地按带宽过滤；并发由 client 信号量限制
     with ThreadPoolExecutor(max_workers=client.concurrency) as ex:
@@ -367,18 +379,25 @@ def fetch_day(
         if any(not x.empty for x in ohlc)
         else pd.DataFrame()
     )
-    if open_px is not None:
+    if bounds is not None:
         q, o, oi = (
-            strike_filter(q, open_px, band),
-            strike_filter(o, open_px, band),
-            strike_filter(oi, open_px, band),
+            strike_filter(q, *bounds),
+            strike_filter(o, *bounds),
+            strike_filter(oi, *bounds),
         )
     write_day(root, und, day, q, o, oi)
     rec = {
         "underlying": und,
         "date": day,
         "expirations": [e.isoformat() for e in exps],
-        "open_px": open_px,
+        "open_px": px_range[0] if px_range else None,
+        "day_low": px_range[1] if px_range else None,
+        "day_high": px_range[2] if px_range else None,
+        "band": band,
+        "band_lo": bounds[0] if bounds else None,
+        "band_hi": bounds[1] if bounds else None,
+        "strike_min": float(q["strike"].min()) if len(q) else None,
+        "strike_max": float(q["strike"].max()) if len(q) else None,
         "rows_quotes": len(q),
         "rows_ohlc": len(o),
         "rows_oi": len(oi),
@@ -394,7 +413,7 @@ def bulk_quotes_1m(
     und: str,
     days: Iterable[dt.date],
     *,
-    open_px_fn: Callable[[dt.date], float | None] | None = None,
+    px_fn: Callable[[dt.date], tuple[float, float, float] | None] | None = None,
 ) -> list[dict]:
     pending = [d for d in days if not day_done(root, und, d)]
     if not pending:
@@ -402,9 +421,9 @@ def bulk_quotes_1m(
     expirations = client.list_expirations(und)
     out = []
     for day in pending:
-        open_px = open_px_fn(day) if open_px_fn else open_price_from_bars(root, und, day)
+        px_range = px_fn(day) if px_fn else day_price_range(root, und, day)
         try:
-            rec = fetch_day(client, root, und, day, expirations, open_px)
+            rec = fetch_day(client, root, und, day, expirations, px_range)
         except ThetaError as e:
             rec = {"underlying": und, "date": day, "error": str(e)}
             _append_manifest(root, rec)
@@ -422,6 +441,60 @@ def trading_days_from_bars(root: Path, und: str, start: dt.date, end: dt.date) -
         ts = ts[ts["session"] == "Intraday"]["ts"].dt.tz_convert(ET).dt.date
         days.update(d for d in ts.unique() if start <= d <= end)
     return sorted(days)
+
+
+# ---------- 覆盖检查 ----------
+
+
+def coverage_report(root: Path, und: str, days: Iterable[dt.date]) -> pd.DataFrame:
+    """对照正股当日高低点，检查已落盘日期的行权价范围是否覆盖 [low×(1−band), high×(1+band)]。
+
+    覆盖不足的日期（早期按开盘价±band 过滤的）用 `--repull-uncovered` 删掉后由续传重新拉取。
+    """
+    band = STRIKE_BAND.get(und, 0.05)
+    rows = []
+    for day in days:
+        d = day_dir(root, "options_1m", und, day)
+        qp = d / "quotes.parquet"
+        if not qp.exists():
+            continue
+        px = day_price_range(root, und, day)
+        q = pd.read_parquet(qp)
+        has = len(q) > 0 and "strike" in q.columns  # 空日（无数据）写出的 parquet 没有列
+        smin, smax = (float(q["strike"].min()), float(q["strike"].max())) if has else (None, None)
+        if px is None or smin is None:
+            rows.append({"date": day, "covered": None, "strike_min": smin, "strike_max": smax})
+            continue
+        lo, hi = band_bounds(px, band)
+        # 用相邻行权价间距作容差：最低/最高行权价与边界差不超过一档即算覆盖
+        strikes = np.sort(q["strike"].unique())
+        step = float(np.min(np.diff(strikes))) if len(strikes) > 1 else 0.0
+        covered = (smin <= lo + step) and (smax >= hi - step)
+        rows.append(
+            {
+                "date": day,
+                "covered": bool(covered),
+                "need_lo": round(lo, 2),
+                "need_hi": round(hi, 2),
+                "strike_min": smin,
+                "strike_max": smax,
+                "day_low": px[1],
+                "day_high": px[2],
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def drop_days(root: Path, und: str, days: Iterable[dt.date]) -> int:
+    import shutil
+
+    n = 0
+    for day in days:
+        d = day_dir(root, "options_1m", und, day)
+        if d.is_dir():
+            shutil.rmtree(d)
+            n += 1
+    return n
 
 
 # ---------- 模式 b：ticks_window ----------
@@ -461,6 +534,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--start", required=True)
     parser.add_argument("--end", required=True)
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
+    parser.add_argument(
+        "--coverage-check", action="store_true", help="只检查已落盘日期的行权价覆盖"
+    )
+    parser.add_argument(
+        "--repull-uncovered", action="store_true", help="覆盖不足的日期删掉以便续传重拉"
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     settings = get_settings()
@@ -472,6 +551,20 @@ def main(argv: list[str] | None = None) -> int:
     start, end = dt.date.fromisoformat(args.start), dt.date.fromisoformat(args.end)
     for und in unds:
         days = trading_days_from_bars(root, und, start, end)
+        if args.coverage_check or args.repull_uncovered:
+            cov = coverage_report(root, und, days)
+            bad = cov[cov["covered"] == False]["date"].tolist() if len(cov) else []  # noqa: E712
+            log.info(
+                "%s 覆盖检查：已落盘 %d 天，覆盖不足 %d 天 %s",
+                und,
+                len(cov),
+                len(bad),
+                [d.isoformat() for d in bad][:20],
+            )
+            if args.repull_uncovered and bad:
+                log.info("%s 删除 %d 天以便重拉", und, drop_days(root, und, bad))
+            if args.coverage_check:
+                continue
         log.info("%s 交易日 %d 个（%s ~ %s）", und, len(days), start, end)
         recs = bulk_quotes_1m(client, root, und, days)
         ok = [r for r in recs if "error" not in r]

@@ -161,12 +161,13 @@ def test_bulk_day_filters_strikes_writes_parquet_and_resumes(tmp_path):
     calls: list[str] = []
     client = td.ThetaClient(getter=_fake_getter(calls), concurrency=2)
     day = dt.date(2026, 9, 1)
-    recs = td.bulk_quotes_1m(client, tmp_path, "SPY", [day], open_px_fn=lambda d: 640.0)
+    recs = td.bulk_quotes_1m(client, tmp_path, "SPY", [day], px_fn=lambda d: (640.0, 638.0, 642.0))
     assert len(recs) == 1 and "error" not in recs[0]
     assert recs[0]["expirations"] == ["2026-09-01", "2026-09-02", "2026-09-03"]  # 09-30 超过 DTE 5
     d = tmp_path / "options_1m/underlying=SPY/date=2026-09-01"
     q = pd.read_parquet(d / "quotes.parquet")
-    # ±3%：640*0.97=620.8 ~ 659.2 → 只剩 630/640/650，三个到期日 × 3 档 × call+put
+    # 带宽按当日高低点：[638×0.97, 642×1.03] = [618.9, 661.3] → 只剩 630/640/650，
+    # 三个到期日 × 3 档 × call+put
     assert sorted(q["strike"].unique()) == [630.0, 640.0, 650.0]
     assert len(q) == 3 * 3 * 2
     oi = pd.read_parquet(d / "oi.parquet")
@@ -174,7 +175,10 @@ def test_bulk_day_filters_strikes_writes_parquet_and_resumes(tmp_path):
     assert (tmp_path / "options_1m/manifest.jsonl").exists()
     n_calls = len(calls)
     # 断点续传：已完成的日期不再请求
-    assert td.bulk_quotes_1m(client, tmp_path, "SPY", [day], open_px_fn=lambda d: 640.0) == []
+    assert (
+        td.bulk_quotes_1m(client, tmp_path, "SPY", [day], px_fn=lambda d: (640.0, 638.0, 642.0))
+        == []
+    )
     assert len(calls) == n_calls
 
 
@@ -232,3 +236,19 @@ def test_client_gives_up_after_outage_budget():
     with pytest.raises(td.ThetaError) as e:
         c.list_expirations("SPY")
     assert e.value.status == 599
+
+
+def test_coverage_report_flags_days_filtered_too_narrow(tmp_path, monkeypatch):
+    day = dt.date(2026, 9, 1)
+    d = tmp_path / "options_1m/underlying=SPY/date=2026-09-01"
+    d.mkdir(parents=True)
+    pd.DataFrame({"strike": [630.0, 640.0, 650.0]}).to_parquet(d / "quotes.parquet", index=False)
+    # 当日最低 600 → 需要 582 起；最高 642 → 需要到 661.3；存的只有 630–650 → 不覆盖
+    monkeypatch.setattr(td, "day_price_range", lambda root, und, day: (640.0, 600.0, 642.0))
+    cov = td.coverage_report(tmp_path, "SPY", [day])
+    assert cov.loc[0, "covered"] is False or cov.loc[0, "covered"] == False  # noqa: E712
+    # 需要 [620.3, 659.7]，存的 630–650，一档容差 10 → 覆盖
+    monkeypatch.setattr(td, "day_price_range", lambda root, und, day: (640.0, 639.5, 640.5))
+    cov = td.coverage_report(tmp_path, "SPY", [day])
+    assert bool(cov.loc[0, "covered"]) is True
+    assert td.drop_days(tmp_path, "SPY", [day]) == 1 and not d.exists()
