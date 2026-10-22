@@ -19,6 +19,8 @@ dependencies = [
     "structlog",
     "pyyaml",
     "matplotlib",
+    "lightgbm",
+    "scikit-learn",
 ]
 
 [project.optional-dependencies]

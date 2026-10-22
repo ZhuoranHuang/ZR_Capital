@@ -20,7 +20,7 @@ SENSITIVE_SECTIONS = (
     "history_executions",
     "estimate_max_purchase_quantity",
 )
-NUM_RE = re.compile(r'(?<=[:\[,\s])-?\d+(?:\.\d+)?(?=[,\]\s}])')
+NUM_RE = re.compile(r"(?<=[:\[,\s])-?\d+(?:\.\d+)?(?=[,\]\s}])")
 ID_RE = re.compile(r'("(?:order_id|trade_id|account_channel)":\s*)"[^"]*"')
 
 

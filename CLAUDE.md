@@ -48,6 +48,13 @@ uv run pytest -q
 - 一次 `subscribe` 308 个代码 × Quote/Depth/Trade 正常；一分钟内反复订阅大量期权会触发 `code=301607 Too many option securities request within one minute`。
 - systemd：`EnvironmentFile` 覆盖 `Environment=`，服务里的 `ZR_DATA_ROOT` 必须写在 `ExecStart=/usr/bin/env ...` 上。
 
+## ThetaData 已核实事实（Theta Terminal v3，2026-10-22 实测）
+
+- REST `http://127.0.0.1:25503/v3`；响应为 `{"response":[{"contract":{...},"data":[...]}]}` 嵌套，`zr/data/thetadata.py` 已展平。
+- 当日数据必须指定 `expiration`；无数据可能返回 200 + 文本；`interval=1m` 时间戳 t 的报价 = t 时刻 NBBO。
+- 单到期日 `strike=*` 1 分钟 quote ≈ 22 MB / 5 s；SPY 一天（DTE≤5）≈ 31 s、1.9 MB parquet。
+- 本机 LightGBM 缺 `libomp`（无 Homebrew），`zr/research/meta_model.py` 自动回退 sklearn HistGradientBoosting。
+
 ## 运行环境
 
 长桥 API 相关任务（核验、录制、交易史）只在 VPS `zr` 上跑；本机网络对 longportapp.com 有 DNS 污染。部署见 `docs/DEPLOY.md`。

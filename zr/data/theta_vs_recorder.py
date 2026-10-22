@@ -51,8 +51,11 @@ def theta_minute_quotes(root: Path, day: dt.date, und: str) -> pd.DataFrame:
     if not p.exists():
         return pd.DataFrame()
     t = pd.read_parquet(p)
-    # Theta 1m 的时间戳是区间时刻，其报价为该分钟内末次 NBBO；与录制器"该分钟最后一条"同义
-    t["minute"] = t["ts"].dt.floor("min")
+    # 实测（2026-10-21 对比）：Theta interval=1m 时间戳 t 的报价 = t 时刻的 NBBO，
+    # 即分钟 [t−1, t) 的末次报价；录制器桶取 [t−1, t) 内最后一条 Depth，
+    # 所以把 Theta 的 minute 减 1 分钟对齐。
+    # 不减时精确相等 17.5%，减 1 分钟后 43.4%（1 tick 内 66%）。
+    t["minute"] = t["ts"].dt.floor("min") - pd.Timedelta(minutes=1)
     return t[["symbol", "minute", "bid", "ask", "bid_size", "ask_size"]]
 
 

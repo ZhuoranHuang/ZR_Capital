@@ -1,32 +1,34 @@
 # 状态
 
-更新：2026-10-22 08:45 SGT · main
+更新：2026-10-22 09:30 SGT · 分支 `feat/w2-conditional`
 
 ## 阶段
 
-W1 收尾完成；W2 第一步（事件 × 标签）已跑完三标的；ThetaData 代码就绪、验证等负责人登录。标的收敛为 **SPY / QQQ / MU**（D-016）。
+W2 第二步（条件分层 + 元标签）跑完。结论：**所有检测器 / 条件格子 / 元标签十分位在扣费后都为负**；
+正股层面存在统计显著但 ≤1.6 bp 的弱信号，离覆盖期权费用（≈6 USD/张）差一个量级。ThetaData 已接入并验证。
 
-## W2 第一步结果（`docs/research/EVENT_LABEL_TABLE.md`，2023-10-02～2026-10-21，三标的 24 秒）
+## W2 第二步结果（2023-10-02～2026-10-21，SPY/QQQ/MU）
 
-- 代码：`zr/features/bars.py`（2/5 分钟聚合、成交量 bar）、`zr/features/features.py`（23 个正股特征，逐一无前视测试）、`zr/research/{events,labels,run}.py`、`config/{events,research_w2}.yaml`；96 个测试。
-- 触发频率（次/日，SPY/QQQ/MU）：E1 153/137/64（eps 太松）、E2 0.54/0.49/0.45、E3 4.4/4.2/3.9、E4 0.36/0.33/0.35、E5 35/34/34、E6 0.31/0.34/0.39、E7 ≈1、E8 9.8/9.3/8.8。
-- 原始成功率（hit_rate）全部在 0.42–0.54 之间；没有一个检测器在三标的上稳定 >0.5。
-- 响应曲线见顶：E2 MU 15 分钟（+4.5 bp）、E3 MU 10 / SPY 15 分钟、E4 MU 5 分钟、E5 1–3 分钟即见顶后转负、E6 MU 10 分钟、E7 5–10 分钟、E8 QQQ 30 / SPY 15 分钟。
-- 扣费后近似 P&L（单张 ATM、delta 0.5、D-013 费用 + 2 tick 点差）几乎全为负（−4～−13 USD/张）；唯一为正的是 E4 MU H=15/30（+1.9 / +4.9 USD，样本 274，不可信）。
-- R-004：H=30 vs H=5 无一致方向，交易史「持仓越长越差」未在事件标签上复现。R-005：按离场时长分桶的差异是选择偏差，不作证据。
-- 结论：当前八个检测器在正股层面都没有可覆盖期权费用的 alpha；下一步是参数扫描（E1 eps、E2 15 分钟版、E5 k）、E8 加 gamma 门控（需 ThetaData OI）、以及元标签而不是单检测器。
+| 文档 | 内容 | 关键数字 |
+|---|---|---|
+| `docs/research/SCAN_TABLE.md` | R-006～R-009，570 次试验（233 s） | E1 收紧后 3–15/日只在 MU 可达（11 组），最佳 ε=0.05%/确认 1/趋势 E：13.5/日、hit 0.49、t 3.22、扣费 −6.05；SPY/QQQ 最紧仍 ≥16/日。全表 t 最高 5.04（MU，0.9 bp）。E9 抄底 MU 2.6/日 hit 0.52 t 3.68 扣费 −3.8；回撤 2% 版扣费为正但样本 ≤251 |
+| `docs/research/SCREENSHOT_STRATEGIES.md` | R-010/R-011 两个网传策略原规则回测 | E4：SPY −4031 / QQQ −3307 / MU +2547 USD（费用 1.4 万），期权表达三者全负（−3.4 万/张）。E9 YaleV3：三标的为正（+4.9 万）但持仓 10–114 日、盈亏比 0.3–0.4，全部跑输同期买入持有（SPY +81% / QQQ +102% / MU +1246%）；期权表达不适用 |
+| `docs/research/CONDITIONAL_TABLE.md` | R-012，406 格、报告 220 格（n≥200） | t 最高 5 格：E3 MU 逆开盘方向 t 4.02（1.05 bp，n 1606）、E1 MU 跳空向上 3.34、E3 QQQ 逆开盘方向 3.28、E1 MU 跳空向下 3.15、E3 QQQ 11:30–14:00 3.03；hit ≤0.55，扣费全负 |
+| `docs/research/META_MODEL.md` | R-013，sklearn HGB（LightGBM 缺 libomp 回退），purged WF 12m/1m/1d | H=5 样本外 AUC 0.511（25 月，96% >0.5），最高十分位 hit 0.506、**−6.52 USD/张、50/日**；H=15 AUC 0.506、−5.50 USD。校准贴线。MDA：bb_pct_b、macd_hist_atr、min_to_close、vwap_dist_atr |
+| `docs/research/BASELINE_IC.md` | R-014 全样本基线 | 月度 Spearman IC 0.005–0.010，正月 40–68%，t ≤ 2.0 |
 
-## W1 收尾（2026-10-22）
+## ThetaData 验证（R-015）
 
-- 10-21 录制 QA（post_close 任务 20:10 UTC 执行，exit 0）：4044 文件 / 1,673,430 行 / 去重 102,750，重连 0、回调异常 0。正股消息数 SPY 12878/15047/12949、QQQ 12368/15239/12409、MU 13407/10558/13459、AMD 11670/7932/11716（quote/depth/trade），正股最大间隔 ≤12 s、无 >60 s 缺口。详表 `docs/DATA_INVENTORY.md`。会话数据已并入 `~/zr_data/recorder/`（76 MB），deploy `feat/w1-analysis` 在 post_close 中成功。
-- 回填：SPY/QQQ/MU/AMD 全部到 2023-10-02（服务端上限），AMD 19:55 UTC 正常结束，数据保留不续跑。
-- 标的集合：`.env.example`、`zr/config.py` 默认、`config/universe.yaml` 注释、VPS 与 Mac `.env` 的 `ZR_SYMBOLS` 行 → `SPY.US,QQQ.US,MU.US`；dry-run 订阅集 239（上限 450）。AMD 留在候选池。
-- D-014（到期日保证金，长桥 FAQ Q3/Q6，0DTE 仓位减半硬规则）、D-015（tick 规则 → `zr/execution/ticks.py`，5 个测试）、D-016（标的收敛）。
-- Mac 同步：`sync_from_vps.sh --now` 3626 文件 63 MB 14.5 s；launchd 每小时触发、SGT 09 点门控。
-- 测试 53 个，ruff 通过。
+- 终端：Options STANDARD，REST 127.0.0.1:25503；`scripts/run_theta_terminal.sh` 已改为先 export 用户目录 JDK 的 PATH/JAVA_HOME（find 定位 bin）。
+- SPY 2026-09 全月 + 10-21：22 天、quotes 313 万行、**690 s（31 s/天）、42 MB（1.9 MB/天）**；全量估算 SPY 6.8 h / 1.5 GB，三标的 ≈ 20 h / 4.5 GB。
+- 与录制器同合约同分钟对比（10-21，5797 个合约分钟）：对齐 Theta t ↔ 录制器 [t−1,t) 后 **精确相等 43%、1 tick 内 66%、平均 |Δ| 0.02**；长桥 Depth 是单档非 NBBO，差异集中在收盘分钟与深价外。
+- RV−IV：09:31 ATM 0DTE IV 均值 0.17，随后 1 小时 RV 均值低 0.08、全天低 0.10，**22/22 天 RV<IV**，开盘半小时最接近。`docs/research/RV_VS_IV.md`
+- 发现并修的接口事实：响应是 `{response:[{contract,data}]}` 嵌套、当日数据必须指定 expiration、无数据可能 200+文本、1m 时间戳语义（t 时刻 NBBO）。
 
 ## 阻塞 / 待确认
 
+0. **ThetaData 是否全量拉取**（SPY/QQQ/MU 2023-10 至今，≈20 h / 4.5 GB，可分标的后台跑）。
+0b. `~/thetadata/config.toml` 把 `host` 改为 127.0.0.1（diff 已打印等确认）；MCP server 与 REST 同端口且无关闭开关，改 host 即限制在本机。
 1. 账户净资产 ≈ 0（上轮发现），实盘前需入金。
 2. 1 分钟 K 只能回溯到 2023-10-02；2023-01～09 若需要另找源。
 3. D-008 蒙特卡洛脚本未入库（R-002）。

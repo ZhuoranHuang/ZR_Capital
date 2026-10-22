@@ -64,9 +64,7 @@ def bollinger(close: pd.Series, n: int = 20, k: float = 2.0) -> pd.DataFrame:
 def true_range(high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
     """第一根无前收，取 high - low。"""
     prev_close = close.shift(1)
-    parts = pd.concat(
-        [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
-    )
+    parts = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1)
     return parts.max(axis=1, skipna=True)
 
 
@@ -74,9 +72,7 @@ def atr(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Se
     return _wilder(true_range(high, low, close), n)
 
 
-def session_vwap(
-    high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series
-) -> pd.Series:
+def session_vwap(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series) -> pd.Series:
     """按交易日重置的 VWAP，价格用典型价 (H+L+C)/3。
 
     以索引的日历日期分组，索引须为 DatetimeIndex 且已转为交易所本地时区。
@@ -90,9 +86,7 @@ def session_vwap(
     return cum_pv / cum_v.replace(0, np.nan)
 
 
-def realized_vol(
-    close: pd.Series, n: int, periods_per_year: float | None = None
-) -> pd.Series:
+def realized_vol(close: pd.Series, n: int, periods_per_year: float | None = None) -> pd.Series:
     """对数收益的滚动标准差（ddof=1）。给定 periods_per_year 时年化；年化因子由调用方提供。"""
     rv = np.log(close).diff().rolling(n, min_periods=n).std(ddof=1)
     if periods_per_year is not None:
@@ -111,3 +105,30 @@ def bar_slope(s: pd.Series, n: int) -> pd.Series:
         windows = np.lib.stride_tricks.sliding_window_view(s.to_numpy(dtype=float), n)
         out[n - 1 :] = windows @ w
     return pd.Series(out, index=s.index)
+
+
+def kdj(
+    high: pd.Series, low: pd.Series, close: pd.Series, n: int = 9, m1: int = 3, m2: int = 3
+) -> pd.DataFrame:
+    """KDJ：RSV = (C − Ln)/(Hn − Ln)×100；K = EMA(RSV, 1/m1)；D = EMA(K, 1/m2)；J = 3K − 2D。
+    国内常用口径（SMA 递推 α=1/m）；无前视。"""
+    ln = low.rolling(n, min_periods=n).min()
+    hn = high.rolling(n, min_periods=n).max()
+    rsv = ((close - ln) / (hn - ln).replace(0, np.nan) * 100).fillna(50.0)
+    k = rsv.ewm(alpha=1 / m1, adjust=False).mean()
+    d = k.ewm(alpha=1 / m2, adjust=False).mean()
+    return pd.DataFrame({"k": k, "d": d, "j": 3 * k - 2 * d})
+
+
+def adx(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.DataFrame:
+    """Wilder ADX 与 +DI / −DI。无前视。"""
+    up = high.diff()
+    dn = -low.diff()
+    plus_dm = up.where((up > dn) & (up > 0), 0.0)
+    minus_dm = dn.where((dn > up) & (dn > 0), 0.0)
+    tr = true_range(high, low, close)
+    atr_n = _wilder(tr, n).replace(0, np.nan)
+    plus_di = 100 * _wilder(plus_dm, n) / atr_n
+    minus_di = 100 * _wilder(minus_dm, n) / atr_n
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+    return pd.DataFrame({"adx": _wilder(dx, n), "plus_di": plus_di, "minus_di": minus_di})

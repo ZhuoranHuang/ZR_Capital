@@ -116,8 +116,16 @@ class ThetaClient:
             for attempt in range(self.retries):
                 status, body = getter(url)
                 if status == 200:
-                    data = json.loads(body) if body.strip() else []
-                    return data if isinstance(data, list) else data.get("data", [])
+                    # 实测（2026-10-22）：无数据时可能返回 200 + 文本
+                    # "No data found for your request"
+                    try:
+                        data = json.loads(body) if body.strip() else []
+                    except json.JSONDecodeError:
+                        return []
+                    if isinstance(data, list):
+                        return _flatten(data)
+                    # 实测（2026-10-22）终端返回 {"response": [...]}；兼容 {"data": [...]}
+                    return _flatten(data.get("response", data.get("data", [])))
                 if status == 472:  # NO_DATA
                     return []
                 if status in (429, 474, 571) and attempt < self.retries - 1:
@@ -174,16 +182,39 @@ class ThetaClient:
         return _frame(rows, symbol, date)
 
     def history_open_interest(
-        self, symbol: str, date: dt.date, max_dte: int = MAX_DTE
+        self, symbol: str, date: dt.date, expiration: dt.date | None = None, max_dte: int = MAX_DTE
     ) -> pd.DataFrame:
+        # 实测（2026-10-22）：当日数据必须指定 expiration（400 "Cannot fetch current-day data
+        # without specifying an expiration"），所以 bulk 模式按到期日逐个请求
         rows = self.get_json(
             "/option/history/open_interest",
             symbol=symbol,
-            expiration="*",
+            expiration=expiration.strftime("%Y%m%d") if expiration else "*",
             date=date.strftime("%Y%m%d"),
-            max_dte=max_dte,
+            max_dte=None if expiration else max_dte,
         )
         return _frame(rows, symbol, date)
+
+
+def _flatten(rows: list) -> list[dict]:
+    """终端真实形状（2026-10-22 实测）：
+    [{contract:{symbol,expiration,right,strike}, data:[{...}]}]；
+    展平为每条记录带 expiration/right/strike 的扁平 dict；已是扁平的原样返回。"""
+    out: list[dict] = []
+    for r in rows:
+        if isinstance(r, dict) and "contract" in r and "data" in r:
+            c = r["contract"]
+            base = {
+                "expiration": c.get("expiration"),
+                "right": str(c.get("right", "")).lower(),
+                "strike": c.get("strike"),
+                "symbol": c.get("symbol"),
+            }
+            for d in r["data"]:
+                out.append({**base, **d})
+        else:
+            out.append(r)
+    return out
 
 
 def _frame(rows: list[dict], und: str, trade_date: dt.date) -> pd.DataFrame:
@@ -290,11 +321,16 @@ def fetch_day(
     with ThreadPoolExecutor(max_workers=client.concurrency) as ex:
         q_futs = {e: ex.submit(client.history_quote, und, e, day) for e in exps}
         o_futs = {e: ex.submit(client.history_ohlc, und, e, day) for e in exps}
-        oi_fut = ex.submit(client.history_open_interest, und, day)
+        oi_futs = {e: ex.submit(client.history_open_interest, und, day, e) for e in exps}
         for e in exps:
             quotes.append(q_futs[e].result())
             ohlc.append(o_futs[e].result())
-        oi = oi_fut.result()
+        oi_parts = [oi_futs[e].result() for e in exps]
+    oi = (
+        pd.concat([x for x in oi_parts if not x.empty], ignore_index=True)
+        if any(not x.empty for x in oi_parts)
+        else pd.DataFrame()
+    )
     q = (
         pd.concat([x for x in quotes if not x.empty], ignore_index=True)
         if any(not x.empty for x in quotes)

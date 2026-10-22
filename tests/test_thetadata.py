@@ -14,11 +14,10 @@ def _fake_getter(calls: list[str]):
         q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
         path = urllib.parse.urlparse(url).path
         if path.endswith("/option/list/expirations"):
+            # 终端真实形状：{"response": [...]}（2026-10-22 实测）
+            dates = ("2026-09-01", "2026-09-02", "2026-09-03", "2026-09-30")
             return 200, json.dumps(
-                [
-                    {"symbol": "SPY", "expiration": d}
-                    for d in ("2026-09-01", "2026-09-02", "2026-09-03", "2026-09-30")
-                ]
+                {"response": [{"symbol": "SPY", "expiration": d} for d in dates]}
             )
         if path.endswith("/option/history/quote"):
             exp = q["expiration"][0]
@@ -81,6 +80,9 @@ def _fake_getter(calls: list[str]):
                 ]
             )
         if path.endswith("/option/history/open_interest"):
+            assert q["expiration"][0] != "*", "OI 必须按到期日请求"
+            if q["expiration"][0] != "20260902":
+                return 472, "NO_DATA"
             return 200, json.dumps(
                 [
                     {

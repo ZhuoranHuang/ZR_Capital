@@ -101,3 +101,22 @@ def test_bar_slope_linear():
     slope = ind.bar_slope(s, 5)
     assert slope.iloc[:4].isna().all()
     np.testing.assert_allclose(slope.iloc[4:].to_numpy(), 2.0)
+
+
+def test_kdj_bounds_and_no_lookahead(ohlc):
+    k = ind.kdj(ohlc["high"], ohlc["low"], ohlc["close"]).dropna()
+    assert ((k["k"] >= 0) & (k["k"] <= 100)).all()
+    bumped = ohlc.copy()
+    bumped.iloc[-1] = bumped.iloc[-1] * 2
+    k2 = ind.kdj(bumped["high"], bumped["low"], bumped["close"])
+    pd.testing.assert_frame_equal(
+        ind.kdj(ohlc["high"], ohlc["low"], ohlc["close"]).iloc[:-1], k2.iloc[:-1]
+    )
+
+
+def test_adx_trend_detects_direction():
+    n = 120
+    up = pd.Series(np.arange(n, dtype=float))
+    a = ind.adx(up + 1, up - 1, up, 14).dropna()
+    assert (a["plus_di"] > a["minus_di"]).all()
+    assert a["adx"].iloc[-1] > 25

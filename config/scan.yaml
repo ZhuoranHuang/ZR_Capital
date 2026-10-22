@@ -1,0 +1,22 @@
+# R-006～R-009 参数扫描。全部待测参数。
+symbols: [SPY.US, QQQ.US, MU.US]
+start: 2023-10-02
+end: 2026-10-21
+labels: {horizons: [3, 5, 10, 15, 30], k: 1.0, sigma_window: 60}
+fee_model: {delta: 0.5, premium_pct_of_spot: 0.005, spread_ticks: 2}
+out_dir: docs/research
+
+variants:
+  E1:
+    eps: [0.0002, 0.0005, 0.001]
+    confirm: [0, 1]
+    trend: [A, B, C, D, E]
+    extra: {swing_w: 5, adx_min: 25}
+  E2:
+    range_min: [15]
+  E5:
+    k: [0.5, 1.0, 2.0]
+  E9:
+    body_ratio: [0.1, 0.2]
+    drawdown: [0.01, 0.02]
+    lookback: 20

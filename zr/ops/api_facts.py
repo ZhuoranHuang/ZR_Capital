@@ -48,8 +48,7 @@ class Report:
     def fail(self, name: str, exc: BaseException) -> None:
         code = getattr(exc, "code", None)
         self.lines.append(
-            f"### {name}\n\n**失败** `{type(exc).__name__}` code={code!r}\n\n"
-            f"```\n{exc}\n```\n"
+            f"### {name}\n\n**失败** `{type(exc).__name__}` code={code!r}\n\n```\n{exc}\n```\n"
         )
 
     def write(self, path: Path) -> None:
@@ -207,17 +206,29 @@ def run_quote_checks(
             dates = sorted(qctx.option_chain_expiry_date_list(s))[:6]
             return [{"date": d.isoformat(), "weekday": d.strftime("%A")} for d in dates]
 
-        _run(report, f"option_chain_expiry_date_list({s}) 最近 6 个", expiries,
-             note="核对 MU/AMD 是否为周一 / 周三到期。")
+        _run(
+            report,
+            f"option_chain_expiry_date_list({s}) 最近 6 个",
+            expiries,
+            note="核对 MU/AMD 是否为周一 / 周三到期。",
+        )
 
     report.section("SPY 最近到期 ATM call")
     atm = _run(report, "nearest_atm_call(SPY.US)", lambda: _nearest_atm_call(qctx, "SPY.US"))
     if atm:
         c = atm["call_symbol"]
-        _run(report, f"option_quote({c})", lambda: qctx.option_quote([c]),
-             note="OptionQuote 无 bid/ask（已核实）。")
-        _run(report, f"depth({c})", lambda: qctx.depth(c),
-             note="关键测试：期权代码是否返回盘口；每档 price/volume/order_num/position。")
+        _run(
+            report,
+            f"option_quote({c})",
+            lambda: qctx.option_quote([c]),
+            note="OptionQuote 无 bid/ask（已核实）。",
+        )
+        _run(
+            report,
+            f"depth({c})",
+            lambda: qctx.depth(c),
+            note="关键测试：期权代码是否返回盘口；每档 price/volume/order_num/position。",
+        )
         _run(
             report,
             f"candlesticks({c}, Min_1, 100)",

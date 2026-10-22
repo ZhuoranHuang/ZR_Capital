@@ -102,6 +102,8 @@ Options Standard 档：tick 级，2016 起，账户并发 4（本项目用 2）�
 | `zr/data/thetadata.py` | 仓库 | `bulk_quotes_1m` / `ticks_window`；CLI `uv run python -m zr.data.thetadata --start 2026-09-01 --end 2026-09-30 --symbols SPY.US` |
 | `zr/data/theta_vs_recorder.py` | 仓库 | 与录制器同一合约同一分钟 bid/ask 对比 |
 
+`~/thetadata/config.toml`：`host` 应为 `127.0.0.1`（默认 `0.0.0.0` 会监听所有网卡）；MCP server 与 REST 同端口（日志 `Starting MCP server at: http://<host>:25503/mcp/sse`），**config.toml 与 jar 内置模板都没有关闭 MCP 的键**，把 host 改成 127.0.0.1 即把 MCP 一并限制在本机（未验证是否有命令行开关）。
+
 首次使用：负责人在自己的终端里运行 `bash scripts/run_theta_terminal.sh` 并按提示登录（或 `--api-key`）；之后 `curl "http://127.0.0.1:25503/v3/option/list/expirations?symbol=SPY&format=json" | head -c 200` 有返回即可。macOS Gatekeeper 若拦截 jar，按文档在「隐私与安全性」里 Open Anyway。
 
 ## 迁移到新加坡（ap-southeast-1）

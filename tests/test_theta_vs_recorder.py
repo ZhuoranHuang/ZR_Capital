@@ -37,9 +37,11 @@ def test_compare_minute_alignment(tmp_path):
     ).to_parquet(rec_dir / "depth_x.parquet", index=False)
     th_dir = tmp_path / "options_1m/underlying=SPY/date=2026-10-21"
     th_dir.mkdir(parents=True)
+    # Theta 在 t 的报价 = [t−1, t) 的末次 NBBO：t0+1min 对应录制器桶 t0（末条 0.81/0.82），
+    # t0+2min 对应桶 t0+1（末条 0.83/0.85）
     pd.DataFrame(
         {
-            "ts": [t0, t0 + pd.Timedelta(minutes=1)],
+            "ts": [t0 + pd.Timedelta(minutes=1), t0 + pd.Timedelta(minutes=2)],
             "symbol": [sym, sym],
             "bid": [0.81, 0.84],
             "ask": [0.82, 0.85],
