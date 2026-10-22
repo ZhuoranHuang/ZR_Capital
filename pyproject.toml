@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff"]
+dev = ["pytest", "ruff", "backtrader>=1.9.78.123"]  # backtrader：独立引擎复算（audit/known-answer）
 
 [build-system]
 requires = ["hatchling"]
@@ -45,3 +45,4 @@ select = ["E", "F", "I", "B", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+

@@ -29,7 +29,7 @@ import pandas as pd
 import yaml
 
 from zr.config import get_settings
-from zr.data.calendar import is_trading_day
+from zr.data.calendar import is_trading_day, session_close
 from zr.data.thetadata import ThetaClient
 from zr.features.bars import ET, load_bars, load_extended_bars, resample_bars
 from zr.features.option_features import option_days
@@ -144,6 +144,15 @@ def exit_arrays(df, x, cfg) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     return out
 
 
+def day_limits(day: dt.date, exe: dict) -> tuple[dt.time, dt.time]:
+    """(最后入场 K 收盘, 清仓) 时刻：提前收盘日按收盘前同样的间隔前移（正常日 15:40 / 15:50）。"""
+    close = dt.datetime.combine(day, session_close(day))
+    full = dt.datetime.combine(day, dt.time(16, 0))
+    last = dt.datetime.combine(day, _hm(exe["last_entry"])) - (full - close)
+    flat = dt.datetime.combine(day, _hm(exe["flat"])) - (full - close)
+    return last.time(), flat.time()
+
+
 def guard_mask(df: pd.DataFrame, reg: pd.DataFrame, v4: dict, days: set) -> tuple:
     """可入场 K（与方向无关的部分）与按方向的状态护栏。返回 (time_ok, ok_long, ok_short)。"""
     exe, g = v4["execution"], v4["guardrails"]
@@ -152,11 +161,9 @@ def guard_mask(df: pd.DataFrame, reg: pd.DataFrame, v4: dict, days: set) -> tupl
     close = et + pd.Timedelta(minutes=v4["period"])
     close_hm = np.asarray(close.strftime("%H:%M"))
     day = np.asarray(et.date)
-    time_ok = (
-        (label >= exe["first_entry_bar"])
-        & (close_hm <= exe["last_entry"])
-        & np.isin(day, list(days))
-    )
+    last = {d: day_limits(d, exe)[0].strftime("%H:%M") for d in set(day) if d in days}
+    last_hm = np.array([last.get(d, "00:00") for d in day])
+    time_ok = (label >= exe["first_entry_bar"]) & (close_hm <= last_hm) & np.isin(day, list(days))
     st, d = reg["state"].to_numpy(), reg["dir"].to_numpy()
     ok_l = np.ones(len(df), bool)
     ok_s = np.ones(len(df), bool)
@@ -272,7 +279,10 @@ def build_events(
             pk = pick_contract(chains[d], d, direction, spot[i], close_et[i].time(), v4)
             if pk is None:
                 continue
-            flat = et_ts(d, _hm(exe["d001_flat_0dte"] if pk["dte"] == 0 else exe["flat"])) - lead
+            flat_t = day_limits(d, exe)[1]
+            if pk["dte"] == 0:
+                flat_t = min(flat_t, _hm(exe["d001_flat_0dte"]))
+            flat = et_ts(d, flat_t) - lead
             if close_utc[i] >= flat:
                 continue
             rows.append(
