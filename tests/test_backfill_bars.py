@@ -84,3 +84,14 @@ def test_write_merged_dedup_and_min_ts(tmp_path):
     out = pd.read_parquet(tmp_path / "bars_1m/underlying=MU/year=2026/bars.parquet")
     assert len(out) == 3
     assert str(existing_min_ts(tmp_path, "MU.US")) == "2026-03-01 10:00:00+00:00"
+
+
+def test_write_merged_new_pull_overwrites_revised_bar(tmp_path):
+    """长桥会事后修订 bar（MU 2026-10-21 09:30 open）：再次拉取时以新值为准。"""
+    t = dt.datetime(2026, 3, 1, 14, 30)
+    old = bars_to_frame("MU.US", [_bar(t)])
+    write_merged(tmp_path, "MU.US", old)
+    new = old.assign(open=old["open"] - 1.0)
+    write_merged(tmp_path, "MU.US", new)
+    out = pd.read_parquet(tmp_path / "bars_1m/underlying=MU/year=2026/bars.parquet")
+    assert len(out) == 1 and out["open"].iloc[0] == new["open"].iloc[0]
