@@ -223,6 +223,11 @@ def walk_forward(ds: pd.DataFrame, cols: list[str], n_trials: int) -> tuple[pd.D
 
 
 def deciles(res: pd.DataFrame, col: str) -> pd.DataFrame:
+    """按样本外概率分十分位汇总（标准评估报表写法）。
+
+    分位边界用整个样本外集合算，仅作描述性报告，不是因果特征、不作为交易阈值
+    （交易用的是固定阈值，不是相对同批样本外数据的分位）。
+    """
     r = res[res[col].notna()].copy()
     r["decile"] = pd.qcut(r[col].rank(method="first"), 10, labels=range(1, 11))
     g = r.groupby("decile", observed=True)
@@ -237,7 +242,11 @@ def deciles(res: pd.DataFrame, col: str) -> pd.DataFrame:
 
 
 def extract_rule(oos: pd.DataFrame, cols: list[str]) -> dict:
-    """样本外最高十分位 → 深度 ≤ 3 决策树 → 正样本占比最高的叶子规则及其真实期权盈亏。"""
+    """样本外最高十分位 → 深度 ≤ 3 决策树 → 正样本占比最高的叶子规则及其真实期权盈亏。
+
+    90% 分位用整个样本外集合算，是事后对「模型高置信区域长什么样」的描述，不是因果特征、
+    不是可独立复现的交易规则（提取与评估用的是同一批样本外数据）。
+    """
     top = (oos["p_optuna"] >= oos["p_optuna"].quantile(0.9)).astype(int).to_numpy()
     Xo = np.nan_to_num(oos[cols].astype(float).to_numpy(), nan=-999.0)
     tree = DecisionTreeClassifier(max_depth=3, min_samples_leaf=200, random_state=0).fit(Xo, top)

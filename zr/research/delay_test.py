@@ -46,6 +46,9 @@ def run(und: str, top_n: int = 20) -> tuple[str, pd.DataFrame]:
     delayed = sv.run_grid(root, und, stock, cfg, [PERIOD], days, macd_key=MACD_KEY, delay_bars=1)
     lt_base = grid_v3.long_table({PERIOD: base[PERIOD]}, cfg, MACD_TAG)
     lt_delay = grid_v3.long_table({PERIOD: delayed[PERIOD]}, cfg, MACD_TAG)
+    qty = cfg["execution"]["qty"]
+    lt_base["mean_per_contract"] = lt_base["mean_net"] / qty
+    lt_delay["mean_per_contract"] = lt_delay["mean_net"] / qty
     log.info("%s 两版网格完成，%.0fs", und, time.monotonic() - t0)
 
     join_cols = ["period", "entry", "side", "exit_rule", "tp", "sl", "cap"]
