@@ -48,7 +48,7 @@ from zr.config import get_settings
 log = logging.getLogger("zr.thetadata")
 ET = ZoneInfo("America/New_York")
 BASE_URL = "http://127.0.0.1:25503/v3"
-DEFAULT_CONCURRENCY = 2
+DEFAULT_CONCURRENCY = 4  # 账户上限 4（Standard），2026-10-22 起
 
 # 行权价带宽（相对当日开盘价）与 DTE 上限，来自 DATA_SPEC / universe.yaml
 STRIKE_BAND = {"SPY": 0.03, "QQQ": 0.03, "MU": 0.08, "AMD": 0.08}
@@ -99,7 +99,7 @@ class ThetaClient:
     base_url: str = BASE_URL
     timeout_s: float = 120.0
     concurrency: int = DEFAULT_CONCURRENCY
-    retries: int = 3
+    retries: int = 6  # 429：指数退避 1,2,4,8,16 s
     # 终端不可达（重启 / 474 DISCONNECTED / 571 SERVER_STARTING）时的等待：总共最多 outage_wait_s 秒
     outage_wait_s: float = 600.0
     outage_poll_s: float = 10.0
@@ -156,7 +156,7 @@ class ThetaClient:
                 if status == 472:  # NO_DATA
                     return []
                 if status == 429 and attempt < self.retries - 1:
-                    self.sleep(1.0 + attempt)
+                    self.sleep(float(2**attempt))  # 1,2,4,8,16 s
                     attempt += 1
                     continue
                 raise ThetaError(status, body, url)
@@ -379,6 +379,8 @@ def fetch_day(
         if any(not x.empty for x in ohlc)
         else pd.DataFrame()
     )
+    chain_min = float(q["strike"].min()) if len(q) else None
+    chain_max = float(q["strike"].max()) if len(q) else None
     if bounds is not None:
         q, o, oi = (
             strike_filter(q, *bounds),
@@ -398,6 +400,8 @@ def fetch_day(
         "band_hi": bounds[1] if bounds else None,
         "strike_min": float(q["strike"].min()) if len(q) else None,
         "strike_max": float(q["strike"].max()) if len(q) else None,
+        "chain_min": chain_min,
+        "chain_max": chain_max,
         "rows_quotes": len(q),
         "rows_ohlc": len(o),
         "rows_oi": len(oi),
@@ -446,12 +450,28 @@ def trading_days_from_bars(root: Path, und: str, start: dt.date, end: dt.date) -
 # ---------- 覆盖检查 ----------
 
 
+def _chain_extents(root: Path, und: str) -> dict[str, tuple[float | None, float | None]]:
+    """manifest 里每个日期原始链的 (chain_min, chain_max)，老记录没有则 (None, None)。"""
+    out: dict[str, tuple[float | None, float | None]] = {}
+    mf = root / "options_1m" / "manifest.jsonl"
+    if not mf.exists():
+        return out
+    for line in mf.read_text(encoding="utf-8").splitlines():
+        r = json.loads(line)
+        if r.get("underlying") == und and "error" not in r:
+            out[str(r["date"])] = (r.get("chain_min"), r.get("chain_max"))
+    return out
+
+
 def coverage_report(root: Path, und: str, days: Iterable[dt.date]) -> pd.DataFrame:
     """对照正股当日高低点，检查已落盘日期的行权价范围是否覆盖 [low×(1−band), high×(1+band)]。
 
-    覆盖不足的日期（早期按开盘价±band 过滤的）用 `--repull-uncovered` 删掉后由续传重新拉取。
+    容差 = 该侧最外两档的间距（MU 近 ATM 有 0.5 档、远端 1 档，不能用全局最小间距）；
+    若该侧已到原始链的尽头（manifest 的 chain_min/max），视为该侧覆盖——链上没有更远的行权价可拉。
+    覆盖不足的日期用 `--repull-uncovered` 删掉后由续传重新拉取。
     """
     band = STRIKE_BAND.get(und, 0.05)
+    chain = _chain_extents(root, und)
     rows = []
     for day in days:
         d = day_dir(root, "options_1m", und, day)
@@ -466,18 +486,22 @@ def coverage_report(root: Path, und: str, days: Iterable[dt.date]) -> pd.DataFra
             rows.append({"date": day, "covered": None, "strike_min": smin, "strike_max": smax})
             continue
         lo, hi = band_bounds(px, band)
-        # 用相邻行权价间距作容差：最低/最高行权价与边界差不超过一档即算覆盖
         strikes = np.sort(q["strike"].unique())
-        step = float(np.min(np.diff(strikes))) if len(strikes) > 1 else 0.0
-        covered = (smin <= lo + step) and (smax >= hi - step)
+        lo_step = float(strikes[1] - strikes[0]) if len(strikes) > 1 else 0.0
+        hi_step = float(strikes[-1] - strikes[-2]) if len(strikes) > 1 else 0.0
+        cmin, cmax = chain.get(day.isoformat(), (None, None))
+        low_ok = smin <= lo + lo_step or (cmin is not None and smin <= cmin)
+        high_ok = smax >= hi - hi_step or (cmax is not None and smax >= cmax)
         rows.append(
             {
                 "date": day,
-                "covered": bool(covered),
+                "covered": bool(low_ok and high_ok),
                 "need_lo": round(lo, 2),
                 "need_hi": round(hi, 2),
                 "strike_min": smin,
                 "strike_max": smax,
+                "chain_min": cmin,
+                "chain_max": cmax,
                 "day_low": px[1],
                 "day_high": px[2],
             }

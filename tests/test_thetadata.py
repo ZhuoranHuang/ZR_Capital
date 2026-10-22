@@ -252,3 +252,39 @@ def test_coverage_report_flags_days_filtered_too_narrow(tmp_path, monkeypatch):
     cov = td.coverage_report(tmp_path, "SPY", [day])
     assert bool(cov.loc[0, "covered"]) is True
     assert td.drop_days(tmp_path, "SPY", [day]) == 1 and not d.exists()
+
+
+def test_coverage_uses_edge_spacing_and_chain_extent(tmp_path, monkeypatch):
+    day = dt.date(2026, 9, 1)
+    d = tmp_path / "options_1m/underlying=MU/date=2026-09-01"
+    d.mkdir(parents=True)
+    # 近 ATM 0.5 档，远端 1 档：存 62–74
+    pd.DataFrame({"strike": [62.0, 63.0, 67.5, 68.0, 68.5, 73.0, 74.0]}).to_parquet(
+        d / "quotes.parquet", index=False
+    )
+    # 需要 [61.7, 74.81]：低侧 62 ≤ 61.7+1 ✓，高侧 74 ≥ 74.81−1 ✓ → 覆盖（全局最小档距 0.5 会误判）
+    monkeypatch.setattr(td, "day_price_range", lambda r, u, dd: (68.0, 67.06, 69.27))
+    assert bool(td.coverage_report(tmp_path, "MU", [day]).loc[0, "covered"]) is True
+    # 需要高到 80：存的只到 74 → 不覆盖；但若 manifest 说链本来就只到 74 → 覆盖
+    monkeypatch.setattr(td, "day_price_range", lambda r, u, dd: (68.0, 67.06, 74.0))
+    assert bool(td.coverage_report(tmp_path, "MU", [day]).loc[0, "covered"]) is False
+    (tmp_path / "options_1m/manifest.jsonl").write_text(
+        json.dumps({"underlying": "MU", "date": "2026-09-01", "chain_min": 62.0, "chain_max": 74.0})
+        + "\n",
+        encoding="utf-8",
+    )
+    assert bool(td.coverage_report(tmp_path, "MU", [day]).loc[0, "covered"]) is True
+
+
+def test_429_exponential_backoff_then_success():
+    seq = [(429, "OS_LIMIT")] * 3 + [(200, json.dumps({"response": []}))]
+    calls = []
+
+    def getter(url):
+        calls.append(url)
+        return seq[len(calls) - 1]
+
+    slept = []
+    c = td.ThetaClient(getter=getter, sleep=slept.append)
+    assert c.get_json("/option/list/expirations", symbol="SPY") == []
+    assert slept == [1.0, 2.0, 4.0]

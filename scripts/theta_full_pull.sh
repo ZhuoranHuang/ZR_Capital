@@ -5,7 +5,8 @@
 #
 # 后台运行：nohup bash scripts/theta_full_pull.sh >/dev/null 2>&1 &
 # 日志：$ZR_DATA_ROOT/logs/theta_pull.log
-# 参数（环境变量）：THETA_START（默认 2023-10-02）、THETA_END（默认今天美东日期）、THETA_SYMBOLS、THETA_CONCURRENCY
+# 参数（环境变量）：THETA_START（默认 2023-10-02）、THETA_END（默认今天美东日期）、THETA_SYMBOLS、
+# THETA_CONCURRENCY（默认 4 = 账户并发上限；429 指数退避、503/断连最多等 10 分钟）
 set -uo pipefail
 cd "$(dirname "$0")/.."
 REPO="$(pwd)"
@@ -17,7 +18,7 @@ UV="${UV:-$HOME/.local/bin/uv}"
 START="${THETA_START:-2023-10-02}"
 END="${THETA_END:-$(TZ=America/New_York date +%F)}"
 SYMBOLS="${THETA_SYMBOLS:-SPY.US QQQ.US MU.US}"
-CONC="${THETA_CONCURRENCY:-2}"
+CONC="${THETA_CONCURRENCY:-4}"
 LOG_DIR="$ZR_DATA_ROOT/logs"
 LOG="$LOG_DIR/theta_pull.log"
 LOCK="$LOG_DIR/theta_pull.lock"
