@@ -45,7 +45,7 @@ class P:
     notional: float | None = None  # 给定时每次成交股数 = floor(notional / 成交价)
     tick: float = 0.01
     swing_n: int = 2
-    ladder: str = "recent"
+    ladder: str = "recent"  # recent / recent_valid（敏感性：入场时水位须在入场价止损一侧）/ ratchet
     strict: bool = True
     kdj: tuple[int, int, int] = (9, 3, 3)
     atr_n: int = 14
@@ -171,13 +171,15 @@ def simulate_entry(a: dict, i: int, d: int, p: P, trace: bool = False) -> dict |
     def update(lad: float, seq: list) -> float:
         if len(seq) < 2 or d * (seq[-1] - seq[-2]) <= 0:
             return lad
-        if p.ladder == "recent" or not np.isfinite(lad):
+        if p.ladder != "ratchet" or not np.isfinite(lad):
             return seq[-1]
         return max(lad, seq[-1]) if d == 1 else min(lad, seq[-1])
 
-    if p.ladder == "recent":
+    if p.ladder in ("recent", "recent_valid"):
         for m_ in range(2, len(hist) + 1):
             ladder = update(ladder, hist[:m_])
+        if p.ladder == "recent_valid" and np.isfinite(ladder) and d * (px0 - ladder) <= 0:
+            ladder = np.nan  # 入场前的更高谷底已在入场价之上（多头）：结构已破，不作初始水位
     else:  # 原实现：只看入场时最后两个
         ladder = update(ladder, hist)
     k = j
@@ -400,7 +402,7 @@ def reference_trade(df: pd.DataFrame, entry_ts, d: int, p: P) -> dict:
     k0 = i
     while day[k0 - 1] == day[i]:
         k0 -= 1
-    k = k0 + 2 * n
+    k = k0
     while True:
         if k >= j:
             if (d == 1 and lo[k] <= stop) or (d == -1 and h[k] >= stop):
@@ -412,7 +414,7 @@ def reference_trade(df: pd.DataFrame, entry_ts, d: int, p: P) -> dict:
             if k + 1 >= len(c) or day[k + 1] != day[k] or mod[k] + 2 * p.bar_min > FLAT_MIN:
                 return done(df.index[k], c[k] - d * p.tick, "15:50 清仓")
         cc = k - n
-        if day[k - 2 * n] == day[k]:
+        if k - 2 * n >= k0:
             side = lo if d == 1 else h
             others = [side[x] for x in range(k - 2 * n, k + 1) if x != cc]
             if (d == 1 and side[cc] < min(others)) or (d == -1 and side[cc] > max(others)):
@@ -447,9 +449,9 @@ def diagnostics(tr: pd.DataFrame, tr10k: pd.DataFrame) -> list[str]:
         ),
         "",
     ]
-    cap = (tr["first_exit_px_gain"] / tr["mfe_px"].where(tr["mfe_px"] > 0)).dropna()
+    cap = (tr["first_exit_px_gain"] / tr["mfe_px"].where(tr["mfe_px"] >= 0.01)).dropna()
     L += [
-        "### 拿住了多少（首仓出场盈利 ÷ 持仓期间最大有利偏移，均为每股价差）",
+        "### 拿住了多少（首仓出场盈利 ÷ 持仓期间最大有利偏移，每股价差；只统计 MFE ≥ 1 tick 的笔）",
         "",
         df_to_md(
             cap.describe(percentiles=[0.1, 0.25, 0.5, 0.75, 0.9])
@@ -583,6 +585,32 @@ def main() -> int:
                     "修正后 毛利 USD": round(float(tn["gross"].sum()), 0),
                 }
             )
+    decomp = []
+    for nm, pp in (
+        ("原实现", OLD_IMPL),
+        ("只改：谷底严格", replace(OLD_IMPL, strict=True)),
+        ("只改：最近一个更高谷底", replace(OLD_IMPL, ladder="recent")),
+        ("修正后基线（两处都改，R-036 登记）", BASELINE),
+        (
+            "敏感性：入场时水位须在入场价止损一侧（未登记）",
+            replace(BASELINE, ladder="recent_valid"),
+        ),
+    ):
+        tt = backtest(prepare(mu5, pp), pp)
+        first = (tt["reason"] == "梯形") & (tt["exit_i"] == tt["signal_i"] + 2)
+        decomp.append(
+            {
+                "口径": nm,
+                "笔数": len(tt),
+                "毛利 USD": round(float(tt["gross"].sum()), 0),
+                "扣费后 USD": round(float(tt["net"].sum()), 0),
+                "梯形/止损/清仓": "/".join(
+                    str(int((tt["reason"] == r).sum())) for r in ("梯形", "止损", "15:50 清仓")
+                ),
+                "入场后第一根即梯形出场": int(first.sum()),
+                "其扣费后 USD": round(float(tt.loc[first, "net"].sum()), 0),
+            }
+        )
     # 独立复算 10 笔（基线、首仓无加仓的交易，便于逐值核对）
     rng = np.random.default_rng(0)
     cand = t_b[t_b["adds"] == 0]
@@ -643,6 +671,17 @@ def main() -> int:
         "",
         df_to_md(pd.DataFrame(six)),
         "",
+        "### 梯形法则两处修改各自的影响（MU 全样本，SMA120·ATR×1.5）",
+        "",
+        df_to_md(pd.DataFrame(decomp)),
+        "",
+        "**按字面实现「最近一个已确认的更高谷底」的副作用**：入场前当日最近一个更高谷底可能早已"
+        "被跌破、位于入场价之上（多头），入场后第一根收盘就触发梯形出场。原实现只看入场前最后两个"
+        "谷底，结构已破时没有初始水位，所以很少出现。这是规则对「入场前的谷底算不算」没有写明造成"
+        "的，不是代码错误；R-036 登记的是字面版本，结果原样报告；另附「入场时水位须在入场价"
+        "止损一侧」的敏感性（第 3b 节，未预登记、不参与候选判定），请负责人确认本意"
+        "（STATUS 待确认）。",
+        "",
         "### 手工复算 10 笔（基线、无加仓的交易随机抽取；「独立复算」= 不复用引擎、逐根重算 ATR、"
         "摆动点与出场）",
         "",
@@ -654,10 +693,23 @@ def main() -> int:
     t10k = backtest(
         prepare(mu5, replace(BASELINE, notional=10_000.0)), replace(BASELINE, notional=10_000.0)
     )
+    orig_rows = [
+        {"口径": "原实现（SMA120·ATR×1.5；新引擎原口径，与原代码逐笔相同）", **summary(t_imp)},
+        {"口径": "修正后基线", **summary(t_b)},
+    ]
     L += [
         "## 2. 诊断（修正后基线，MU 全样本 2023-10-02～2026-10-21）",
         "",
-        df_to_md(pd.DataFrame([summary(t_b)])),
+        "先回答「原实现为什么毛利为正、扣费后为负」：下表把 USD 合计与每笔 bp（等权）并列。"
+        "价差 bp = 相对入场名义的价格变动（未扣滑点），成本 bp = 费用 + 每边 1 tick。",
+        "",
+        df_to_md(pd.DataFrame(orig_rows)),
+        "",
+        f"原实现毛利 {t_imp['gross'].sum():.0f} USD / {len(t_imp)} 笔 = "
+        f"{t_imp['gross'].sum() / len(t_imp):.2f} USD/笔（已含滑点）；按笔等权的价差 "
+        f"{t_imp['gross_bp'].mean():.2f} bp、成本 {t_imp['cost_bp'].mean():.2f} bp。"
+        "USD 合计为正来自「100 股固定股数」把 2026 年高价（MU 300→900 美元）阶段与带加仓的"
+        "盈利单放大，不是每笔的平均优势；固定 1 万美元名义后见下文。",
         "",
     ] + diagnostics(t_b, t10k)
 
@@ -692,6 +744,33 @@ def main() -> int:
             }
         )
         log.info("%s 完成 %.0fs", name, time.monotonic() - t0)
+    sens_rows, sens_val = [], []
+    for name, p0 in VARIANTS.items():
+        p = replace(p0, ladder="recent_valid")
+        res = {}
+        for u in ("MU", "QQQ", "SPY"):
+            a = prepare(bars[(u, p.bar_min)], p)
+            tr = backtest(a, p)
+            parts = (
+                {
+                    "研究期": period(tr, None, RESEARCH_END),
+                    "MU 2026": period(tr, dt.date(2026, 1, 1), None),
+                }
+                if u == "MU"
+                else {u: tr}
+            )
+            for k, t in parts.items():
+                res[k] = summary(t, random_direction(a, t, p))
+        sens_rows.append({"变体": name, **res["研究期"]})
+        sens_val.append(
+            {
+                "变体": name,
+                **{f"{k} 扣费后": res[k].get("扣费后 USD") for k in ("MU 2026", "QQQ", "SPY")},
+                **{f"{k} 随机分位": res[k].get("随机方向分位") for k in ("MU 2026", "QQQ", "SPY")},
+            }
+        )
+    st = pd.DataFrame(sens_rows)
+    st["BH（同族 12 组，仅参考）"] = np.where(bh(st["p"].to_numpy(), 0.10), "通过", "—")
     rt = pd.DataFrame(res_rows)
     rt["FDR（q=0.10）"] = np.where(bh(rt["p"].to_numpy(), 0.10), "通过", "—")
     vt = pd.DataFrame(val_rows)
@@ -712,6 +791,19 @@ def main() -> int:
         df_to_md(vt),
         "",
         f"**正股策略候选：{'、'.join(cands) if cands else '无'}。**",
+        "",
+        "## 3b. 敏感性（未预登记，不参与候选判定）：入场时梯形水位须在入场价止损一侧",
+        "",
+        "与第 3、4 节相同的 12 组，只把梯形初值改为：入场前最近一个更高谷底若不在入场价下方"
+        "（多头；空头镜像），不作初始水位。",
+        "",
+        "MU 研究期：",
+        "",
+        df_to_md(st),
+        "",
+        "样本外：",
+        "",
+        df_to_md(pd.DataFrame(sens_val)),
         "",
         "## 边界",
         "",
