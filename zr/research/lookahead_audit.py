@@ -116,16 +116,29 @@ def fast_pipeline(
     }
 
 
+PERIOD_KEYED = {"regime", "state", "entries", "exits"}  # 这些按 period-P bin（bin 起点为索引）
+
+
+def _bin_start(ts: pd.Timestamp, period: int) -> pd.Timestamp:
+    et = ts.tz_convert(ET)
+    day_open = et.normalize() + pd.Timedelta(hours=9, minutes=30)
+    offset = int((et - day_open).total_seconds() // 60)
+    start_offset = (offset // period) * period
+    return (day_open + pd.Timedelta(minutes=start_offset)).tz_convert("UTC")
+
+
 def compare_at(
-    full: dict[str, pd.DataFrame], trunc: dict[str, pd.DataFrame], ts: pd.Timestamp
+    full: dict[str, pd.DataFrame], trunc: dict[str, pd.DataFrame], ts: pd.Timestamp, period: int = 1
 ) -> dict:
     row = {}
+    key = _bin_start(ts, period)
     for name, df in full.items():
-        if ts not in trunc[name].index:
+        k = key if name in PERIOD_KEYED else ts
+        if k not in trunc[name].index:
             row[name] = "缺失（截断后该周期无此 bar，属正常：bar 尚未收盘）"
             continue
-        a = df.loc[ts]
-        b = trunc[name].loc[ts]
+        a = df.loc[k]
+        b = trunc[name].loc[k]
         diff_cols = []
         for c in df.columns:
             av, bv = a[c], b[c]
@@ -143,6 +156,19 @@ def compare_at(
     return row
 
 
+def _period_bin_end(ts: pd.Timestamp, period: int) -> pd.Timestamp:
+    """ts（1 分钟 bar 标签）所在 period 分钟 bin（以当日 09:30 为锚点）的最后一根 1 分钟 bar。
+
+    用来把截断点对齐到「该 bin 的两根 1 分钟 bar 都已收盘」，否则截断会在 bin 中间砍断
+    resample，人为制造一根只有一半数据的假 bin（这是测试脚本的对齐问题，不是被测代码的前视）。
+    """
+    et = ts.tz_convert(ET)
+    day_open = et.normalize() + pd.Timedelta(hours=9, minutes=30)
+    offset = int((et - day_open).total_seconds() // 60)
+    bin_end_offset = (offset // period + 1) * period - 1
+    return (day_open + pd.Timedelta(minutes=bin_end_offset)).tz_convert("UTC")
+
+
 def run_fast_audit(root: Path, und: str, n: int, seed: int, period: int = 2) -> pd.DataFrame:
     t0 = time.monotonic()
     rcfg, pbcfg = load_regime_cfg(), load_pb_config()
@@ -151,9 +177,9 @@ def run_fast_audit(root: Path, und: str, n: int, seed: int, period: int = 2) -> 
     full = fast_pipeline(stock, period, rcfg, pbcfg)
     rows = []
     for i, ts in enumerate(ts_list):
-        trunc_stock = stock.loc[:ts]
+        trunc_stock = stock.loc[: _period_bin_end(ts, period)]
         trunc = fast_pipeline(trunc_stock, period, rcfg, pbcfg)
-        r = compare_at(full, trunc, ts)
+        r = compare_at(full, trunc, ts, period)
         r["symbol"], r["ts_et"] = und, ts.tz_convert(ET).strftime("%Y-%m-%d %H:%M")
         rows.append(r)
         if (i + 1) % 50 == 0:

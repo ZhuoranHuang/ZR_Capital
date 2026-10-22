@@ -58,6 +58,39 @@ def et_date(index: pd.DatetimeIndex) -> np.ndarray:
     return index.tz_convert(ET).date
 
 
+def load_extended_bars(
+    root: Path, und: str, start: dt.date | None = None, end: dt.date | None = None
+) -> pd.DataFrame:
+    """读取含盘前盘后的连续 1 分钟 K（Pre + Intraday + Post），按交易日历过滤交易日，不做
+    RTH 裁剪（供 v3 状态层的 BOLL/MACD 等指标用，与长桥 App 的连续图一致；信号/交易仍限
+    09:30–16:00，由下游按分钟索引过滤，见 zr/research/sim_v3.py）。已用
+    `zr.data.bar_quality.flag_extended_bars` 剔除坏 bar。
+    """
+    from zr.data.bar_quality import clean_extended_bars
+    from zr.data.calendar import is_trading_day
+
+    files = sorted((root / "bars_1m" / f"underlying={und}").glob("year=*/bars.parquet"))
+    if not files:
+        raise FileNotFoundError(f"没有 {und} 的 1 分钟 K：{root / 'bars_1m'}")
+    df = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
+    if "session" in df:
+        df = df[df["session"].isin(["Pre", "Intraday", "Post"])]
+    df = df.set_index("ts").sort_index()
+    df.index = df.index.tz_convert("UTC")
+    days = et_date(df.index)
+    uniq = {d: is_trading_day(d) for d in set(days)}
+    df = df[np.fromiter((uniq[d] for d in days), dtype=bool, count=len(days))]
+    df = df[~df.index.duplicated(keep="last")]
+    df = clean_extended_bars(df)
+    if start is not None or end is not None:
+        d = et_date(df.index)
+        if start is not None:
+            df = df[d >= start]
+        if end is not None:
+            df = df[et_date(df.index) <= end]
+    return df
+
+
 def resample_bars(df: pd.DataFrame, rule: str) -> pd.DataFrame:
     """按美东日分组后 resample（label=left，bar 时间戳 = 开盘时刻），不跨日。
 

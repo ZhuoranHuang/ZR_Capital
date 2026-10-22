@@ -58,6 +58,37 @@ def flag_bars(df: pd.DataFrame) -> pd.DataFrame:
     return out.fillna(False)
 
 
+DEV_WINDOW = 11  # 周围均价窗口（前后各 5 根），一次性数据清洗，非逐 bar 因果特征
+DEV_PCT = 0.03  # 价格偏离周围均价 > 3%
+
+
+def flag_extended_bars(df: pd.DataFrame) -> pd.DataFrame:
+    """盘前盘后连续 K 线坏 bar 标记（一次性数据清洗步骤，非交易用因果特征）：
+
+    - bar_range_gt_5atr：振幅 > 5×ATR(14，前一根为止，跨 session 连续计算)
+    - zero_volume：成交量为 0
+    - price_dev：收盘价偏离前后共 `DEV_WINDOW` 根（含自身）收盘价中位数 > `DEV_PCT`
+    """
+    atr_prev = ind.atr(df["high"], df["low"], df["close"], 14).shift(1)
+    rng = df["high"] - df["low"]
+    local_med = df["close"].rolling(DEV_WINDOW, center=True, min_periods=3).median()
+    out = pd.DataFrame(index=df.index)
+    out["bar_range_gt_5atr"] = rng > K_ATR * atr_prev
+    out["zero_volume"] = df["volume"] <= 0
+    out["price_dev"] = (df["close"] - local_med).abs() / local_med > DEV_PCT
+    return out.fillna(False)
+
+
+def clean_extended_bars(df: pd.DataFrame) -> pd.DataFrame:
+    """剔除 flag_extended_bars 标记的 bar（而非像 clean_wicks 那样只收回影线）：
+
+    这些多为盘前盘后流动性极差时段的坏报价，保留会在连续指标（BOLL/MACD）里引入噪声。
+    """
+    flags = flag_extended_bars(df)
+    bad = flags.any(axis=1)
+    return df[~bad]
+
+
 def clean_wicks(df: pd.DataFrame, flags: pd.DataFrame | None = None) -> pd.DataFrame:
     flags = flag_bars(df) if flags is None else flags
     out = df.copy()

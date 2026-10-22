@@ -53,3 +53,64 @@ def test_volume_bars_accumulate_and_reset_daily():
     assert (vb["n_bars"] == 3).all() and (vb["volume"] == 300).all()
     assert vb["date"].nunique() == 2
     assert vb.iloc[0]["open"] == df["open"].iloc[0] and vb.iloc[0]["close"] == df["close"].iloc[2]
+
+
+def _session_bars(
+    day: dt.date, session: str, start_hm: str, n: int, vol: float = 100.0
+) -> pd.DataFrame:
+    h, m = map(int, start_hm.split(":"))
+    start = pd.Timestamp(dt.datetime.combine(day, dt.time(h, m)), tz=ET).tz_convert("UTC")
+    idx = pd.date_range(start, periods=n, freq="min", name="ts")
+    px = 100.0 + np.arange(n) * 0.001
+    return pd.DataFrame(
+        {
+            "ts": idx,
+            "symbol": "MU.US",
+            "open": px,
+            "high": px + 0.02,
+            "low": px - 0.02,
+            "close": px,
+            "volume": vol,
+            "turnover": px * vol,
+            "session": session,
+        },
+    )
+
+
+def test_load_extended_bars_includes_pre_and_post_and_filters_holidays(tmp_path):
+    from zr.features.bars import load_extended_bars
+
+    day = dt.date(2026, 10, 19)  # 周一，交易日
+    holiday = dt.date(2026, 10, 24)  # 周六，非交易日（长桥可能生成零成交 bar）
+    rows = pd.concat(
+        [
+            _session_bars(day, "Pre", "04:00", 330),  # 04:00-09:29
+            _session_bars(day, "Intraday", "09:30", 390),
+            _session_bars(day, "Post", "16:00", 240),  # 16:00-19:59
+            _session_bars(holiday, "Intraday", "09:30", 390, vol=0.0),
+        ],
+        ignore_index=True,
+    )
+    p = tmp_path / "bars_1m" / "underlying=MU" / "year=2026"
+    p.mkdir(parents=True)
+    rows.to_parquet(p / "bars.parquet", index=False)
+    out = load_extended_bars(tmp_path, "MU")
+    et = out.index.tz_convert(ET)
+    assert set(et.date) == {day}  # 周六的记录被交易日历过滤掉
+    assert out["session"].value_counts().to_dict() == {"Pre": 330, "Intraday": 390, "Post": 240}
+    assert et.strftime("%H:%M").min() == "04:00"
+    assert et.strftime("%H:%M").max() == "19:59"
+
+
+def test_clean_extended_bars_drops_zero_volume_and_range_spike():
+    from zr.data.bar_quality import clean_extended_bars
+
+    day = dt.date(2026, 10, 19)
+    df = _session_bars(day, "Pre", "04:00", 60).set_index("ts")
+    df.index = df.index.tz_convert("UTC")
+    df.loc[df.index[10], "volume"] = 0.0  # 成交量为 0
+    df.loc[df.index[30], ["high", "low"]] = [200.0, 50.0]  # 单根振幅 > 5×ATR
+    out = clean_extended_bars(df)
+    assert len(out) < len(df)
+    assert df.index[10] not in out.index
+    assert df.index[30] not in out.index
