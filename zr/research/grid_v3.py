@@ -132,76 +132,86 @@ def long_table_any(res: dict, cfg: dict, macd: str, names: list) -> pd.DataFrame
     return long_table(res, cfg, macd, only=names)
 
 
-def random_control(
+def random_control_group(
     root: Path,
     und: str,
     stock: pd.DataFrame,
     cfg: dict,
-    card: pd.Series,
+    pdat: sv.PeriodData,
+    cards: pd.DataFrame,
     trades: list,
     n_draw: int,
     window: int,
     seed: int = 0,
-) -> dict:
-    """同时段随机对照：card 的每笔实际成交换成同日 ±window 分钟内的随机入场分钟。"""
-    pdat = sv.prepare_period(
-        stock, int(card["period"]), cfg, "macd" if card["macd"] == "6,13,6" else "macd_scan"
-    )
+) -> list[dict]:
+    """同时段随机对照（同一 周期 × MACD × 入场 × 方向 的多张卡共用一次期权评估）。
+
+    每张卡的每笔实际成交换成同日 ±window 分钟内的随机入场分钟（同方向、该卡的出场组合），n_draw 次。
+    """
     rules = pdat.rules
-    ri = rules.index(card["exit_rule"])
     x6, x7 = cfg["exits"]["X6"], cfg["exits"]["X7"]
-    ti, si, ci = (
-        x6["tp"].index(card["tp"]),
-        x6["sl"].index(card["sl"]),
-        x7["cap_min"].index(card["cap"]),
-    )
-    d = 1 if card["side"] == "long" else -1
+    combos = [
+        (
+            rules.index(c["exit_rule"]),
+            x6["tp"].index(c["tp"]),
+            x6["sl"].index(c["sl"]),
+            x7["cap_min"].index(c["cap"]),
+        )
+        for _, c in cards.iterrows()
+    ]
+    d = 1 if cards["side"].iat[0] == "long" else -1
     last_entry = sv.hm(cfg["execution"]["last_entry"])
-    close1 = pd.Series(stock["close"].to_numpy(), index=stock.index)
+    sday = np.asarray(stock.index.tz_convert(ET).date)
     rng = np.random.default_rng(seed)
-    real, rand = 0.0, np.zeros(n_draw)
-    n_used = 0
+    real = np.zeros(len(cards))
+    rand = np.zeros((len(cards), n_draw))
+    used = np.zeros(len(cards), dtype=int)
     for tr in trades:
         if tr["dir"] != d:
             continue
-        take = tr["take"][(slice(None), ri, ti, si, ci)]
-        es = tr["e"][take]
-        real += float(tr["net"][(slice(None), ri, ti, si, ci)][take].sum())
-        if not len(es):
+        taken = [tr["e"][tr["take"][(slice(None), *cb)]] for cb in combos]
+        for k, cb in enumerate(combos):
+            real[k] += float(tr["net"][(slice(None), *cb)][tr["take"][(slice(None), *cb)]].sum())
+        allm = set(np.concatenate(taken).tolist()) if taken else set()
+        if not allm:
             continue
         day = tr["day"]
         od = sv.load_day(root, und, day, cfg["execution"]["stale_snapshots"])
-        mask = pdat.day == day
-        trig = sv.day_triggers(pdat, mask)
-        dm = np.asarray(stock.index.tz_convert(ET).date) == day
-        c1 = close1[dm]
-        mins = sv.minute_of(c1.index)
-        spot_at = dict(zip(mins + 1, c1.to_numpy(), strict=True))  # 入场分钟 r 的决策价 = r−1 收盘
+        trig = sv.day_triggers(pdat, pdat.day == day)
+        c1 = stock[sday == day]["close"]
+        spot_at = dict(zip(sv.minute_of(c1.index) + 1, c1.to_numpy(), strict=True))
         cand = sorted(
             {
                 r
-                for e in es
+                for e in allm
                 for r in range(max(1, e - window), min(last_entry, e + window) + 1)
                 if r in spot_at
             }
         )
+        if not cand or od is None:
+            continue
         ev = pd.DataFrame({"e": cand, "direction": d, "spot": [spot_at[r] for r in cand]})
-        res = sv.evaluate(od, ev, trig, cfg) if len(ev) else None
+        res = sv.evaluate(od, ev, trig, cfg)
         if res is None:
             continue
-        val = dict(zip(res["meta"]["e"], res["net"][:, ri, ti, si, ci], strict=True))
-        for e in es:
-            pool = np.array([val[r] for r in range(e - window, e + window + 1) if r in val])
-            if len(pool):
-                rand += pool[rng.integers(0, len(pool), n_draw)]
-                n_used += 1
-    return {
-        "rand_p50_per_contract": round(
-            float(np.median(rand)) / max(n_used, 1) / cfg["execution"]["qty"], 2
-        ),
-        "rand_pctile": round(float((rand <= real).mean() * 100), 1),
-        "rand_n_matched": n_used,
-    }
+        pos = {int(e): i for i, e in enumerate(res["meta"]["e"])}
+        for k, cb in enumerate(combos):
+            vals = res["net"][(slice(None), *cb)]
+            for e in taken[k]:
+                idx = [pos[r] for r in range(e - window, e + window + 1) if r in pos]
+                if idx:
+                    pool = vals[idx]
+                    rand[k] += pool[rng.integers(0, len(pool), n_draw)]
+                    used[k] += 1
+    qty = cfg["execution"]["qty"]
+    return [
+        {
+            "rand_p50_per_contract": round(float(np.median(rand[k])) / max(used[k], 1) / qty, 2),
+            "rand_pctile": round(float((rand[k] <= real[k]).mean() * 100), 1),
+            "rand_n_matched": int(used[k]),
+        }
+        for k in range(len(cards))
+    ]
 
 
 def run(und: str, n_random: int | None = None, out_dir: Path | None = None) -> dict:
@@ -235,19 +245,23 @@ def run(und: str, n_random: int | None = None, out_dir: Path | None = None) -> d
             per = sorted(sub["period"].unique())
             col = {(p, e) for p, e in collect if p in per and e in set(sub["entry"])}
             rr = sv.run_grid(root, und, stock, cfg, per, days, macd_key=key, collect=col)
-            for _, card in sub.iterrows():
-                tr = rr[int(card["period"])]["trades"].get(card["entry"], [])
-                rc = random_control(
-                    root,
-                    und,
-                    stock,
-                    cfg,
-                    card,
-                    tr,
-                    n_random or cc["n_random"],
-                    cc["random_window_min"],
-                )
-                cards.append({**card.to_dict(), **rc})
+            for p in per:
+                pdat = sv.prepare_period(stock, p, cfg, key)
+                for (entry, _side), grp in sub[sub["period"] == p].groupby(["entry", "side"]):
+                    tr = rr[p]["trades"].get(entry, [])
+                    rcs = random_control_group(
+                        root,
+                        und,
+                        stock,
+                        cfg,
+                        pdat,
+                        grp,
+                        tr,
+                        n_random or cc["n_random"],
+                        cc["random_window_min"],
+                    )
+                    for (_, card), rc in zip(grp.iterrows(), rcs, strict=True):
+                        cards.append({**card.to_dict(), **rc})
     cards = pd.DataFrame(cards)
     return {
         "grid": lt,
