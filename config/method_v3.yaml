@@ -1,0 +1,55 @@
+# 方法论 v3（METHOD_V3，2026-10-22 负责人指令）。全部为待测参数（CLAUDE.md 规则 11）。
+periods: [1, 2, 5]          # 分钟 K 周期；2 分钟为负责人实际使用，1 / 5 分钟对照
+boll: {n: 20, k: 2.0}
+macd: {fast: 6, slow: 13, signal: 6}      # 负责人实际参数
+macd_scan: {fast: 12, slow: 26, signal: 9}  # 仅作参数扫描档（只在 2 分钟上跑整套网格）
+
+regime:
+  ignition:
+    expand_bars: 2          # 带宽连续扩张根数
+    outer_bars: 2           # 连续 ≥2 根收盘 %b < pctb_lo 或 > pctb_hi
+    pctb_lo: 0.1
+    pctb_hi: 0.9
+  channel:
+    slope_n: [5, 10]        # 中轨斜率连续同向根数 N
+    side_m: [10, 15]        # 近 M 根
+    side_frac: 0.7          # 收盘在中轨同侧比例
+    bw_shrink_tol: 0.9      # 「带宽未收缩」：bw[t] ≥ 0.9 × bw[t−N]（实现方口径）
+    default: [5, 10]        # 状态特征与汇总用的默认 (N, M)
+  range:
+    window_days: 2          # 分位数窗口（交易日）
+    bw_pct_max: 0.30        # 带宽 ≤ 30% 分位
+    slope_pct_max: 0.30     # |中轨斜率| 低分位（实现方口径：≤ 30% 分位）
+    hist_pct_max: 0.30      # |MACD 柱| 低分位（实现方口径：≤ 30% 分位）
+
+entries:
+  E10: {k: [2, 3]}                                  # 点火：第 k 根外轨 K 收盘确认
+  E1:
+    pctb_ranges: [[0.4, 0.6], [0.45, 0.75], [0.5, 0.8]]
+    mid_dist_hw: [0.1, 0.2, 0.3]                     # 距中轨 ≤ c × 带半宽
+  E11: {lookback_m: [10, 20], vol_ratio: [1.5, 2.0], vol_window: 20}   # M 由实现方取 {10, 20}
+
+exits:
+  X1: {ma: [5, 10], kind: [sma, ema]}
+  X2: [cross, shrink1, shrink2, shrink3, flip]
+  X3: [mid1, mid2]
+  X4: [back_inside]       # 点火专用：多头 %b 回到 < 0.7，空头回到 > 0.3
+  X5: [higher_low]        # 摆动点左右各 2 根
+  X6: {tp: [0.15, 0.20, 0.30], sl: [0.25, 0.30, 0.40], basis: mid}   # 判定用 mid，成交用下一快照 bid
+  X7: {cap_min: [5, 10, 15, 30]}
+  include_none: true      # 结构离场「无」（只有 X6 + X7）作对照
+
+execution:
+  qty: 2
+  entry_lag_s: 2          # 入场 = 决策时刻 + 2 秒后的第一个快照（1 分钟快照 → 下一分钟）
+  last_entry: "15:40"
+  flat: "15:50"
+  d001_last_0dte_entry: "10:15"
+  d001_flat_0dte: "10:45"
+  stale_snapshots: 3      # 入场快照与前 3 个快照完全相同 → 视为陈旧，不入场
+
+cards:
+  min_n: 100
+  oos_year: 2026
+  random_window_min: 15
+  n_random: 1000
