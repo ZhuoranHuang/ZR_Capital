@@ -26,8 +26,9 @@ def _ns(t: pd.Timestamp) -> int:
 def _ticks(points):
     """[(秒偏移, bid, ask)] → Ticks（相对 T0）。"""
     ts = np.array([_ns(T0 + pd.Timedelta(seconds=s)) for s, _, _ in points], dtype=np.int64)
-    return v4d.Ticks(ts, np.array([b for _, b, _ in points], float),
-                     np.array([a for _, _, a in points], float))
+    return v4d.Ticks(
+        ts, np.array([b for _, b, _ in points], float), np.array([a for _, _, a in points], float)
+    )
 
 
 FLAT = _ns(T0 + pd.Timedelta(hours=5))
@@ -50,9 +51,15 @@ def test_entry_is_first_ask_at_or_after_decision_plus_2s():
 
 def test_tp_sells_half_then_structure_exits_rest_with_exact_fees():
     struct = np.array([_ns(T0 + pd.Timedelta(seconds=120))], np.int64)
-    tk = _ticks([(2, 0.9, 1.0), (30, 1.25, 1.27),   # mid 1.26 ≥ 1.2 → 止盈触发 30 s
-                 (32, 1.22, 1.24),                   # +2 s 后第一个 bid 1.22 卖 1 张
-                 (121, 1.1, 1.12), (122, 1.05, 1.07)])  # 结构 120 s 触发，+2 s → 1.05
+    tk = _ticks(
+        [
+            (2, 0.9, 1.0),
+            (30, 1.25, 1.27),  # mid 1.26 ≥ 1.2 → 止盈触发 30 s
+            (32, 1.22, 1.24),  # +2 s 后第一个 bid 1.22 卖 1 张
+            (121, 1.1, 1.12),
+            (122, 1.05, 1.07),
+        ]
+    )  # 结构 120 s 触发，+2 s → 1.05
     r = v4d.simulate(tk, _ns(T0), struct, FLAT, V4)
     assert r["tp_used"] and r["reason"] == "structure"
     want = -1.0 * 100 * 2 - _buy(2) + (1.22 * 100 - _sell(1, 1.22)) + (1.05 * 100 - _sell(1, 1.05))
@@ -103,8 +110,11 @@ def test_bh_and_cluster_p():
 def test_pick_contract_otm_one_strike_and_0dte_cutoff():
     exp0, exp1 = DAY, DAY + dt.timedelta(days=1)
     strikes = np.array([95.0, 100.0, 105.0])
-    chain = {(e, r): (strikes, [f"{e}{r}{k}" for k in strikes]) for e in (exp0, exp1)
-             for r in ("call", "put")}
+    chain = {
+        (e, r): (strikes, [f"{e}{r}{k}" for k in strikes])
+        for e in (exp0, exp1)
+        for r in ("call", "put")
+    }
     c = v4d.pick_contract(chain, DAY, 1, 100.0, dt.time(10, 0), V4)
     assert c["strike"] == 105.0 and c["dte"] == 0  # 平值 100 不算虚值，取上一档
     p = v4d.pick_contract(chain, DAY, -1, 100.0, dt.time(10, 16), V4)
@@ -116,10 +126,18 @@ def test_pick_contract_otm_one_strike_and_0dte_cutoff():
 def test_e11_delayed_requires_next_close_beyond_breakout():
     idx = pd.date_range("2026-10-15 13:30", periods=40, freq="2min", tz="UTC")
     close = np.full(40, 100.0)
-    close[30], close[31] = 103.0, 103.5   # 30 突破，31 仍在突破侧 → 31 入场
-    close[35], close[36] = 103.0, 99.0    # 35 突破，36 回落 → 不入场
-    df = pd.DataFrame({"open": close, "high": close + 0.1, "low": close - 0.1, "close": close,
-                       "volume": np.r_[np.full(30, 100.0), np.full(10, 1000.0)]}, index=idx)
+    close[30], close[31] = 103.0, 103.5  # 30 突破，31 仍在突破侧 → 31 入场
+    close[35], close[36] = 103.0, 99.0  # 35 突破，36 回落 → 不入场
+    df = pd.DataFrame(
+        {
+            "open": close,
+            "high": close + 0.1,
+            "low": close - 0.1,
+            "close": close,
+            "volume": np.r_[np.full(30, 100.0), np.full(10, 1000.0)],
+        },
+        index=idx,
+    )
     reg = pd.DataFrame({"state": np.full(40, RANGE)}, index=idx)
     x = pd.DataFrame({"pctb": np.full(40, 0.5)}, index=idx)
     h = {"M": 20, "v": 1.5, "vol_window": 20, "confirm_bars": 1}
@@ -148,3 +166,33 @@ def test_uncovered_segments():
     segs = v4d.uncovered(t, t + 15 * m, have)
     assert segs == [(t, t + 5 * m), (t + 10 * m, t + 15 * m)]
     assert v4d.uncovered(t + 6 * m, t + 9 * m, have) == []
+
+
+def test_oriented_arrays_match_scalar_orient():
+    from zr.features.regime import indicators, load_config, regimes
+    from zr.research import intraday_single_leg as isl
+
+    rng = np.random.default_rng(1)
+    idx = pd.date_range("2026-10-14 13:30", periods=400, freq="2min", tz="UTC")
+    c = 100 + np.cumsum(rng.normal(0, 0.3, len(idx)))
+    b = pd.DataFrame(
+        {
+            "open": c + rng.normal(0, 0.1, len(c)),
+            "high": c + 0.3,
+            "low": c - 0.3,
+            "close": c,
+            "volume": rng.integers(100, 1000, len(c)).astype(float),
+        },
+        index=idx,
+    )
+    cfg = load_config()
+    x = indicators(b, cfg, daily_reset=False)
+    reg = regimes(b, x, cfg, 2)
+    f = isl.bar_features(b, x, reg, reset=False)
+    for d in (1, -1):
+        arr = isl.oriented_arrays(f, d)
+        for i in (25, 100, 250, 399):
+            o = isl.orient(f, i, d)
+            for k in isl.TREE_FEATURES:
+                a, s = float(arr[k][i]), float(o[k])
+                assert (np.isnan(a) and np.isnan(s)) or a == pytest.approx(s), (d, i, k)
