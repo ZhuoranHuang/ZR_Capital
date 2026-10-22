@@ -25,6 +25,7 @@ from zr.features.channel import CHANNEL_FEATURE_COLUMNS, channel_states
 from zr.features.cross_asset import compute_cross_asset, cross_asset_columns
 from zr.features.features import FEATURE_COLUMNS, compute_features
 from zr.features.option_features import OPTION_FEATURE_COLUMNS, compute_option_features
+from zr.features.pullback import depth_features, directional, pullback_columns
 from zr.features.structure import STRUCTURE_COLUMNS, compute_structure
 from zr.research import outcomes as oc
 from zr.research.events import confluence, events_from_matrix, load_config, signal_matrix
@@ -43,6 +44,7 @@ def feature_columns(und: str) -> list[str]:
         + CALENDAR_COLUMNS
         + cross_asset_columns(und)
         + ["confl_n_same_dir_5m", "confl_families_5m"]
+        + pullback_columns()
     )
 
 
@@ -64,6 +66,9 @@ def build(root: Path, und: str, start: dt.date, end: dt.date) -> pd.DataFrame:
     fe = allf.reindex(ev["ts"])
     cols = [c for c in feature_columns(und) if c in fe.columns]
     ev = pd.concat([ev.reset_index(drop=True), fe[cols].reset_index(drop=True)], axis=1)
+    # D-022：回踩深度连续特征（按事件方向取多 / 空版本）
+    pbf = directional(depth_features(df), ev["ts"], ev["direction"].to_numpy())
+    ev = pd.concat([ev, pbf], axis=1)
     ev["day"] = ev["ts"].dt.tz_convert(ET).dt.date
     ev["bar_minute"] = oc.minute_index(ev["ts"])
     labs = stock_labels(df, ev[["ts", "direction"]])
