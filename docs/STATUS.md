@@ -29,7 +29,8 @@
 ## 待办
 
 1. **2026-10-25（SGT）删除旧数据目录** `./data_store`（确认 SSD 上数据完好、同步与拉取都写到 SSD 后）。
-2. **负责人重启 Theta Terminal**，让 `host = "127.0.0.1"` 生效（当前进程仍监听 `*:25503`，启动于 10-21 17:02 PT）。全量拉取会在重启期间等待，不需要停。
+2. **全量拉取已停在 2024-01**（2026-10-21 18:11 PT）：负责人 18:12 重启终端时用的是旧版脚本（默认 SOCKS），子 JVM 带 `-DsocksProxyHost=127.0.0.1:1080`，gRPC 上游全部 `503 io exception`。脚本已改为默认直连（`--proxy` 才用 HTTP CONNECT）。**请负责人用新脚本重启终端**：`bash scripts/run_theta_terminal.sh`，确认 `curl http://127.0.0.1:25503/v3/option/list/expirations?symbol=SPY` 返回 200 后告诉我，我重跑 `scripts/theta_full_pull.sh` 续传（2023-12 的 4 个失败日会自动重拉）。
+2b. **安全：Theta 终端的 REST/MCP 对局域网开放**——`host=127.0.0.1` 不限制监听（实测 `*.25503`，局域网 IP 访问 `/mcp/sse` 返回 200），macOS 防火墙关闭。三种处理方式见 DEPLOY.md「ThetaData」小节，均需 sudo，待负责人决定。
 3. 全量到位后：在 2 年期权数据上重跑元标签（加期权特征），报告同样指标（PLAN_W3 线 a）。
 
 ## 待确认

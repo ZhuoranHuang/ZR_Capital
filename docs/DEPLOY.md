@@ -116,7 +116,15 @@ Options Standard 档：tick 级，2016 起，账户并发 4（本项目用 2）�
 - 确需代理时只能用 HTTP CONNECT 代理：`THETA_HTTP_PROXY=host:port bash scripts/run_theta_terminal.sh --proxy`，脚本设置 `-Dhttps.proxyHost/-Dhttps.proxyPort`（及 `http.*`），并通过 `JAVA_TOOL_OPTIONS` 传给引导 JAR 拉起的子 JVM。现有 SSH `-D` 跳板是 SOCKS，不能直接用；若要经 VPS，需要在 VPS 上另起 HTTP CONNECT 代理（未部署）。
 - Python 侧访问终端是 `127.0.0.1:25503` 本地 HTTP，不需要也不应该加代理。
 
-`~/thetadata/config.toml`：`host` 应为 `127.0.0.1`（默认 `0.0.0.0` 会监听所有网卡）；MCP server 与 REST 同端口（日志 `Starting MCP server at: http://<host>:25503/mcp/sse`），**config.toml 与 jar 内置模板都没有关闭 MCP 的键**，把 host 改成 127.0.0.1 即把 MCP 一并限制在本机（未验证是否有命令行开关）。
+`~/thetadata/config.toml` 的 `host` 已改为 `127.0.0.1`，**但实测不限制监听**（2026-10-22 更正此前「改 host 即限制在本机」的说法——那是未经验证的推断）：
+- 终端日志写 `Starting server at: http://127.0.0.1:25503/`，实际 `netstat` 为 `tcp46 *.25503 LISTEN`；
+- 从本机局域网地址访问：`http://192.168.8.121:25503/mcp/sse` → **200**，REST → 有响应；
+- macOS 应用防火墙为关闭状态（`socketfilterfw --getglobalstate` → disabled）。
+即同一网络内的任何人都能访问 REST 和 MCP（使用本账户的数据权限）。config.toml 与 jar 内置模板都没有关闭 MCP 的键（未验证是否有命令行开关）。
+需要负责人决定的系统级措施（需 sudo，未执行）：
+1. 打开 macOS 防火墙并阻止 java 入站：`sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on` 与 `--blockapp ~/thetadata/jdk/Contents/Home/bin/java`；或
+2. 用 pf 只放行回环：在 `/etc/pf.conf` 加 `block in quick on ! lo0 proto tcp to any port 25503` 后 `sudo pfctl -f /etc/pf.conf -e`；或
+3. 向 ThetaData 支持确认 v3 终端的监听地址 / 关闭 MCP 的正式方法。
 
 首次使用：负责人在自己的终端里运行 `bash scripts/run_theta_terminal.sh` 并按提示登录（或 `--api-key`）；之后 `curl "http://127.0.0.1:25503/v3/option/list/expirations?symbol=SPY&format=json" | head -c 200` 有返回即可。macOS Gatekeeper 若拦截 jar，按文档在「隐私与安全性」里 Open Anyway。
 
