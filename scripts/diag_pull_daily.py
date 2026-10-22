@@ -1,5 +1,7 @@
-"""一次性诊断拉取（audit/known-answer 第 3 节）：MU / QQQ / SPY 长桥日线（NoAdjust，RTH），
-2023-09-01 起，只读不下单。写到 $ZR_DATA_ROOT/diag/daily/<SYMBOL>.parquet，供与 1 分钟 K 合成日线比对。
+"""一次性诊断拉取（audit/known-answer 第 3 节）：MU / QQQ / SPY 长桥日线
+（NoAdjust，RTH），
+2023-09-01 起，只读不下单。写到 $ZR_DATA_ROOT/diag/daily/<SYMBOL>.parquet，
+供与 1 分钟 K 合成日线比对。
 只在 VPS 跑（长桥 API，本机 DNS 污染，见 CLAUDE.md）。
 
 uv run python scripts/diag_pull_daily.py

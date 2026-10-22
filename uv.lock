@@ -1670,17 +1670,14 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "backtrader" },
     { name = "pytest" },
     { name = "ruff" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "backtrader" },
-]
-
 [package.metadata]
 requires-dist = [
+    { name = "backtrader", marker = "extra == 'dev'", specifier = ">=1.9.78.123" },
     { name = "duckdb" },
     { name = "lightgbm" },
     { name = "longport", specifier = ">=4.3" },
@@ -1702,6 +1699,3 @@ requires-dist = [
     { name = "structlog" },
 ]
 provides-extras = ["dev"]
-
-[package.metadata.requires-dev]
-dev = [{ name = "backtrader", specifier = ">=1.9.78.123" }]

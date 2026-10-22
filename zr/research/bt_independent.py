@@ -39,7 +39,9 @@ class StockFees(bt.CommInfoBase):
     def _getcommission(self, size, price, pseudoexec):
         if size == 0:
             return 0.0
-        return float(stock_order_fees(abs(int(size)), "Buy" if size > 0 else "Sell", price)["total"])
+        return float(
+            stock_order_fees(abs(int(size)), "Buy" if size > 0 else "Sell", price)["total"]
+        )
 
 
 class KDJ(bt.Indicator):
@@ -72,8 +74,9 @@ def _cerebro() -> bt.Cerebro:
     c.broker.setcash(1e12)
     c.broker.set_coo(True)
     c.broker.set_coc(True)
-    c.broker.set_slippage_fixed(TICK, slip_open=True, slip_limit=True, slip_match=True,
-                                slip_out=True)
+    c.broker.set_slippage_fixed(
+        TICK, slip_open=True, slip_limit=True, slip_match=True, slip_out=True
+    )
     c.broker.addcommissioninfo(StockFees())
     return c
 
@@ -86,8 +89,15 @@ class E4(bt.Strategy):
     梯形 = 收盘跌破最近一个已确认的更高谷底（谷底严格低于左右各 2 根、同日）；
     浮盈且再出同向信号加仓、最多 2 次；15:50 清仓（提前收盘日最后一根收盘）；100 股。"""
 
-    params = (("ma", 120), ("stop_mult", 1.5), ("n", 2), ("max_adds", 2), ("lot", 100),
-              ("day", None), ("mod", None))
+    params = (
+        ("ma", 120),
+        ("stop_mult", 1.5),
+        ("n", 2),
+        ("max_adds", 2),
+        ("lot", 100),
+        ("day", None),
+        ("mod", None),
+    )
 
     def __init__(self):
         self.sma = bt.ind.SMA(self.data.close, period=self.p.ma)
@@ -135,27 +145,38 @@ class E4(bt.Strategy):
             d, atr, sig_b = info
             px = o + d * TICK
             self.pos_dir, self.fills = d, []
-            self.cur = {"signal_bar": sig_b, "entry_bar": len(self), "direction": d, "adds": 0,
-                        "reason": None, "fees": 0.0}
+            self.cur = {
+                "signal_bar": sig_b,
+                "entry_bar": len(self),
+                "direction": d,
+                "adds": 0,
+                "reason": None,
+                "fees": 0.0,
+            }
             (self.buy if d == 1 else self.sell)(size=self.p.lot, exectype=bt.Order.Limit, price=px)
             stop = px - d * self.p.stop_mult * atr
             self.cur["stop"] = stop
             self.stop_o = (self.sell if d == 1 else self.buy)(
-                size=self.p.lot, exectype=bt.Order.Stop, price=stop)
+                size=self.p.lot, exectype=bt.Order.Stop, price=stop
+            )
         elif kind == "exit":
             self.cancel(self.stop_o)
             self.exiting = True
             d = self.pos_dir
-            (self.sell if d == 1 else self.buy)(size=abs(self.position.size),
-                                                exectype=bt.Order.Limit, price=o - d * TICK)
+            (self.sell if d == 1 else self.buy)(
+                size=abs(self.position.size), exectype=bt.Order.Limit, price=o - d * TICK
+            )
         elif kind == "add":
             d = self.pos_dir
-            (self.buy if d == 1 else self.sell)(size=self.p.lot, exectype=bt.Order.Limit,
-                                                price=o + d * TICK)
+            (self.buy if d == 1 else self.sell)(
+                size=self.p.lot, exectype=bt.Order.Limit, price=o + d * TICK
+            )
             self.cancel(self.stop_o)
             self.stop_o = (self.sell if d == 1 else self.buy)(
-                size=abs(self.position.size) + self.p.lot, exectype=bt.Order.Stop,
-                price=self.cur["stop"])
+                size=abs(self.position.size) + self.p.lot,
+                exectype=bt.Order.Stop,
+                price=self.cur["stop"],
+            )
             self.cur["adds"] += 1
 
     def notify_order(self, order):
@@ -163,7 +184,12 @@ class E4(bt.Strategy):
             return
         self.cur["fees"] += order.executed.comm
         opening = (order.isbuy() and self.pos_dir == 1) or (order.issell() and self.pos_dir == -1)
+        when = pd.Timestamp(
+            bt.num2date(order.executed.dt), tz="UTC"
+        )  # 成交所在 bar（不是通知到达的 bar）
         if opening:
+            if not self.fills:
+                self.cur["entry_ts"] = when
             self.fills.append((len(self), order.executed.price, abs(order.executed.size)))
             return
         if order.exectype == bt.Order.Stop:
@@ -172,9 +198,14 @@ class E4(bt.Strategy):
             self.cur["reason"] = "梯形"
         d = self.pos_dir
         px = order.executed.price
-        self.cur.update({"exit_bar": len(self), "exit_px": px,
-                         "entry_px": self.fills[0][1],
-                         "gross": sum(d * q * (px - f) for _, f, q in self.fills)})
+        self.cur.update(
+            {
+                "exit_ts": when,
+                "exit_px": px,
+                "entry_px": self.fills[0][1],
+                "gross": sum(d * q * (px - f) for _, f, q in self.fills),
+            }
+        )
         self.cur["net"] = self.cur["gross"] - self.cur["fees"]
         self.trades.append(self.cur)
         if order.exectype != bt.Order.Stop and self.stop_o is not None:
@@ -213,17 +244,26 @@ class E4(bt.Strategy):
                 self.pend = ("exit", None)
                 return
             avg = np.average([f for _, f, _ in self.fills], weights=[q for _, _, q in self.fills])
-            if (self.cur["adds"] < self.p.max_adds and b > self.cur["entry_bar"]
-                    and self._signal(d) and d * (self.data.close[0] - avg) > 0
-                    and b + 1 < len(mod) and mod[b + 1] + 10 <= FLAT):
+            if (
+                self.cur["adds"] < self.p.max_adds
+                and b > self.cur["entry_bar"]
+                and self._signal(d)
+                and d * (self.data.close[0] - avg) > 0
+                and b + 1 < len(mod)
+                and mod[b + 1] + 10 <= FLAT
+            ):
                 self.pend = ("add", None)
             return
         if self.position.size == 0 and self.cur is None and self.pend is None:
             for d in (1, -1):
                 if self._signal(d):
                     j = b + 1
-                    if (j < len(day) and day[j] == day[b] and mod[j] + 10 <= FLAT
-                            and np.isfinite(self.atr[0])):
+                    if (
+                        j < len(day)
+                        and day[j] == day[b]
+                        and mod[j] + 10 <= FLAT
+                        and np.isfinite(self.atr[0])
+                    ):
                         self.pend = ("entry", (d, self.atr[0], b))
                     break
 
@@ -262,8 +302,6 @@ def run_e4(df5: pd.DataFrame) -> pd.DataFrame:
         return t
     idx = df5.index
     t["signal_ts"] = idx[t["signal_bar"].to_numpy()]
-    t["entry_ts"] = idx[t["entry_bar"].to_numpy()]
-    t["exit_ts"] = idx[t["exit_bar"].to_numpy()]
     return t
 
 
@@ -341,8 +379,11 @@ class H2(bt.Strategy):
         if b + 1 >= mp:
             lo_i = max(0, b - w + 1)
             close_arr = np.array(self.data.close.get(size=b - lo_i + 1))
-            feats = (bw[lo_i : b + 1], np.abs(sl[lo_i : b + 1]),
-                     np.abs(hs[lo_i : b + 1] / close_arr))
+            feats = (
+                bw[lo_i : b + 1],
+                np.abs(sl[lo_i : b + 1]),
+                np.abs(hs[lo_i : b + 1] / close_arr),
+            )
             parts = []
             for arr in feats:
                 v = arr[np.isfinite(arr)]
@@ -371,11 +412,11 @@ class H2(bt.Strategy):
         H = max(self.data.high[-1], self.data.high[0])
         sig = 0
         pl, ph = (L - bot) / (2 * hw), (H - bot) / (2 * hw)
-        if (chan == 1 and c1 < o1 and c > o and 0.45 <= pl <= 0.75
-                and abs(L - mid) <= 0.2 * hw):
+        if chan == 1 and c1 < o1 and c > o and 0.45 <= pl <= 0.75 and abs(L - mid) <= 0.2 * hw:
             sig = 1
-        elif (chan == -1 and c1 > o1 and c < o and 0.45 <= 1 - ph <= 0.75
-              and abs(H - mid) <= 0.2 * hw):
+        elif (
+            chan == -1 and c1 > o1 and c < o and 0.45 <= 1 - ph <= 0.75 and abs(H - mid) <= 0.2 * hw
+        ):
             sig = -1
         if not sig:
             return
@@ -405,14 +446,23 @@ def pick(chain: pd.DataFrame, day: dt.date, d: int, spot: float, t_et: dt.time):
     return sym, exps[0]
 
 
-def run_h2(root: Path, bars2: pd.DataFrame, days: set, range_thr: float, weights) -> pd.DataFrame:
+def run_h2(
+    root: Path, bars2: pd.DataFrame, days: set, range_thr: float, weights, range_days: float = 1.0
+) -> pd.DataFrame:
+    """range_days=1 复现现有实现的实际窗口（配置写 2 天，代码多除了一次周期，见审计报告）。"""
     et = bars2.index.tz_convert(ET)
     day = np.asarray(et.date)
     bpd = float(pd.Series(day).value_counts().median())
-    params = {"n_bars": len(bars2), "day": day, "days": days, "range_thr": range_thr,
-              "weights": weights, "range_w": max(1, round(2 * bpd / 2)),
-              "label": np.asarray(et.strftime("%H:%M")),
-              "close_hm": np.asarray((et + pd.Timedelta(minutes=2)).strftime("%H:%M"))}
+    params = {
+        "n_bars": len(bars2),
+        "day": day,
+        "days": days,
+        "range_thr": range_thr,
+        "weights": weights,
+        "range_w": max(1, round(range_days * bpd)),
+        "label": np.asarray(et.strftime("%H:%M")),
+        "close_hm": np.asarray((et + pd.Timedelta(minutes=2)).strftime("%H:%M")),
+    }
     c = bt.Cerebro(stdstats=False)
     c.adddata(_feed(bars2))
     c.addstrategy(H2, p=params)
@@ -425,24 +475,40 @@ def run_h2(root: Path, bars2: pd.DataFrame, days: set, range_thr: float, weights
     for _, r in rows.iterrows():
         d0 = r["decision_ts"].tz_convert(ET).date()
         if d0 not in chains:
-            p_ = (root / "options_1m" / "underlying=MU" / f"date={d0.isoformat()}"
-                  / "quotes.parquet")
-            chains[d0] = (pd.read_parquet(p_, columns=["symbol", "expiry", "strike", "right"])
-                          .drop_duplicates("symbol") if p_.exists() else pd.DataFrame())
+            p_ = root / "options_1m" / "underlying=MU" / f"date={d0.isoformat()}" / "quotes.parquet"
+            chains[d0] = (
+                pd.read_parquet(
+                    p_, columns=["symbol", "expiry", "strike", "right"]
+                ).drop_duplicates("symbol")
+                if p_.exists()
+                else pd.DataFrame()
+            )
         if chains[d0].empty:
             continue
-        pk = pick(chains[d0], d0, int(r["direction"]), float(r["spot"]),
-                  r["decision_ts"].tz_convert(ET).time())
+        pk = pick(
+            chains[d0],
+            d0,
+            int(r["direction"]),
+            float(r["spot"]),
+            r["decision_ts"].tz_convert(ET).time(),
+        )
         if pk is None:
             continue
         sym, exp = pk
-        flat = pd.Timestamp(dt.datetime.combine(d0, dt.time(10, 44) if exp == d0 else
-                                                dt.time(15, 49)), tz=ET).tz_convert("UTC")
+        flat = pd.Timestamp(
+            dt.datetime.combine(d0, dt.time(10, 44) if exp == d0 else dt.time(15, 49)), tz=ET
+        ).tz_convert("UTC")
         if r["decision_ts"] >= flat:
             continue
         entry = first_tick(root, sym, d0, r["decision_ts"] + pd.Timedelta(seconds=2), flat)
-        out.append({"decision_ts": r["decision_ts"], "direction": int(r["direction"]),
-                    "symbol": sym, **entry})
+        out.append(
+            {
+                "decision_ts": r["decision_ts"],
+                "direction": int(r["direction"]),
+                "symbol": sym,
+                **entry,
+            }
+        )
     return pd.DataFrame(out)
 
 
