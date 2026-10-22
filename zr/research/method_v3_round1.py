@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from zr.config import get_settings
-from zr.features.bars import ET, load_extended_bars, resample_bars
+from zr.features.bars import ET, load_bars, resample_bars
 from zr.features.regime import STATE_NAMES, indicators, load_config, regimes
 from zr.ops.markdown import df_to_md
 from zr.research import grid_v3
@@ -37,7 +37,10 @@ CHECKS = [  # (起, 止, 期望状态, 期望方向, 说明)
 
 
 def regime_check(root: Path, cfg: dict) -> tuple[pd.DataFrame, str]:
-    s = load_extended_bars(root, "MU", CHECK_DAY - dt.timedelta(days=20), CHECK_DAY)
+    """D-027：RTH-only、BOLL/MACD 按日重置（indicators 的默认 daily_reset=True），不再用含
+    盘前盘后的连续 K 线（D-026，已被 docs/research/INDICATOR_PARITY.md 的实测证伪）。
+    """
+    s = load_bars(root, "MU", CHECK_DAY - dt.timedelta(days=20), CHECK_DAY)
     b = resample_bars(s, "2min")
     x = indicators(b, cfg)
     reg = regimes(b, x, cfg, 2)

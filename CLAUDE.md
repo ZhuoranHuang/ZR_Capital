@@ -66,6 +66,18 @@ uv run pytest -q
 - 本机 LightGBM 缺 `libomp`（无 Homebrew），`zr/research/meta_model.py` 自动回退 sklearn HistGradientBoosting。
 - 终端连上游用 gRPC，只认 HTTP CONNECT 代理；SOCKS 会导致 `MDDS upstream unavailable`。默认直连，`run_theta_terminal.sh --proxy` 才启用（需 `THETA_HTTP_PROXY`）。
 
+## 指标标准口径（与长桥 App 对齐，2026-10-22 实测，D-027）
+
+用 MU 2026-10-21 三个独立时刻（11:26/12:34/14:52 ET）的 App 截图值核对，系统遍历数据源、2 分钟对齐、历史范围、BOLL ddof、MACD EMA 初始化、复权、时间戳偏移后确定：
+
+- **BOLL(20,2) 标准差用 ddof=0**（`zr/features/indicators.py` 的 `bollinger` 已经是这个口径，不用改）；MACD 用标准 EMA（`span=n, adjust=False`，即首值做种、α=2/(n+1)，不是 Wilder α=1/n）。
+- **只用 RTH bar（09:30–16:00/提前收盘日对应收盘），不含盘前盘后**；BOLL/MACD **每个交易日从头算，不跨日累计**（`zr/features/regime.py::indicators(daily_reset=True)`，默认开启）。这推翻了 2026-10-22 早些时候 D-026 的假设（「含盘前盘后连续 K 线更像 App」）——补充：当时只看了日内四个人工校验点的比例，没有拿到 App 的精确数值截图，属于凭观感定的口径，这次补了带精确数值的截图才测出来是错的。
+- **复权（NoAdjust vs ForwardAdjust）对近期数据几乎无影响**（MU 2026-10-19～22 期间 3,486 根 1 分钟 bar 里只有 1 根差 0.03，可忽略）；数据源（本地用长桥 1 分钟聚合成 2 分钟 vs 直接拉长桥 2 分钟 K）同样不影响。
+- **App 显示的 K 线时刻比我们的 bar 标签（开盘时刻）少一个周期**：截图标「11:26」对应我们标签为「11:28」的 2 分钟 bar。换算时用 `App 时刻 + 周期 = 我们的 bar 标签`。机制未知（未拆解长桥前端），记为经验规律。
+- 达到的精度：BOLL mid/upper/lower 共 9 个值误差 0%（四舍五入到 App 显示的 3 位小数后完全相等）；MACD DIF/DEA 残余误差（0.02%–0.15%）全部来自 App 只显示 3 位小数造成的量化（换算成绝对误差 <0.0005），不是口径差异。
+- **副作用**：按日重置意味着每个交易日前 `BOLL 周期 × bar 分钟数`（例如 2 分钟 K、BOLL(20) ≈ 40 分钟，到 10:10 ET 左右）没有有效的 BOLL/MACD 值，这段时间 %b、DIF/DEA 为 NaN——如果 App 也是这个口径，这是**预期行为**，不是数据缺口。
+- 过程与全部数值见 `docs/research/INDICATOR_PARITY.md`（`uv run python -m zr.research.indicator_parity`，可重复运行）。
+
 ## 运行环境
 
 长桥 API 相关任务（核验、录制、交易史）只在 VPS `zr` 上跑；本机网络对 longportapp.com 有 DNS 污染。部署见 `docs/DEPLOY.md`。

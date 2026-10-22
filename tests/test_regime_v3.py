@@ -3,6 +3,7 @@
 import numpy as np
 import pandas as pd
 
+from zr.features.bars import ET
 from zr.features.regime import indicators, load_config, range_score, regimes, state_features
 from zr.research import exits as ex
 from zr.research import patterns_v3 as pt
@@ -103,3 +104,45 @@ def test_range_score_no_lookahead():
     x2 = indicators(df2, CFG)
     s2 = range_score(x2, df2, CFG["regime"]["range"], 2)
     pd.testing.assert_series_equal(s1.iloc[:300], s2.iloc[:300])
+
+
+def test_indicators_daily_reset_vs_continuous():
+    """D-027：daily_reset=True 时 BOLL/MACD 每天从头算，当日值不受前一天收盘价影响。"""
+    rng = np.random.default_rng(3)
+    idx1 = pd.date_range("2024-03-04 09:30", periods=20, freq="2min", tz="America/New_York")
+    idx2 = pd.date_range("2024-03-05 09:30", periods=20, freq="2min", tz="America/New_York")
+    idx = idx1.append(idx2).tz_convert("UTC")
+    close = np.r_[100 + rng.normal(0, 0.1, 20), 100 + rng.normal(0, 0.1, 20)]
+    df = pd.DataFrame(
+        {
+            "open": close,
+            "high": close + 0.05,
+            "low": close - 0.05,
+            "close": close,
+            "volume": 1000.0,
+        },
+        index=idx,
+    )
+    x_reset = indicators(df, CFG, daily_reset=True)
+    x_cont = indicators(df, CFG, daily_reset=False)
+    day2 = slice(20, 40)
+    # 连续版 day2 的早期 bar 能看到 day1 的收盘（std/EMA 不是 NaN）；按日重置版同一位置应是 NaN
+    assert x_reset["mid"].iloc[20:25].isna().all()
+    assert x_cont["mid"].iloc[20:25].notna().any()
+    # 改动第 1 天的价格，重置版的第 2 天指标不受影响；连续版会受影响
+    df2 = df.copy()
+    df2.iloc[:20, :4] *= 1.5
+    x_reset2 = indicators(df2, CFG, daily_reset=True)
+    x_cont2 = indicators(df2, CFG, daily_reset=False)
+    pd.testing.assert_series_equal(
+        x_reset["dif"].iloc[day2], x_reset2["dif"].iloc[day2], check_names=False
+    )
+    assert not x_cont["dif"].iloc[day2].equals(x_cont2["dif"].iloc[day2])
+
+
+def test_indicators_slope_no_cross_day_jump_under_daily_reset():
+    df = _bars(60)
+    x = indicators(df, CFG, daily_reset=True)
+    day = np.asarray(df.index.tz_convert(ET).date)
+    first_of_day = np.r_[True, day[1:] != day[:-1]]
+    assert np.isnan(x["slope"].to_numpy()[first_of_day]).all()
