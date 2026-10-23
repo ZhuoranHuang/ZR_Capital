@@ -1,0 +1,5 @@
+# D-033：价格改善（config/price_improvement.yaml）与负责人挂单策略（config/owner_strategy.yaml）的参数
+# 一律只用负责人 2026-06～2026-08 的订单校准；此后任何规则测试只能用其他月份（样本外使用）。
+# zr/backtest/intrabar.run 遇到窗口内的日期直接报错；已知答案重放（校准本身的验证）不受限。
+from: "2026-06-01"
+to: "2026-08-31"

@@ -87,3 +87,39 @@ def test_example_rule_parses():
     r = yaml.safe_load(open("config/intrabar/example_owner_profile.yaml", encoding="utf-8"))
     assert r["direction"] == "trend" and r["trend"] == {"bars": 10, "min_same": 8}
     assert r["order"]["mode"] == "passive" and r["exit"]["tp"] == 0.10
+
+
+def test_path_forced_sale_at_given_time():
+    """R-047：卖单路径到 force_ns 仍未成交 → 该时刻按买一补卖（无改善模型时 = 买一）。"""
+    b = book([(0, 1.00, 1.10), (6, 0.98, 1.08)])
+    order = {
+        "mode": "path",
+        "path": [(_ns(0), 1.09)],
+        "end_ns": _ns(20),
+        "lag_s": 0,
+        "force_ns": _ns(7),
+    }
+    info: dict = {}
+    n, px, tl, end = place(
+        b, -1, 2, _ns(0), order, SYM, 1.0, None, np.random.default_rng(0), None, info
+    )
+    assert n == 2 and px == pytest.approx(0.98) and info["forced"] == 2 and end == _ns(7)
+    # 有成交先于 force_ns：不补卖
+    b2 = book([(0, 1.00, 1.10)], [(3, 1.10, 5)])
+    info2: dict = {}
+    n2, px2, _, _ = place(
+        b2, -1, 2, _ns(0), order, SYM, 1.0, None, np.random.default_rng(0), None, info2
+    )
+    assert n2 == 2 and px2 == pytest.approx(1.09) and "forced" not in info2
+
+
+def test_rule_runs_refuse_calibration_months():
+    import datetime as dt
+
+    from zr.backtest.intrabar import calibration_window, check_out_of_sample
+
+    lo, hi = calibration_window()
+    assert (lo, hi) == (dt.date(2026, 6, 1), dt.date(2026, 8, 31))
+    check_out_of_sample([dt.date(2026, 5, 29), dt.date(2026, 9, 1)])  # 窗口外：不报错
+    with pytest.raises(ValueError, match="D-033"):
+        check_out_of_sample([dt.date(2026, 9, 1), dt.date(2026, 7, 15)])

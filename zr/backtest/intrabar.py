@@ -279,6 +279,7 @@ def place(
     end: int | None,
     rng: np.random.Generator,
     pi: PriceImprovement | None = None,
+    info: dict | None = None,
 ) -> tuple[float, float, int | None, int]:
     """返回 (成交张数, 均价, 最后成交时刻, 结束时刻)。order：
     {mode: taker} → +lag 后第一个对手价；
@@ -308,15 +309,33 @@ def place(
     elif mode == "path":
         fills, left = [], float(qty)
         path = order["path"]
+        force = order.get("force_ns")  # R-047：到该时刻仍未全成的张数按当时对手价补成交
+        stop = int(force) if force is not None else None
         for k, (ts_k, px_k) in enumerate(path):
             if left <= 0:
                 break
             e = path[k + 1][0] if k + 1 < len(path) else order["end_ns"]
-            f, left = _rest(
-                book, side, float(px_k), int(ts_k) + lag, int(e) + lag, left, rng, q, pi, sym
-            )
+            a0, b0 = int(ts_k) + lag, int(e) + lag
+            if stop is not None:
+                if a0 >= stop:
+                    break
+                b0 = min(b0, stop)
+            f, left = _rest(book, side, float(px_k), a0, b0, left, rng, q, pi, sym)
             fills += f
         e = int(order["end_ns"]) + lag
+        if stop is not None and left > 0:
+            i = book.first_at(stop)
+            i = book.asof(stop) if i is None else i
+            if i is not None:
+                bid, ask = float(book.bid[i]), float(book.ask[i])
+                opp = ask if side == 1 else bid
+                if pi is not None:  # 立即成交类别；以对手价为界（卖出不低于买一、买入不高于卖一）
+                    opp = pi.price(side, bid, ask, "immediate", sym, rng, limit=opp)
+                fills.append((max(stop, int(book.q_ns[i])), opp, left))
+                if info is not None:
+                    info["forced"] = left
+                left = 0.0
+                e = stop
     else:
         raise ValueError(mode)
     if not fills:
@@ -447,7 +466,28 @@ def run_day(
     return trades
 
 
+def calibration_window() -> tuple[dt.date, dt.date]:
+    """D-033：成交参数的校准月份（config/calibration_window.yaml），规则测试不得使用。"""
+    cfg = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "config" / "calibration_window.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    return dt.date.fromisoformat(cfg["from"]), dt.date.fromisoformat(cfg["to"])
+
+
+def check_out_of_sample(days: list[dt.date]) -> None:
+    lo, hi = calibration_window()
+    bad = [d for d in days if lo <= d <= hi]
+    if bad:
+        raise ValueError(
+            f"D-033：{len(bad)} 个测试日落在成交参数校准窗口 {lo}～{hi} 内（如 {bad[0]}），"
+            "规则测试只能用其他月份"
+        )
+
+
 def run(root: Path, rule: dict, days: list[dt.date], seed: int = 0) -> pd.DataFrame:
+    check_out_of_sample(days)
     bs = BarState(root, rule["underlying"], max(days), rule.get("convention", "C"))
     od = OptionData(root, rule["underlying"])
     rows = []
@@ -489,8 +529,15 @@ def replay(
                 {**{k: v for k, v in lg.items() if k != "order"}, "filled": 0.0, "px": math.nan}
             )
             continue
-        n, px, tl, _ = place(bk, lg["side"], lg["qty"], t0, o, lg["symbol"], q, None, rng, pi)
+        info: dict = {}
+        n, px, tl, _ = place(bk, lg["side"], lg["qty"], t0, o, lg["symbol"], q, None, rng, pi, info)
         out.append(
-            {**{k: v for k, v in lg.items() if k != "order"}, "filled": n, "px": px, "fill_ns": tl}
+            {
+                **{k: v for k, v in lg.items() if k != "order"},
+                "filled": n,
+                "px": px,
+                "fill_ns": tl,
+                "forced": float(info.get("forced", 0.0)),
+            }
         )
     return out

@@ -35,6 +35,22 @@ OUT = REPO / "docs" / "research" / "INTRABAR_KNOWN_ANSWER.md"
 NS = 1_000_000_000
 
 
+def add_force(root: Path, exact: list[dict]) -> list[dict]:
+    """R-047：平仓卖单加 force_ns = 该卖单最后一笔真实成交的时刻（限价路径单才需要）。"""
+    import copy
+
+    from zr.journal.analyze_history import load
+
+    _, ex, _ = load(root)
+    ex = ex.assign(ts=fm._utc(ex["ts_et"], naive_is_utc=False), order_id=ex["order_id"].astype(str))
+    last = ex.groupby("order_id")["ts"].max()
+    out = copy.deepcopy(exact)
+    for lg in out:
+        if lg["side"] == -1 and lg["order"]["mode"] == "path" and lg["order_id"] in last.index:
+            lg["order"]["force_ns"] = int(fs._ns(pd.Series([last[lg["order_id"]]]))[0])
+    return out
+
+
 def legs(root: Path) -> tuple[pd.DataFrame, pd.DataFrame, list[dict], list[dict]]:
     sel, orders = ol.episode_orders(root)
     orders = orders[orders["symbol"].str.startswith("MU")].copy()
@@ -109,12 +125,15 @@ def acceptance(root: Path, sel, exact: list[dict], pi) -> tuple[pd.DataFrame, di
             d0 = d
     d0["tick"] = [float(tick_size(s, p)) for s, p in zip(d0["symbol"], d0["act_px"], strict=True)]
     qok = np.isclose(d0["filled"], d0["qty"])
+    qok_nf = np.isclose(d0["filled"] - d0.get("forced", 0.0), d0["qty"])  # 不计补卖
     both = d0["filled"] > 0
     diff = (d0["side"] * (d0["px"] - d0["act_px"]) / d0["tick"])[both]  # 正 = 模拟对负责人更差
     t0 = totals[0]
     lo, hi = np.quantile(totals, [0.05, 0.95])
     res = {
         "a_qty_rate": float(qok.mean()),
+        "a_qty_rate_no_forced": float(qok_nf.mean()),
+        "n_forced_orders": int((d0.get("forced", 0.0) > 0).sum()) if "forced" in d0 else 0,
         "b_median_ticks": float(diff.median()),
         "c_total_sim": t0,
         "c_total_act": act_total,
@@ -288,9 +307,29 @@ def main() -> int:
     pi = PriceImprovement.from_yaml(REPO / "config" / "price_improvement.yaml")
     acc, ar = acceptance(root, sel, exact, pi)
     passed = all(ar[k] for k in "abcd")
+    acc47, ar47 = acceptance(root, sel, add_force(root, exact), pi)
+    passed47 = all(ar47[k] for k in "abcd")
     lines[1:1] = [
         "",
-        "## R-046 价格改善模型验收（预登记标准，四项全过才算可用）",
+        "## R-047 未卖出持仓按负责人真实卖出时刻补卖（预登记；标准同 R-046）",
+        "",
+        "与 R-046 相同，唯一改动：平仓卖单在负责人真实卖出时刻（该卖单最后一笔真实成交）仍未全部"
+        "成交时，"
+        "剩余张数于该时刻按买一卖出（价格改善按全部可立即成交样本抽样，买一为下限）；补卖算作该"
+        "卖单成交。",
+        "",
+        df_to_md(acc47),
+        "",
+        f"**结论：{'通过' if passed47 else '不通过'}**（{sum(ar47[k] for k in 'abcd')}/4）。"
+        f"发生补卖的卖单 {ar47['n_forced_orders']} 张；不计补卖的成交张数一致率 "
+        f"{ar47['a_qty_rate_no_forced']:.1%}（参考）。改善量与重放在同一批订单上，属样本内检验。",
+        "",
+        "差额来源（事后描述）：种子 0 的模拟合计与对账单差 "
+        f"{ar47['gap_total']:+,.2f} USD，其中成交张数不一致的 {ar47['n_qty_eps']} 段 "
+        f"{ar47['gap_qty_eps']:+,.2f}；已成交张数上的成交价差合计 {ar47['gap_px_usd']:+,.2f} USD"
+        "（正 = 模拟对负责人更好）。",
+        "",
+        "## R-046 价格改善模型验收（预登记标准，四项全过才算可用；结果保留）",
         "",
         "重放口径同下文 (1)：真实提交时刻、真实挂单与改价、真实卖出；可立即成交的订单成交价 = 对"
         "手价 − "
@@ -313,6 +352,9 @@ def main() -> int:
     OUT.write_text("\n".join(lines), encoding="utf-8")
     store = root / "research" / "intrabar"
     pd.Series(ar["totals"]).to_frame("total").to_parquet(store / "r046_totals.parquet")
+    pd.Series(ar47["totals"]).to_frame("total").to_parquet(store / "r047_totals.parquet")
+    ar47["orders"].to_parquet(store / "r047_orders_seed0.parquet", index=False)
+    print(acc47.to_string())
     ar["orders"].to_parquet(store / "r046_orders_seed0.parquet", index=False)
     print(acc.to_string())
     store.mkdir(parents=True, exist_ok=True)
