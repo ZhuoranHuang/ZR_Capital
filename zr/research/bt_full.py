@@ -8,7 +8,7 @@
   （bt_independent.pick）、tick 成交（+2 s 后第一个有效报价；ask 买入、bid 卖出；+20% 卖 1 张、
   −30% 全卖、结构 / 30 分钟上限 / 强平先到者）、费用（zr.costs.fees.option_order_fees）、
   同格不重叠（上一笔离场前的信号跳过）。
-口径 C（主口径），MU。与引擎 research/v4/trades_C_MU.parquet 逐笔比对。
+口径 C（主口径），MU。与引擎 research/v4/trades_C.parquet 的 MU 部分逐笔比对。
 
 运行：uv run python -m zr.research.bt_full
 """
@@ -359,7 +359,8 @@ def main() -> int:
     log.info("backtrader 逐根：%d 根", len(bars2))
     res = run_bars(bars2, v4, set(days))
     btt = trades(root, bars2, res, v4, set(days))
-    eng = pd.read_parquet(root / "research" / "v4" / "trades_C_MU.parquet")
+    eng = pd.read_parquet(root / "research" / "v4" / "trades_C.parquet")
+    eng = eng[eng["und"] == "MU"]
     summ, j = compare(eng, btt)
     out = root / "research" / "audit"
     out.mkdir(parents=True, exist_ok=True)

@@ -49,9 +49,21 @@ def load_official(root: Path, und: str, period: int, full: bool) -> pd.DataFrame
     return o
 
 
-def synth(one_min: pd.DataFrame, period: int) -> pd.DataFrame:
-    """1 分钟 → period 分钟，附分箱内 1 分钟根数 n1。"""
-    b = resample_bars(one_min, f"{period}min")
+def synth(one_min: pd.DataFrame, period: int, legacy: bool = False) -> pd.DataFrame:
+    """1 分钟 → period 分钟，附分箱内 1 分钟根数 n1。legacy=True：修复前的聚合（零成交量占位 K
+    也参与开高低），只用于报告修复前后的对比。"""
+    if legacy:
+        b = one_min.groupby(et_date(one_min.index), group_keys=False).apply(
+            lambda g: (
+                g.resample(f"{period}min", label="left", closed="left", origin="start_day")
+                .agg(
+                    {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+                )
+                .dropna(subset=["open"])
+            )
+        )
+    else:
+        b = resample_bars(one_min, f"{period}min")
     n = (
         one_min["close"].groupby(one_min.index.floor(f"{period}min")).count()
     )  # 分箱锚 UTC 零点，与 resample_bars(origin="start_day") 相同
@@ -87,7 +99,7 @@ def compare(local: pd.DataFrame, off: pd.DataFrame, period: int) -> pd.DataFrame
     return j
 
 
-def summarize(j: pd.DataFrame, und: str, period: int, full: bool) -> dict:
+def summarize(j: pd.DataFrame, und: str, period: int, full: bool, legacy: bool = False) -> dict:
     c = j["cause"].value_counts()
     days = j.groupby("day")["cause"].apply(lambda s: (s != "match").any())
     both = j["open"].notna() & j["open_o"].notna()
@@ -95,6 +107,7 @@ def summarize(j: pd.DataFrame, und: str, period: int, full: bool) -> dict:
         "标的": und,
         "周期": f"{period} 分钟",
         "时段": "含盘前盘后" if full else "RTH",
+        "合成": "修复前（占位 K 参与开高低）" if legacy else "现行",
         "日期": f"{j['day'].min()} ~ {j['day'].max()}",
         "交易日": int(j["day"].nunique()),
         "比对 K 数": len(j),
@@ -131,6 +144,9 @@ def run(root: Path) -> tuple[pd.DataFrame, dict[tuple, pd.DataFrame]]:
         detail[(und, period, full)] = j
         rows.append(summarize(j, und, period, full))
         log.info("%s", rows[-1])
+        if full:
+            jl = compare(synth(cache[key], period, legacy=True), off, period)
+            rows.append(summarize(jl, und, period, full, legacy=True))
     return pd.DataFrame(rows), detail
 
 
