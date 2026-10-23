@@ -37,12 +37,19 @@ log "checkout $REF -> $(git rev-parse --short HEAD)"
 
 sudo cp deploy/systemd/*.service deploy/systemd/*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-for t in zr-recorder.timer zr-universe.timer zr-healthcheck.timer; do
+for t in zr-recorder.timer zr-universe.timer zr-healthcheck.timer zr-assistant.timer; do
     if systemctl is-enabled --quiet "$t"; then sudo systemctl restart "$t"; fi
 done
-# 录制器只在盘中运行；正在跑时才重启，否则等下一次 timer
-if systemctl is-active --quiet zr-recorder.service; then
-    sudo systemctl restart zr-recorder.service
-    log "zr-recorder.service restarted"
-fi
+# 盘中（09:20–16:05 ET）不重启录制器 / 助手：重启会丢推送、打断纸面持仓管理；新代码等下一次 timer
+HM="$(TZ=America/New_York date +%H%M)"
+for s in zr-recorder.service zr-assistant.service; do
+    if systemctl is-active --quiet "$s"; then
+        if [ "$HM" -ge 0920 ] && [ "$HM" -lt 1605 ]; then
+            log "$s 正在运行且在盘中，不重启（下一次 timer 生效）"
+        else
+            sudo systemctl restart "$s"
+            log "$s restarted"
+        fi
+    fi
+done
 log "ok $(git rev-parse --short HEAD)"

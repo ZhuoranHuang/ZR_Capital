@@ -319,8 +319,10 @@ class Recorder:
         rules: dict[str, ChainRule],
         cap: int,
         resub_interval_s: float = 300.0,
+        tap: Any = None,
     ) -> None:
         self.qctx = qctx
+        self.tap = tap  # zr.live.tap.TapWriter（opt-in，ZR_LIVE_TAP_DIR）；None = 不写
         self.sink = sink
         self.underlyings = list(rules)
         self.rules = rules
@@ -340,7 +342,10 @@ class Recorder:
     def _handle(self, kind: str, symbol: str, event: Any) -> None:
         try:
             recv = time.time_ns()
-            self.sink.add(make_event(symbol, kind, event, recv))
+            row = make_event(symbol, kind, event, recv)
+            self.sink.add(row)
+            if self.tap is not None:  # 旁路写失败在 TapWriter 内部计数，不影响落盘
+                self.tap.write(symbol, kind, row["payload"], recv)
             with self._lock:
                 self.stats[symbol].record(kind, recv)
                 now = time.monotonic()
@@ -512,8 +517,14 @@ def main(argv: list[str] | None = None) -> int:
             time.sleep(wait_s)
 
     sink = ParquetSink(settings.zr_data_root / "recorder")
-    rec = Recorder(qctx, sink, rules, uni.subscription_cap)
+    from zr.live.tap import TapWriter
+
+    tap = TapWriter.from_env()
+    rec = Recorder(qctx, sink, rules, uni.subscription_cap, tap=tap)
     rec.run(until_et=until, qa_dir=settings.zr_data_root / "recorder_qa")
+    if tap is not None:
+        tap.close()
+        log.info("tap 写入 %d 行，失败 %d", tap.lines, tap.errors)
     return 0
 
 

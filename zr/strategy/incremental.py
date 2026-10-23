@@ -149,8 +149,14 @@ class EngineState:
 
 
 class IncrementalEngine:
-    def __init__(self, cfg: dict, v4: dict, range_w: int, days: set):
+    def __init__(
+        self, cfg: dict, v4: dict, range_w: int, days: set, daily_reset: bool = False
+    ):
+        """daily_reset=False：口径 C（连续、不重置）；True：口径 A（调用方只喂 RTH K，
+        BOLL / MACD 与中轨斜率每个交易日从头算，其余状态量跨日连续，
+        与批量 `indicators(daily_reset=True)` 一致）。"""
         self.cfg, self.v4, self.days = cfg, v4, days
+        self.daily_reset = daily_reset
         bo, m = cfg["boll"], cfg["macd"]
         self.n, self.k = bo["n"], bo["k"]
         self.af, self.as_, self.ag = (2 / (m[x] + 1) for x in ("fast", "slow", "signal"))
@@ -195,6 +201,9 @@ class IncrementalEngine:
         day = et.date()
         prev = s.prev
         same_prev = prev is not None and prev["day"] == day
+        if self.daily_reset and not same_prev:
+            s.closes.clear()
+            s.ema_f = s.ema_s = s.dea = math.nan
         # BOLL
         s.closes.append(b.close)
         if len(s.closes) == self.n:
@@ -216,7 +225,7 @@ class IncrementalEngine:
         dif = s.ema_f - s.ema_s
         s.dea = dif if math.isnan(s.dea) else self.ag * dif + (1 - self.ag) * s.dea
         hist = dif - s.dea
-        pm = prev["mid"] if prev else math.nan
+        pm = prev["mid"] if prev and (same_prev or not self.daily_reset) else math.nan
         slope = (mid - pm) / mid if not (math.isnan(mid) or math.isnan(pm)) else math.nan
         if not math.isnan(slope) and abs(slope) < SLOPE_EPS:
             slope = 0.0
