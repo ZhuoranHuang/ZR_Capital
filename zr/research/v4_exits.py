@@ -189,9 +189,11 @@ def v4_cells(sims: pd.DataFrame, v4: dict, und: str) -> pd.DataFrame:
     return pd.DataFrame(out)
 
 
-def mfe_diag(root: Path) -> pd.DataFrame:
+def mfe_diag(root: Path, und: str | None = None) -> pd.DataFrame:
     """R-033 吃价差口径的 V4 交易（原出场）：持仓期间 tick 中间价相对入场 ask 的最大有利偏移。"""
     t = pd.read_parquet(root / "research" / "v4" / "trades_C.parquet")
+    if und is not None:
+        t = t[t["und"] == und]
     rows = []
     for (und, sym, day), g in t.groupby(["und", "symbol", "day"]):
         tk = v4d.load_ticks(root, und, sym, day)
@@ -306,7 +308,13 @@ def owner_cells(o: pd.DataFrame, v4: dict) -> pd.DataFrame:
 OUT = REPO / "docs" / "research" / "EXIT_REVISION.md"
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--unds", default="MU,QQQ", help="逗号分隔；只给部分标的时不算 FDR、不写报告")
+    ap.add_argument("--skip-owner", action="store_true")
+    args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     root = get_settings().zr_data_root
     v4 = v4d.load_v4()
@@ -314,19 +322,23 @@ def main() -> int:
     specs = exit_specs()
     store = root / "research" / "exit_revision"
     store.mkdir(parents=True, exist_ok=True)
-    cells = []
-    for und in v4["sample"]["underlyings"]:
+    unds = args.unds.split(",")
+    for und in unds:
         sims = v4_sims(root, und, v4, strat, specs)
         sims.to_parquet(store / f"sims_{und}.parquet", index=False)
-        cells.append(v4_cells(sims, v4, und))
+        v4_cells(sims, v4, und).to_parquet(store / f"cells_{und}.parquet", index=False)
+        mfe_diag(root, und).to_parquet(store / f"mfe_{und}.parquet", index=False)
         log.info("%s：%d 行", und, len(sims))
-    cells = pd.concat(cells, ignore_index=True)
-    own = owner_sims(root, strat, specs)
-    oc = owner_cells(own, v4)
-    mfe = mfe_diag(root)
-    for name, df in (("cells", cells), ("owner", own), ("owner_cells", oc), ("mfe", mfe)):
-        df.to_parquet(store / f"{name}.parquet", index=False)
-    write_report(root, v4, cells, oc, mfe, specs)
+    if not args.skip_owner:
+        own = owner_sims(root, strat, specs)
+        own.to_parquet(store / "owner.parquet", index=False)
+        owner_cells(own, v4).to_parquet(store / "owner_cells.parquet", index=False)
+    all_u = v4["sample"]["underlyings"]
+    if all((store / f"cells_{u}.parquet").exists() for u in all_u) and set(unds) >= set(all_u):
+        cells = pd.concat([pd.read_parquet(store / f"cells_{u}.parquet") for u in all_u])
+        mfe = pd.concat([pd.read_parquet(store / f"mfe_{u}.parquet") for u in all_u])
+        oc = pd.read_parquet(store / "owner_cells.parquet")
+        write_report(root, v4, cells, oc, mfe, specs)
     return 0
 
 
