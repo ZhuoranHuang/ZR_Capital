@@ -238,3 +238,11 @@ OptionQuote 无 bid/ask（已核实）。
 
 - SPY.US：翻页 780 页、779,200 根后服务端不再返回更早数据，最早一根 **2023-10-02 08:00 UTC**（04:00 ET，Pre）。即 `history_candlesticks_by_offset(Min_1)` 回溯深度约 2 年零 3 周。
 - 其余标的见 `docs/DATA_INVENTORY.md`。
+
+## 补充：K 线游标时区、占位 K、逐笔计价口径（来源：`scripts/diag_pull_candles.py`、`zr/research/bar_parity.py`、`zr/research/shadow_replay.py`，2026-10-22 VPS / 本机实测，非本脚本生成）
+
+- `history_candlesticks_by_offset` 的 `time` 参数按**美东时间**解释，返回的 `timestamp` 仍是 naive UTC：传 `2026-10-21 13:32`、forward=False 返回到 17:32 UTC（= 13:32 ET）为止。
+- 官方 2 / 5 分钟 K（Intraday、All）MU、QQQ 均可回溯到 2023-10-02；bar 标签为分箱起点，与 1 分钟 K 合成一致。
+- 1 分钟 K 在无成交的分钟插入 O=H=L=C=前收、量 0 的占位 K（多在盘前盘后）；官方 2 分钟 K 的开高低不含占位 K。
+- 长桥会事后修订已发布的 1 分钟 K：MU 2026-10-21 09:30 的 open 当日为 925.42，次日为 923.735。
+- 逐笔成交推送的 `trade_type`：MU 2026-10-22 共 647,569 笔，`I` 511,752、空 132,996、`W` 2,436、`V` 344、`P` 37、`X` 4。官方 K 的开高低收只与常规成交（`trade_type` 为空）一致，零股等只计量（未验证：长桥无文档，结论来自 2 天比对）。

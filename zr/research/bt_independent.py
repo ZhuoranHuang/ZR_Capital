@@ -330,6 +330,11 @@ class H2(bt.Strategy):
         self.run = {k: 0 for k in ("exp", "hi", "lo", "hup", "hdn", "sup", "sdn")}
 
     def next(self):
+        b, top, mid, bot, c, o, chan, st, sd = self._regime()
+        self._e1(b, top, mid, bot, c, o, chan, st, sd)
+
+    def _regime(self):
+        """逐根：BOLL / MACD 衍生量、点火、通道 (5, 10)、RANGE 打分 → 状态。"""
         p, b = self.p.p, len(self) - 1
         top, mid, bot = self.bb.top[0], self.bb.mid[0], self.bb.bot[0]
         c, o = self.data.close[0], self.data.open[0]
@@ -402,7 +407,11 @@ class H2(bt.Strategy):
         if self.ign[b]:
             st, sd = 1, self.ign[b]
         self.state[b], self.sdir[b] = st, sd
-        # E1 回踩（H2）
+        return b, top, mid, bot, c, o, chan, st, sd
+
+    def _e1(self, b, top, mid, bot, c, o, chan, st, sd):
+        """E1 回踩（H2）+ 护栏 → self.rows。"""
+        p = self.p.p
         day = p["day"]
         if b < 1 or day[b - 1] != day[b] or not np.isfinite(top - bot) or top <= bot:
             return

@@ -144,11 +144,18 @@ def h4_table(root: Path) -> pd.DataFrame:
 # ---------------- R-035 ----------------
 
 
+REPLAYS = {  # 标签 → (输出前缀, 规格文件, 状态说明)
+    "R-037": ("rules37", "v4_rules37_test.yaml", "现行：规则来自 D-030 入选样本"),
+    "R-035": ("rules", "v4_rules_test.yaml", "已被取代：规则来自 D-029 样本，按其登记原样报告"),
+}
+
+
 def rules_tables(
-    root: Path, v4: dict, sfx: str = ""
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    root: Path, v4: dict, sfx: str = "", tag: str = "R-037"
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict]:
+    prefix, spec_file, _ = REPLAYS[tag]
     base = root / "research" / "v4"
-    spec, _ = rt.load_spec()
+    spec, rules = rt.load_spec(REPO / "config" / spec_file)
     A, C = spec["base"], spec["contrast"]
     keys = ["hyp", "exit", "dir", "und"]
     cols = [
@@ -165,12 +172,11 @@ def rules_tables(
     ]
     out = {}
     for part in ("main", "extract"):
-        a = pd.read_parquet(base / f"rules_cells_{A}_{part}.parquet").set_index(keys)[cols]
-        c = pd.read_parquet(base / f"rules_cells_{C}_{part}.parquet").set_index(keys)[cols]
+        a = pd.read_parquet(base / f"{prefix}_cells_{A}_{part}.parquet").set_index(keys)[cols]
+        c = pd.read_parquet(base / f"{prefix}_cells_{C}_{part}.parquet").set_index(keys)[cols]
         m = a.add_suffix(f"_{A}").join(c.add_suffix(f"_{C}")).reset_index()
         m["p"] = m[[f"p_{A}", f"p_{C}"]].max(axis=1)
         out[part] = m
-    # H1–H3 在 R-035 同一窗口（MU 主检验日期）上的对照
     w0, w1 = (dt.date.fromisoformat(spec["window"][k]) for k in ("from", "to"))
     e0, e1 = (dt.date.fromisoformat(spec["extraction_window"][k]) for k in ("from", "to"))
     rows = []
@@ -190,68 +196,98 @@ def rules_tables(
                     "合计 USD": round(float(g["net_usd"].sum()), 0),
                 }
             )
-    return out["main"], out["extract"], pd.DataFrame(rows)
+    info = {"spec": spec, "rules": rules}
+    return out["main"], out["extract"], pd.DataFrame(rows), info
+
+
+def _rule_text(r: dict) -> str:
+    return " 且 ".join(f"{c} {op} {v:.4g}" for c, op, v in r["conditions"])
 
 
 def rules_and_fdr(root: Path, v4: dict, cp: pd.DataFrame, partial: bool = False) -> list[str]:
     base = root / "research" / "v4"
-    try:
-        main_t, ext_t, h13 = rules_tables(root, v4, "_MU" if partial else "")
-    except FileNotFoundError:
-        return ["## 6b. R-035：日内单腿规则回放", "", "尚未运行。", ""]
+    sfx = "_MU" if partial else ""
     h5p = base / ("h5_cells_MU.parquet" if partial else "h5_cells.parquet")
     h5 = pd.read_parquet(h5p) if h5p.exists() else pd.DataFrame(columns=["p"])
-    if partial:
-        return [
-            "## 6b. R-035：日内单腿规则在两年 MU 上回放（口径 A 提取、C 对照）",
+    L, mains = [], {}
+    for tag, (_, _, status) in REPLAYS.items():
+        try:
+            main_t, ext_t, h13, info = rules_tables(root, v4, sfx, tag)
+        except FileNotFoundError:
+            L += [f"## 6b. {tag}：日内单腿规则回放（{status}）", "", "尚未运行。", ""]
+            continue
+        mains[tag] = main_t
+        spec = info["spec"]
+        ew = spec["extraction_window"]
+        L += [
+            f"## 6b. {tag}：日内单腿规则在两年 MU 上回放（{status}）",
             "",
-            "**FDR 待 QQQ 完成后与 R-033、H5 统一计算；下表 p 为未校正值**（p = 两口径较大者）。"
-            "规则特征方向化，**规则本身不含方向**，多空分开回放；主检验剔除规则提取期"
-            "（2026-06-09～2026-08-18）。",
+            "规则（冻结在 `" + spec["rules_file"] + "`）：",
+            "",
+            df_to_md(
+                pd.DataFrame(
+                    [
+                        {
+                            "规则": r["id"],
+                            "条件": _rule_text(r),
+                            "样本内入场": r["n"],
+                            "样本内胜率": r["win_rate"],
+                        }
+                        for r in info["rules"]
+                    ]
+                )
+            ),
+            "",
+            (
+                "**FDR 待 QQQ 完成后统一计算；下表 p 为未校正值**（p = 两口径较大者）。"
+                if partial
+                else "p = 两口径较大者（单侧、按日聚类）。"
+            )
+            + f"规则特征方向化，**规则本身不含方向**，多空分开回放；主检验剔除规则来源期"
+            f"（{ew['from']}～{ew['to']}）。",
             "",
             df_to_md(main_t.round(3)),
             "",
-            "规则提取期（样本内，描述性）：",
+            "规则来源期（样本内，描述性，不进 FDR）：",
             "",
             df_to_md(ext_t.round(3)),
             "",
-            "同一窗口上 H1–H3（MU）的表现，并列对照：",
-            "",
-            df_to_md(h13) if len(h13) else "无",
-            "",
-            f"H5（MU）结果见 `docs/research/V4_H5.md`（{len(h5)} 格，FDR 同样待统一）。",
-            "",
         ]
-    fam = np.r_[cp["p"].to_numpy(), h5["p"].to_numpy(), main_t["p"].to_numpy()]
-    rej = v4d.bh(fam, v4["stats"]["fdr_q"])
+        if tag == "R-037":
+            L += [
+                "同一窗口（MU 主检验日期）上 H1–H3 的表现（来自 R-033 成交明细，并列对照）：",
+                "",
+                df_to_md(h13) if len(h13) else "无",
+                "",
+            ]
+    if partial:
+        L += [f"H5（MU）结果见 `docs/research/V4_H5.md`（{len(h5)} 格，FDR 同样待统一）。", ""]
+        return L
     n33, n5 = len(cp), len(h5)
-    main_t[f"FDR（全部 {len(fam)} 格）"] = np.where(rej[n33 + n5 :], "通过", "—")
-    L = [
-        "## 6b. R-035：日内单腿规则在两年 MU 上回放（口径 A 提取、C 对照）",
-        "",
-        "规则（`config/v4_rules.yaml`，冻结）由 `INTRADAY_SINGLE_LEG.md` 的决策树提取；特征方向化，"
-        "**规则本身不含方向**，多空两个方向分开回放。主检验日期 = 2024-10-22～2026-10-21 中剔除"
-        "规则提取期（2026-06-09～2026-08-18）；p = 两口径较大者。",
-        "",
-        df_to_md(main_t.round(3)),
-        "",
-        "规则提取期（样本内，描述性，不进 FDR）：",
-        "",
-        df_to_md(ext_t.round(3)),
-        "",
-        "同一窗口（MU 主检验日期）上 H1–H3 的表现（来自 R-033 的成交明细，仅作并列对照）：",
-        "",
-        df_to_md(h13) if len(h13) else "无",
-        "",
-        "## 6c. 多重比较汇总",
-        "",
-        f"- R-033 预登记族（口径 C 36 格）：通过 {int(cp['fdr_pass'].sum())} 格。",
-        f"- R-034 预登记族（R-033 36 + H5 {n5} 格）：见 V4_H5.md。",
-        f"- 全部（R-033 {n33} + H5 {n5} + R-035 {len(main_t)} = {len(fam)} 格，BH q="
-        f"{v4['stats']['fdr_q']}）：通过 {int(rej.sum())} 格（R-033 {int(rej[:n33].sum())}、"
-        f"H5 {int(rej[n33 : n33 + n5].sum())}、R-035 {int(rej[n33 + n5 :].sum())}）。",
+    L += [
+        "## 6c. 多重比较汇总（BH q=" + str(v4["stats"]["fdr_q"]) + "，各族按其预登记原样计算）",
         "",
     ]
+    L += [f"- R-033 预登记族（口径 C {n33} 格）：通过 {int(cp['fdr_pass'].sum())} 格。"]
+    fam34 = np.r_[cp["p"].to_numpy(), h5["p"].to_numpy()]
+    r34 = v4d.bh(fam34, v4["stats"]["fdr_q"])
+    L += [
+        f"- R-034 预登记族（R-033 {n33} + H5 {n5} = {len(fam34)} 格）：通过 {int(r34.sum())} 格"
+        f"（R-033 {int(r34[:n33].sum())}、H5 {int(r34[n33:].sum())}）。"
+    ]
+    for tag in ("R-035", "R-037"):
+        if tag not in mains:
+            continue
+        mt = mains[tag]
+        fam = np.r_[cp["p"].to_numpy(), h5["p"].to_numpy(), mt["p"].to_numpy()]
+        rej = v4d.bh(fam, v4["stats"]["fdr_q"])
+        mt[f"FDR（{tag} 族）"] = np.where(rej[n33 + n5 :], "通过", "—")
+        L += [
+            f"- {tag} 预登记族（R-033 {n33} + H5 {n5} + {tag} {len(mt)} = {len(fam)} 格）："
+            f"通过 {int(rej.sum())} 格（R-033 {int(rej[:n33].sum())}、"
+            f"H5 {int(rej[n33 : n33 + n5].sum())}、{tag} {int(rej[n33 + n5 :].sum())}）。"
+        ]
+    L += [""]
     return L
 
 

@@ -1,6 +1,6 @@
 # V4 第 0 节：指标口径复核与三个状态校验点
 
-生成：2026-10-22T20:46:28+00:00 UTC · 复现 `uv run python -m zr.research.v4_checkpoints`
+生成：2026-10-23T00:05:13+00:00 UTC · 复现 `uv run python -m zr.research.v4_checkpoints`
 
 ## 1. 截图区分不了「RTH-only 按日重置」与「含盘前盘后连续」
 

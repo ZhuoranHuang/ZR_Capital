@@ -51,6 +51,11 @@ uv run pytest -q
 - 一次 `subscribe` 308 个代码 × Quote/Depth/Trade 正常；一分钟内反复订阅大量期权会触发 `code=301607 Too many option securities request within one minute`。
 - systemd：`EnvironmentFile` 覆盖 `Environment=`，服务里的 `ZR_DATA_ROOT` 必须写在 `ExecStart=/usr/bin/env ...` 上。
 
+2026-10-22 audit/base-final 补充（`docs/API_FACTS.md` 末尾、`docs/research/BASE_FINAL_AUDIT.md`）：
+- `history_candlesticks_by_offset` 的 `time` 参数按美东时间解释（返回值仍是 naive UTC）。
+- 1 分钟 K 无成交的分钟是 O=H=L=C=前收、量 0 的占位 K；合成 2 分钟 K 时不计入开高低（`resample_bars` 已处理）。长桥会事后修订 bar，回填以新值为准。
+- 逐笔推送 `trade_type` 为空的常规成交才计开高低收，零股（`I`）等只计量（2 天比对得出，未验证）。
+
 ## ThetaData 已核实事实（Theta Terminal v3，2026-10-22 实测）
 
 - REST `http://127.0.0.1:25503/v3`；响应为 `{"response":[{"contract":{...},"data":[...]}]}` 嵌套，`zr/data/thetadata.py` 已展平。
