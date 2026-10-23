@@ -1,15 +1,14 @@
 """R-040 纪律类规则（config/v4_discipline.yaml）→ docs/research/DISCIPLINE_RULES.md。
 
 B1 负责人 D-030 入选样本按真实入场叠加紧止损；B2 V4 H1、H2 × 原离场 × 5 种紧止损；B3 共振规则。
-成交：R-039 校准后的限价模型（mid、T = 5 s，入场 reprice_abandon、离场 reprice），止损类吃买一。
-族：与 R-039 合为 615 格 BH q = 0.10（读取 research/v4_limit/family_*.parquet）。
+成交（补登）：R-041 负责人挂单策略（种子 0；入场按策略入场口径、(a)(c) 离场按策略离场口径），
+止损类吃买一。族：与 R-041 合为 183 格 BH q = 0.10（读取 research/v4_owner/family_*.parquet）。
 运行：uv run python -m zr.research.discipline
 """
 
 from __future__ import annotations
 
 import copy
-import dataclasses
 import datetime as dt
 import logging
 from pathlib import Path
@@ -18,7 +17,8 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from zr.backtest.fill_limit import LimitRule, cross_now, execute
+from zr.backtest.fill_limit import cross_now
+from zr.backtest.owner_fill import execute_owner
 from zr.config import get_settings
 from zr.features.regime import RANGE
 from zr.journal.intraday_list import build as build_list
@@ -26,6 +26,7 @@ from zr.ops.markdown import df_to_md
 from zr.research import fill_model as fm
 from zr.research import v4_decisive as v4d
 from zr.research import v4_limit as vl
+from zr.research import v4_owner as vo
 from zr.research.sim_v3 import sell_fee
 
 log = logging.getLogger("zr.research.discipline")
@@ -39,13 +40,8 @@ def load_cfg() -> dict:
     return yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
 
 
-def lim_rule(dc: dict, lc: dict) -> LimitRule:
-    return LimitRule(
-        price=dc["fill"]["price"],
-        T=float(dc["fill"]["T_s"]),
-        queue_fill_prob=lc["fill_model"]["queue_fill_prob"],
-        lag_s=lc["fill_model"]["lag_s"],
-    )
+def strategy(dc: dict):
+    return vo.load_strategy(vo.load_cfg())
 
 
 def adverse_arrays(df: pd.DataFrame) -> dict[int, np.ndarray]:
@@ -80,7 +76,8 @@ def run_events(root, und, conv, v4, lc, dc, hyps, sig_fn, exit_plan) -> pd.DataF
     sig = ev[ev[[f"hyp_{h}" for h in hyps]].any(axis=1)].reset_index(drop=True)
     sig["decision_ns"] = v4d.ns(sig["decision_ts"])
     sig["flat_ns"] = v4d.ns(sig["flat_ts"])
-    lr = lim_rule(dc, lc)
+    strat = strategy(dc)
+    seed = dc["fill"]["seed"]
     rows, books = [], {}
     for _, r in sig.iterrows():
         key = (r["symbol"], r["day"])
@@ -94,8 +91,15 @@ def run_events(root, und, conv, v4, lc, dc, hyps, sig_fn, exit_plan) -> pd.DataF
             if not r[f"hyp_{h}"]:
                 continue
             for name, v, st in exit_plan(h, d, trig, adv):
-                res = vl.simulate_limit(
-                    bk, r["symbol"], int(r["decision_ns"]), st, int(r["flat_ns"]), v, lr
+                res = vo.simulate_owner(
+                    bk,
+                    r["symbol"],
+                    int(r["decision_ns"]),
+                    st,
+                    int(r["flat_ns"]),
+                    v,
+                    strat,
+                    vo.rng_for(seed, int(r["decision_ns"]), d, f"{h}|{name}"),
                 )
                 if res is not None:
                     rows.append(
@@ -211,7 +215,7 @@ def b1(root: Path, v4: dict, lc: dict, dc: dict) -> tuple[pd.DataFrame, pd.DataF
     conv = v4["conventions"]["C"]
     bars = v4d.build_bars(root, "MU", conv, max(w["day"]))
     adv = adverse_arrays(bars)
-    lr = lim_rule(dc, lc)
+    strat = strategy(dc)
     rows = []
     for k, r in sel.iterrows():
         und = w.loc[k, "und"]
@@ -251,10 +255,11 @@ def b1(root: Path, v4: dict, lc: dict, dc: dict) -> tuple[pd.DataFrame, pd.DataF
             used = t_r is not None and t_r < tx
             if used:
                 if name.startswith("b"):
-                    c = cross_now(bk, -d, t_r, lr.lag_s)
+                    c = cross_now(bk, -d, t_r, strat.lag_s)
                     px = c[1] if c else float(bk.bid[-1])
                 else:
-                    e = execute(bk, -d, n, t_r, dataclasses.replace(lr, ladder="reprice"), sym)
+                    rng = vo.rng_for(dc["fill"]["seed"], t_r, -1, f"owner|{name}")
+                    e = execute_owner(bk, -d, n, t_r, strat, sym, rng, "exit")
                     px = e.avg_px if e and e.filled_qty > 0 else float(bk.bid[-1])
                 sim_sell_net = px * 100 * n - float(sell_fee(int(n), px))
                 diff = sim_sell_net - act_sell_net
@@ -312,9 +317,9 @@ def main() -> int:
 
 
 def write_report(root, v4, lc, c1, t1, c2, c3, c3a) -> None:
-    lim = root / "research" / "v4_limit"
-    fa = pd.read_parquet(lim / "family_v4_limit_C.parquet")
-    fh = pd.read_parquet(lim / "family_h5_limit.parquet")
+    lim = root / "research" / "v4_owner"
+    fa = pd.read_parquet(lim / "family_v4_C.parquet")
+    fh = pd.read_parquet(lim / "family_h5.parquet")
     p = np.r_[
         fa["p"].to_numpy(float),
         fh["p"].to_numpy(float),
@@ -324,16 +329,20 @@ def write_report(root, v4, lc, c1, t1, c2, c3, c3a) -> None:
     ]
     rej = v4d.bh(p, lc["stats"]["fdr_q"])
     n_a, n_h, n1, n2 = len(fa), len(fh), len(c1), len(c2)
-    c1 = c1.assign(fdr_615=rej[n_a + n_h : n_a + n_h + n1])
-    c2 = c2.assign(fdr_615=rej[n_a + n_h + n1 : n_a + n_h + n1 + n2])
-    c3 = c3.assign(fdr_615=rej[n_a + n_h + n1 + n2 :])
+    c1 = c1.assign(fdr_183=rej[n_a + n_h : n_a + n_h + n1])
+    c2 = c2.assign(fdr_183=rej[n_a + n_h + n1 : n_a + n_h + n1 + n2])
+    c3 = c3.assign(fdr_183=rej[n_a + n_h + n1 + n2 :])
     fam = pd.DataFrame(
         [
-            {"部分": "R-039 V4 限价（口径 C）", "格子": n_a, "通过": int(rej[:n_a].sum())},
-            {"部分": "R-039 H5 限价", "格子": n_h, "通过": int(rej[n_a : n_a + n_h].sum())},
-            {"部分": "R-040 B1 负责人紧止损", "格子": n1, "通过": int(c1["fdr_615"].sum())},
-            {"部分": "R-040 B2 V4 紧止损", "格子": n2, "通过": int(c2["fdr_615"].sum())},
-            {"部分": "R-040 B3 共振规则", "格子": len(c3), "通过": int(c3["fdr_615"].sum())},
+            {
+                "部分": "R-041 V4（口径 C，负责人挂单策略）",
+                "格子": n_a,
+                "通过": int(rej[:n_a].sum()),
+            },
+            {"部分": "R-041 H5", "格子": n_h, "通过": int(rej[n_a : n_a + n_h].sum())},
+            {"部分": "R-040 B1 负责人紧止损", "格子": n1, "通过": int(c1["fdr_183"].sum())},
+            {"部分": "R-040 B2 V4 紧止损", "格子": n2, "通过": int(c2["fdr_183"].sum())},
+            {"部分": "R-040 B3 共振规则", "格子": len(c3), "通过": int(c3["fdr_183"].sum())},
         ]
     )
     pd.DataFrame({"p": p, "reject": rej}).to_parquet(
@@ -347,12 +356,12 @@ def write_report(root, v4, lc, c1, t1, c2, c3, c3a) -> None:
             均值=("mean_pct", "mean"),
             最好=("mean_pct", "max"),
             最小p=("p", "min"),
-            通过=("fdr_615", "sum"),
+            通过=("fdr_183", "sum"),
         )
         .round(3)
         .reset_index()
     )
-    base = fa[(fa["cfg"] == "mid_T5") & fa["hyp"].isin(["H1", "H2"])]
+    base = fa[fa["hyp"].isin(["H1", "H2"])]
     bsum = (
         base.groupby(["und", "hyp"])
         .agg(格子=("n", "size"), 均值=("mean_pct", "mean"), 最好=("mean_pct", "max"))
@@ -378,10 +387,9 @@ def write_report(root, v4, lc, c1, t1, c2, c3, c3a) -> None:
         "",
         f"生成：{dt.datetime.now(dt.UTC).isoformat(timespec='seconds')} · 复现 `uv run python -m "
         "zr.research.discipline`。预登记 RESEARCH_LOG R-040、`config/v4_discipline.yaml`。成交："
-        "R-039 校准后的"
-        "限价模型，mid、T = 5 s（止损类吃买一）。",
+        "R-041 负责人挂单策略（种子 0），止损类吃买一。",
         "",
-        "## 族（R-039 + R-040，BH q = 0.10）",
+        "## 族（R-041 + R-040，BH q = 0.10）",
         "",
         df_to_md(fam),
         "",
@@ -394,7 +402,7 @@ def write_report(root, v4, lc, c1, t1, c2, c3, c3a) -> None:
         "",
         "## B2 V4 H1、H2 加紧止损（口径 C）",
         "",
-        "对照：同一挂单组（mid T5）、不加紧止损（R-039）：",
+        "对照：同一成交口径（负责人挂单策略，种子 0）、不加紧止损（R-041）：",
         "",
         df_to_md(bsum),
         "",
@@ -408,7 +416,8 @@ def write_report(root, v4, lc, c1, t1, c2, c3, c3a) -> None:
         "",
         "- V4：MU、QQQ，日期同 R-033；负责人：2026-06-09～2026-08-19 D-030 入选 51 段（(a) 只 M"
         "U 48 段）。",
-        "- 成交模型与 R-039 相同（q = 0.9；V4 tick 无挂单量；负责人自己的成交在 OPRA 数据里）。",
+        "- 成交模型同 R-041（负责人挂单策略；q = 0.9；V4 tick 无挂单量；OPRA 含负责人自己的成交"
+        "）。",
         "- B1 用负责人的真实入场，只回答「叠加这些纪律后负责人会更好还是更差」，不是可独立交易的"
         "规则。",
         "- 逆向 K 定义为收盘 < 开盘（多头），不是「收盘低于前一根收盘」。",
