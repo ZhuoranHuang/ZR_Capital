@@ -1,0 +1,18 @@
+[Unit]
+Description=ZR paper guardrail assistant (one trading session, paper only, no orders)
+After=network-online.target zr-recorder.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/ZR_Capital
+# .env 提供长桥 key/token、TELEGRAM_BOT_TOKEN、TELEGRAM_CHAT_ID（程序只读、不打印）
+EnvironmentFile=/home/ubuntu/ZR_Capital/.env
+Environment=HOME=/home/ubuntu
+# ZR_DATA_ROOT 必须写在命令行（EnvironmentFile 会覆盖 Environment=，见 CLAUDE.md）
+ExecStart=/usr/bin/env ZR_DATA_ROOT=/home/ubuntu/zr_data /home/ubuntu/.local/bin/uv run --no-sync python -m zr.live.runner run
+Restart=on-failure
+RestartSec=20
+StandardOutput=journal
+StandardError=journal
