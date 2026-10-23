@@ -35,7 +35,7 @@ OUT = REPO / "docs" / "research" / "INTRABAR_KNOWN_ANSWER.md"
 NS = 1_000_000_000
 
 
-def add_force(root: Path, exact: list[dict]) -> list[dict]:
+def add_force(root: Path, exact: list[dict], offset_ns: int = 0) -> list[dict]:
     """R-047：平仓卖单加 force_ns = 该卖单最后一笔真实成交的时刻（限价路径单才需要）。"""
     import copy
 
@@ -47,7 +47,7 @@ def add_force(root: Path, exact: list[dict]) -> list[dict]:
     out = copy.deepcopy(exact)
     for lg in out:
         if lg["side"] == -1 and lg["order"]["mode"] == "path" and lg["order_id"] in last.index:
-            lg["order"]["force_ns"] = int(fs._ns(pd.Series([last[lg["order_id"]]]))[0])
+            lg["order"]["force_ns"] = int(fs._ns(pd.Series([last[lg["order_id"]]]))[0]) + offset_ns
     return out
 
 
@@ -309,9 +309,45 @@ def main() -> int:
     passed = all(ar[k] for k in "abcd")
     acc47, ar47 = acceptance(root, sel, add_force(root, exact), pi)
     passed47 = all(ar47[k] for k in "abcd")
+    acc48, ar48 = acceptance(root, sel, add_force(root, exact, 999_000_000), pi)  # R-048：该秒末
+    if all(ar48[k] for k in "abcd"):
+        verdict48 = "四项全过：引擎可用。"
+    elif ar48["a"] and ar48["b"]:
+        bias = ar48["c_total_sim"] - ar48["c_total_act"]
+        rel = -bias / abs(ar48["c_total_act"])
+        verdict48 = (
+            "(a)(b) 通过、(c)/(d) 未全过：按预登记的停止规则**接受引擎为可用**，不再修改。"
+            f"**已知保守偏差**：48 段模拟合计（种子 0）{ar48['c_total_sim']:+,.2f} USD，对账单 "
+            f"{ar48['c_total_act']:+,.2f}，模拟比真实少 {-bias:,.2f} USD（{rel:.1%}）；"
+            f"100 次抽样 P5–P95 为 {ar48['d_p05']:+,.2f}～{ar48['d_p95']:+,.2f}，对账单在第 "
+            f"{ar48['d_pct_of_actual']:.0%} 分位。用该引擎复现负责人类型的成交时，合计盈亏应视为"
+            "偏保守。"
+        )
+    else:
+        fails = [k for k in "ab" if not ar48[k]]
+        verdict48 = (
+            f"({')('.join(fails)}) 未通过：按停止规则**停止**，引擎不可用，"
+            "原因见上表与下文差额来源。"
+        )
     lines[1:1] = [
         "",
-        "## R-047 未卖出持仓按负责人真实卖出时刻补卖（预登记；标准同 R-046）",
+        "## R-048 补卖时刻取该秒末（预登记；标准同 R-046；引擎验收的最后一次修改）",
+        "",
+        "与 R-047 相同，唯一改动：强制卖出时刻 = 负责人记录的卖出时间所在秒的末尾（整秒 + 0.999"
+        " 秒）。",
+        "",
+        df_to_md(acc48),
+        "",
+        f"**停止规则判定：{verdict48}**",
+        "",
+        f"发生补卖的卖单 {ar48['n_forced_orders']} 张；不计补卖的成交张数一致率 "
+        f"{ar48['a_qty_rate_no_forced']:.1%}（参考）。差额来源（事后描述）：种子 0 模拟合计与对账"
+        "单差 "
+        f"{ar48['gap_total']:+,.2f} USD，其中成交张数不一致的 {ar48['n_qty_eps']} 段 "
+        f"{ar48['gap_qty_eps']:+,.2f}；已成交张数上的成交价差合计 {ar48['gap_px_usd']:+,.2f} USD"
+        "（正 = 模拟对负责人更好）。改善量与重放在同一批订单上，属样本内检验。",
+        "",
+        "## R-047 未卖出持仓按负责人真实卖出时刻补卖（预登记；标准同 R-046；结果保留）",
         "",
         "与 R-046 相同，唯一改动：平仓卖单在负责人真实卖出时刻（该卖单最后一笔真实成交）仍未全部"
         "成交时，"
@@ -353,6 +389,10 @@ def main() -> int:
     store = root / "research" / "intrabar"
     pd.Series(ar["totals"]).to_frame("total").to_parquet(store / "r046_totals.parquet")
     pd.Series(ar47["totals"]).to_frame("total").to_parquet(store / "r047_totals.parquet")
+    pd.Series(ar48["totals"]).to_frame("total").to_parquet(store / "r048_totals.parquet")
+    ar48["orders"].to_parquet(store / "r048_orders_seed0.parquet", index=False)
+    print(acc48.to_string())
+    print(verdict48)
     ar47["orders"].to_parquet(store / "r047_orders_seed0.parquet", index=False)
     print(acc47.to_string())
     ar["orders"].to_parquet(store / "r046_orders_seed0.parquet", index=False)
