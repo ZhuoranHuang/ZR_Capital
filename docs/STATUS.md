@@ -24,6 +24,8 @@
 ## 进行中
 
 - **纸面护栏助手（feat/guardrail-assistant，`docs/RUNBOOK.md`）**：`zr/live/`（核心 `core.py`、纸面离场单 `paper.py`、I/O `io.py`、日报 `report.py`、入口 `runner.py`），录制器旁路 `zr/live/tap.py`（`ZR_LIVE_TAP_DIR`，只写 MU/QQQ 正股逐笔与期权盘口 / 成交，不新增订阅），systemd `zr-assistant.service/.timer`（13:15 UTC，等到 09:20 ET，16:05 ET 日报后退出）。只做纸面：不向券商提交任何订单，`zr/execution/oms.py` 的提交入口一律拒绝。状态层 = 增量引擎（新增口径 A 的按日重置，A / C 与批量逐根一致：MU A 23,389 根、C 57,469 根 0 处不同）。护栏证据先复核（`docs/research/GUARDRAIL_EVIDENCE.md`，D-030 样本 MU 48 段）：逆点火 2 段 −1,723.95；RANGE 9 段 −79.72；0DTE 10:15 后 8 段 +7,580.38；09:32 前 0 段——护栏只作警告 / 提示，日 / 周亏损线才禁止开仓。录制数据 dry-run 回放 10-21（14:47 起）、10-22 全天（合成入场）通过。
+- **正股日内动量复现（R-045，`docs/research/SPY_INTRADAY_MOMENTUM.md`，feat/spy-momentum）**：Zarattini–Aziz–Barbon（2024/2025）原文规则不改参数，长桥 1 分钟 RTH K 2023-10-23～2026-10-20（各 751 天），成本 D-013 + 每边 1 tick。SPY −5.35%（Sharpe −0.05，随机方向 64.7 分位）、QQQ +32.76%（Sharpe 0.72，93.3 分位）；同期买入持有 +82.6% / +102.4%。预登记预测不成立，不列为候选。与原文重叠 14 个月（SPY、原文成本）月度相关 0.906。
+
 - **底座最终自检完成（audit/base-final，`docs/research/BASE_FINAL_AUDIT.md`，D-032）**：
   - K 线：1 分钟合成 vs 长桥官方 2 / 5 分钟 K（MU、QQQ 2023-10-02～2026-10-21，767 天）RTH 每标的 ≤3 根不同、收盘 100% 一致；含盘前盘后修复前 MU 0.984 / QQQ 0.980（零成交量占位 K 被算进开高低），修复后 0.99985 / 0.99988。不改用官方 K。回填 `write_merged` 改为新值优先（长桥事后修订 bar）。
   - 开盘段：口径 C 每天盘前 ≥19 根、第一根即完整窗口；口径 A 前 19 根空值，已锁定（`tests/test_opening_session.py`）。App 开盘段数值仍未核实（0f）。
