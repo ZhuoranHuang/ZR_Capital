@@ -37,7 +37,7 @@ log "checkout $REF -> $(git rev-parse --short HEAD)"
 
 sudo cp deploy/systemd/*.service deploy/systemd/*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-for t in zr-recorder.timer zr-universe.timer zr-healthcheck.timer zr-assistant.timer; do
+for t in zr-recorder.timer zr-universe.timer zr-healthcheck.timer zr-assistant.timer zr-shadow-daily.timer; do
     if systemctl is-enabled --quiet "$t"; then sudo systemctl restart "$t"; fi
 done
 # 盘中（09:20–16:05 ET）不重启录制器 / 助手：重启会丢推送、打断纸面持仓管理；新代码等下一次 timer
