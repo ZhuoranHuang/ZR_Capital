@@ -11,7 +11,8 @@ EnvironmentFile=/home/ubuntu/ZR_Capital/.env
 Environment=HOME=/home/ubuntu
 # EnvironmentFile 会覆盖 Environment=（.env 里 ZR_DATA_ROOT=./data_store），
 # 所以 ZR_DATA_ROOT 放到命令行 env，优先级最高
-ExecStart=/usr/bin/env ZR_DATA_ROOT=/home/ubuntu/zr_data /home/ubuntu/.local/bin/uv run python -m zr.data.recorder
+# ZR_LIVE_TAP_DIR：旁路写给纸面助手（zr/live/tap.py；只写 MU / QQQ 的正股逐笔与期权盘口）
+ExecStart=/usr/bin/env ZR_DATA_ROOT=/home/ubuntu/zr_data ZR_LIVE_TAP_DIR=/home/ubuntu/zr_data/live/tap ZR_TAP_UNDERLYINGS=MU.US,QQQ.US /home/ubuntu/.local/bin/uv run python -m zr.data.recorder
 Restart=on-failure
 RestartSec=30
 StandardOutput=journal

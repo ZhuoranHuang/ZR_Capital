@@ -1,0 +1,38 @@
+# 纸面护栏助手（feat/guardrail-assistant）。全部为待测 / 暂定参数（CLAUDE.md 规则 11）。
+# 只做纸面：不向券商提交任何订单（zr/execution/oms.py 的提交入口在本阶段一律拒绝）。
+underlyings: [MU.US, QQQ.US]
+convention: C            # C = 含盘前盘后连续、不重置（D-028 主口径）；A = RTH-only 按日重置。
+                         # 开盘段待负责人截图确认（STATUS 0f）后可切换为 A
+period_min: 2
+seed_pages: 2            # 启动时从长桥历史 K（Min_2、TradeSessions.All、NoAdjust）向前拉的页数（每页 1000 根）
+session:
+  start: "09:20"         # 美东；之前等待
+  end: "16:05"           # 美东；写日终报告后退出
+  first_bar_close: "09:32"
+paper_equity_usd: 25000  # 暂定纸面权益（STATUS 待确认）；风控百分比都相对它
+risk:
+  per_trade_pct: 5       # 单笔开仓成本 > 权益 5% → 警告
+  day_loss_pct: 10       # 当日已实现 + 未实现亏损 ≥ 10% → 禁止开仓（新开仓立即由系统纸面平仓）
+  week_loss_pct: 20      # 本周（周一起）≥ 20% → 同上
+exits:
+  cap_min: 30            # 持仓上限
+  tp: 0.20               # 期权中间价 ≥ 入场价 × 1.2 → 卖一半（一次）
+  sl: 0.30               # 期权中间价 ≤ 入场价 × 0.7 → 全部（止损类，按买一）
+  macd_shrink_bars: 2    # MACD 柱顺方向连续 2 根缩短 → 卖一半（一次）
+  structure: X5_higher_low   # 正股收盘跌破前一更高低点（空头镜像）→ 全部（止损类）
+  zero_dte_flat: "15:30" # 0DTE 在此之前清仓
+  flat: "15:50"          # 全部清仓
+guardrails:
+  counter_ignition: warn     # 逆 IGNITION 方向开仓
+  before_first_bar: warn     # 首根 2 分钟 K 收盘（09:32）前开仓
+  range: notice              # RANGE 状态开仓
+  zero_dte_late:             # 0DTE 在 10:15 后开仓：周一先「提示 + 仓位减半」（系统立即纸面卖出一半）
+    after: "10:15"
+    action: notice_half
+fill:                        # 纸面离场限价单（zr/backtest/fill_limit.py 的规则）
+  price: mid                 # passive / mid / aggressive
+  T: 5                       # 秒；超时改价一次，再超时按买一
+intake:
+  account: paper             # 轮询长桥模拟盘（只读 today_orders）；需要 VPS .env 有 LONGPORT_PAPER_ACCESS_TOKEN
+  poll_s: 3
+state_refresh_s: 2
