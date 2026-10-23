@@ -53,7 +53,9 @@ def simulate_owner(
     v4: dict,
     strat: OwnerStrategy,
     rng: np.random.Generator,
+    tp_full_single: bool = False,
 ) -> dict | None:
+    """tp_full_single（R-043 第 2 节修正）：入场只成交 1 张时，+20% 即全部卖出（原实现：不减仓）。"""
     exe, prem = v4["execution"], v4["premium"]
     qty, lag = exe["qty"], int(strat.lag_s * 1e9)
     if dec + lag >= flat:
@@ -84,6 +86,8 @@ def simulate_owner(
         "cap": te + int(v4["cap_min"] * 60e9),
         "flat": int(flat),
     }
+    if tp_full_single and n == 1:
+        cand["tp"] = t_tp
     reason = min(cand, key=cand.get)
     t_f = cand[reason]
     cash = -px0 * 100 * n - vl._buy_fee(n, px0)
@@ -119,7 +123,15 @@ def simulate_owner(
     }
 
 
-def event_sims(root: Path, und: str, conv: str, v4: dict, oc: dict, strat: OwnerStrategy):
+def event_sims(
+    root: Path,
+    und: str,
+    conv: str,
+    v4: dict,
+    oc: dict,
+    strat: OwnerStrategy,
+    tp_full_single: bool = False,
+):
     ev, aux = v4d.build_events(root, und, conv, v4)
     trig = aux["trig"]
     sig = ev[ev[[f"hyp_{h}" for h in v4d.HYPS]].any(axis=1)].reset_index(drop=True)
@@ -166,7 +178,15 @@ def event_sims(root: Path, und: str, conv: str, v4: dict, oc: dict, strat: Owner
             )
             for sd in seeds:
                 res = simulate_owner(
-                    bk, r["symbol"], dec, st, flat, v4, strat, rng_for(sd, dec, d, rule)
+                    bk,
+                    r["symbol"],
+                    dec,
+                    st,
+                    flat,
+                    v4,
+                    strat,
+                    rng_for(sd, dec, d, rule),
+                    tp_full_single,
                 )
                 if res is not None:
                     rows.append(
@@ -180,6 +200,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--conv", default="both", choices=["C", "A", "both"])
     ap.add_argument("--unds", default="MU,QQQ")
     ap.add_argument("--variant", default="base", choices=["base", "0dte"])
+    ap.add_argument("--tp-full-single", action="store_true", help="R-043 第 2 节：1 张时 +20% 全卖")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     root = get_settings().zr_data_root
@@ -205,8 +226,8 @@ def main(argv: list[str] | None = None) -> int:
                 from zr.research.fill_model import pull_v4_trades
 
                 log.info("0DTE 变体 OPRA：%s", pull_v4_trades(root, und))
-            sims = event_sims(root, und, conv, v4, oc, strat)
-            tag = f"{args.variant}_{conv}_{und}"
+            sims = event_sims(root, und, conv, v4, oc, strat, args.tp_full_single)
+            tag = f"{args.variant}{'_fix1' if args.tp_full_single else ''}_{conv}_{und}"
             sims.to_parquet(store / f"sims_{tag}.parquet", index=False)
             c = vl.cells(sims, v4, conv, und)
             c.to_parquet(store / f"cells_{tag}.parquet", index=False)
