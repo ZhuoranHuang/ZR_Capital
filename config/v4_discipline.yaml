@@ -1,0 +1,23 @@
+# R-040 预登记：纪律类规则（feat/fill-model B 节）。运行前固定，运行后不改。
+# 成交一律用校准后的限价模型（config/v4_limit.yaml 的 fill_model），挂单组固定为 mid、T = 5 s
+# （A 节 9 组的中间一组；在看到 A 节 V4 限价格子结果之前选定）。止损类离场直接按 +2 s 后第一个买一。
+fill: {price: mid, T_s: 5}
+tight:                           # 三类紧止损（多头；空头镜像）
+  a_adverse_bar: true            # 入场后第一根收盘逆向的 2 分钟 K（多头 收盘 < 开盘；空头 收盘 > 开盘，口径 C 正股 K）收盘即离场
+  b_premium_sl: [0.10, 0.15]     # 权利金止损 −10% / −15%（tick 中间价 ≤ 入场均价 ×（1 − x）），替代 −30%
+  c_cap_min: [5, 10]             # 持仓上限 5 / 10 分钟，替代 30 分钟
+owner:                           # B1：负责人 D-030 入选样本，按真实入场（首笔成交时刻、实际均价、实际张数）
+  overlay: first_of_rule_or_actual   # 规则触发早于负责人第一笔平仓成交 → 全部按规则离场（(a)(c) 限价 mid T5、(b) 吃买一）；否则用对账单实际离场
+  bars_only: MU                  # (a) 需要正股 2 分钟 K，只有 MU
+  test: paired_diff_vs_actual    # 每段 规则盈亏 − 实际盈亏，单侧（H0 均值 ≤ 0），按日聚类
+v4:                              # B2：V4 H1、H2 × 离场 (a)(b)(c) × 紧止损 5 种 × 多空 × MU/QQQ = 120 格（口径 C）
+  hyps: [H1, H2]
+confluence:                      # B3：事先写死的共振规则，口径 C 2 分钟 K，信号在 K 收盘
+  long: "hist > 0 且 hist > 上一根 hist 且 收盘 > 中轨 且 量比 ≥ 1.5 且 状态 ≠ RANGE"
+  short: "hist < 0 且 hist < 上一根 hist 且 收盘 < 中轨 且 量比 ≥ 1.5 且 状态 ≠ RANGE"
+  vol_ratio: {v: 1.5, window: 20}  # 本根量 ÷ 前 20 根均量
+  exit: a_adverse_bar            # 只用离场 (a) + 强平；不叠加 +20% / −30% / 30 分钟
+  guards: v4                     # 时间窗、禁 RANGE、禁逆向点火同 R-033；合约 0/1 DTE 同 R-033
+  cells: [MU, QQQ] × [long, short]   # 4 格；口径 A 另报
+family:                          # 与 R-039 合为一族：324 + 162 + B1 5 + B2 120 + B3 4 = 615 格，BH q = 0.10
+  fdr_q: 0.10
