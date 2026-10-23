@@ -30,6 +30,7 @@ from zr.features.bars import ET
 CONFIG = Path(__file__).resolve().parents[2] / "config" / "method_v3.yaml"
 OTHER, IGNITION, CHANNEL, RANGE = 0, 1, 2, 3
 STATE_NAMES = {OTHER: "OTHER", IGNITION: "IGNITION", CHANNEL: "CHANNEL", RANGE: "RANGE"}
+SLOPE_EPS = 1e-12
 
 
 def load_config(path: Path = CONFIG) -> dict:
@@ -92,6 +93,10 @@ def indicators(
         if daily_reset
         else (raw["mid"].diff() / raw["mid"])
     )
+    # 窗口进出的收盘价相同时中轨不变，滚动均值的浮点误差会给出 ±1e-16 的「斜率」并决定通道连续
+    # 根数的正负（audit/base-final 第 4 节：MU 口径 C 807 根）；真实最小非零斜率约
+    # 1 tick / 20 / 价格 ≈ 5e-7，|斜率| < 1e-12 一律记为 0。
+    out["slope"] = out["slope"].mask(out["slope"].abs() < SLOPE_EPS, 0.0)
     out["dif"], out["dea"] = raw["dif"], raw["dea"]
     out["hist"] = out["dif"] - out["dea"]
     return out

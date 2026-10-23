@@ -107,10 +107,22 @@ def resample_bars(df: pd.DataFrame, rule: str) -> pd.DataFrame:
     （2 分钟 K 落在偶数分钟，与长桥原生 2 分钟 K 一致）。不用 origin="start"：含盘前盘后数据
     经 clean_extended_bars 清洗后当日 04:00 那根常被删、首根变成 04:01，会把全天分箱错开一分钟
     （MU 767 天里 286 天，见 V4_CHECKPOINTS.md）。
+
+    零成交量的 1 分钟 K 不参与 open / high / low：长桥在无成交的分钟（多在盘前盘后）插入
+    O=H=L=C=前收、量 0 的占位 K，官方 2 分钟 K 的开高低不含这些占位（audit/base-final 第 1 节：
+    含盘前盘后 MU 5,815 根、QQQ 7,251 根因此不一致，收盘价不受影响）。整个分箱都是占位 K 时
+    仍按占位 K 聚合。close 仍取分箱最后一根（占位 K 的 close = 前收 = 上一根有成交 K 的 close）。
     """
     parts = []
+    has_vol = "volume" in df
     for _, g in df.groupby(et_date(df.index)):
-        r = g.resample(rule, label="left", closed="left", origin="start_day").agg(OHLCV_AGG)
+        rs = lambda x: x.resample(rule, label="left", closed="left", origin="start_day")  # noqa: E731
+        r = rs(g).agg(OHLCV_AGG)
+        if has_vol and (g["volume"] <= 0).any():
+            t = rs(g[g["volume"] > 0]).agg({"open": "first", "high": "max", "low": "min"})
+            t = t.reindex(r.index)
+            ok = t["open"].notna()
+            r.loc[ok, ["open", "high", "low"]] = t.loc[ok, ["open", "high", "low"]]
         parts.append(r.dropna(subset=["open"]))
     out = pd.concat(parts)
     out.index.name = "ts"
