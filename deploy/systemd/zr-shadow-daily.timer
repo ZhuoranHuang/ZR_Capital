@@ -1,0 +1,11 @@
+[Unit]
+Description=Run ZR shadow replay after US close
+
+[Timer]
+# 21:40 UTC = 17:40 EDT / 16:40 EST：夏令时与冬令时都在收盘与录制器退出（16:05 ET）之后
+OnCalendar=Mon..Fri *-*-* 21:40:00 UTC
+Persistent=false
+Unit=zr-shadow-daily.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,8 @@
+# R-043 x4 候选（zr/research/exit_habits.py 生成，勿手改）
+x4:
+- id: c1_tp
+  tp_pct: 6.1
+- id: c2_adverse
+  n: 1
+- id: c3_sl
+  sl_pct: -8.9

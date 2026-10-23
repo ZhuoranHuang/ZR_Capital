@@ -113,3 +113,20 @@ def test_cross_now_and_deadline():
         b, 1, 1, _ns(0), LimitRule(price="passive", T=60, ladder="reprice"), SYM, deadline_ns=_ns(4)
     )
     assert r.stage == "cross" and r.last_fill_ns >= _ns(4)  # 截止前没成交 → 截止时吃对手价
+
+
+def test_reprice_abandon_misses_after_two_stages_and_partial_keeps_fill():
+    b = book([(0, 1.00, 1.10, 10, 10)])
+    r = execute(b, 1, 2, _ns(0), LimitRule(price="passive", T=5, ladder="reprice_abandon"), SYM)
+    assert r.stage == "missed" and r.missed_qty == 2 and r.filled_qty == 0
+    assert r.end_ns == _ns(2 + 5 + 5)  # +2 s 到达，两段各 5 s
+    # 第二段（中间价 +1 tick = 1.06）只成交 1 张，剩 1 张放弃
+    b2 = book([(0, 1.00, 1.10, 10, 10)], [(9, 1.05, 1)])
+    r2 = execute(
+        b2, 1, 2, _ns(0), LimitRule(price="passive", T=5, ladder="reprice_abandon", seed=1), SYM
+    )
+    assert r2.filled_qty == 1 and r2.missed_qty == 1 and r2.avg_px == pytest.approx(1.06)
+
+
+def test_default_queue_prob_is_calibrated_value():
+    assert LimitRule().queue_fill_prob == 0.9

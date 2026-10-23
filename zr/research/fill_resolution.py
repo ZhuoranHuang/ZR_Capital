@@ -308,7 +308,8 @@ def main() -> int:
         f"{len(detail)} 条",
         "- 口径：近 ATM（行权价最接近当日开盘价）、call/put 随机各半，不是逐笔成交价，"
         "是 ThetaData 逐笔 NBBO（bid/ask）——「tick 级成交」在这里指 tick 级报价，"
-        "不是真实成交记录（ThetaData Options Standard 不提供逐笔成交，只有 NBBO）。",
+        "不是真实成交记录（本诊断只用了 NBBO；更正 2026-10-22：ThetaData Options Standard "
+        "有逐笔成交 /option/history/trade，见 CLAUDE.md）。",
         "- DTE 分层（0/1/2-3/4-7/8+）是描述性分组，边界本身不是待测参数、不构成策略结论。",
         "- 只覆盖 MU、QQQ（见上）；SPY 未抽样（本任务范围未要求，且 SPY 期权数据按负责人"
         "指令暂停于 2024-07-30）。",

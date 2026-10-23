@@ -6,7 +6,7 @@
 
 - 标的：MU, QQQ；合约-日样本 54 个（每 (标的, DTE 分层) 最多 6 个），日期范围 2023-11-13 ~ 2026-08-04
 - 每个合约-日随机抽 8 个有效快照分钟（ask>0 且 bid>=0 且 ask>=bid），逐笔比较明细共 54 个合约-日 × 最多 8 分钟 × 10 个延迟 = 4320 条
-- 口径：近 ATM（行权价最接近当日开盘价）、call/put 随机各半，不是逐笔成交价，是 ThetaData 逐笔 NBBO（bid/ask）——「tick 级成交」在这里指 tick 级报价，不是真实成交记录（ThetaData Options Standard 不提供逐笔成交，只有 NBBO）。
+- 口径：近 ATM（行权价最接近当日开盘价）、call/put 随机各半，不是逐笔成交价，是 ThetaData 逐笔 NBBO（bid/ask）——「tick 级成交」在这里指 tick 级报价，不是真实成交记录（本诊断只用了 NBBO；更正 2026-10-22：ThetaData Options Standard 有逐笔成交 /option/history/trade，见 CLAUDE.md）。
 - DTE 分层（0/1/2-3/4-7/8+）是描述性分组，边界本身不是待测参数、不构成策略结论。
 - 只覆盖 MU、QQQ（见上）；SPY 未抽样（本任务范围未要求，且 SPY 期权数据按负责人指令暂停于 2024-07-30）。
 

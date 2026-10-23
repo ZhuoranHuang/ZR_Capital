@@ -188,6 +188,28 @@ class ThetaClient:
         )
         return _frame(rows, symbol, date)
 
+    def history_trade(
+        self,
+        symbol: str,
+        expiration: dt.date,
+        date: dt.date,
+        strike: str,
+        right: str,
+        **kw,
+    ) -> pd.DataFrame:
+        """逐笔成交（OPRA）：price / size / exchange / condition / ts。单合约单日（可带 start_time /
+        end_time，美东 HH:MM:SS.mmm）。2026-10-22 实测 Options Standard 可用。"""
+        rows = self.get_json(
+            "/option/history/trade",
+            symbol=symbol,
+            expiration=expiration.strftime("%Y%m%d"),
+            strike=strike,
+            right=right,
+            date=date.strftime("%Y%m%d"),
+            **kw,
+        )
+        return _frame(rows, symbol, date)
+
     def history_ohlc(
         self,
         symbol: str,

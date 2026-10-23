@@ -331,3 +331,26 @@ def test_429_exponential_backoff_then_success():
     c = td.ThetaClient(getter=getter, sleep=slept.append)
     assert c.get_json("/option/list/expirations", symbol="SPY") == []
     assert slept == [1.0, 2.0, 4.0]
+
+
+def test_history_trade_flattens_and_converts_timestamp():
+    import json
+
+    from zr.data.thetadata import ThetaClient
+
+    body = json.dumps({"response": [{"contract": {"symbol": "MU", "expiration": "2026-07-31",
+                                                  "right": "PUT", "strike": 850.0},
+                                     "data": [{"price": 23.22, "size": 1, "exchange": 11,
+                                               "condition": 125,
+                                               "timestamp": "2026-07-30T10:43:00.807"}]}]})
+    seen = []
+
+    def getter(url):
+        seen.append(url)
+        return 200, body
+
+    c = ThetaClient(getter=getter)
+    df = c.history_trade("MU", dt.date(2026, 7, 31), dt.date(2026, 7, 30), "850.000", "put")
+    assert "/option/history/trade" in seen[0]
+    assert df["symbol"].iloc[0] == "MU260731P850000.US" and df["price"].iloc[0] == 23.22
+    assert str(df["ts"].iloc[0]) == "2026-07-30 14:43:00.807000+00:00"

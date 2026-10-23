@@ -1,0 +1,13 @@
+[Unit]
+Description=ZR daily shadow replay (incremental vs batch) after recorder close
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/ZR_Capital
+EnvironmentFile=/home/ubuntu/ZR_Capital/.env
+# EnvironmentFile 会覆盖 Environment=，数据目录必须写在 ExecStart 上（CLAUDE.md 已核实事实）
+ExecStart=/usr/bin/env ZR_DATA_ROOT=/home/ubuntu/zr_data /home/ubuntu/.local/bin/uv run --no-sync python -m zr.research.shadow_daily
+StandardOutput=append:/home/ubuntu/zr_data/logs/shadow_daily.log
+StandardError=append:/home/ubuntu/zr_data/logs/shadow_daily.log

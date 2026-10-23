@@ -1,6 +1,6 @@
 # 状态
 
-更新：2026-10-22 17:10 PT · audit/base-final → main
+更新：2026-10-22 20:20 PT · feat/fill-model → main
 
 ## 阶段
 
@@ -34,7 +34,10 @@
   - 新增增量（实时）路径 `zr/strategy/incremental.py`；与批量在 47,869 根上 0 处不同；录制器影子回放（MU 10-21 14:48 起、10-22 全天）状态 / 信号逐根一致，27 笔交易 23 笔逐笔一致、4 笔只差实时收线延迟（中位数 0.38 s）。
   - 合约：D-030 样本 48 笔 MU，规则能选出合约 33 笔（同一合约 11、同到期日 30），15 笔规则无合约（14 笔 10:15 后只剩 0DTE）。
   - 两处修复后 V4 全部族按原预登记重跑：各族结论不变，0 格通过 FDR（前后对比见报告附录）。
-- **feat/fill-model 暂停**（worktree `../ZR_Capital_fill`，598f5a4）：下一步把订单改价历史（`diag/order_history.parquet`，943 行 / 331 单）接入成交率校准。
+- **成交模型 = 负责人挂单策略（R-041，取代作废的 R-039；`docs/research/FILL_MODEL_CALIBRATION.md`、`FILL_MODEL_RESULTS.md`）**：校准样本只用 D-030 日内单腿订单（`zr/research/calib_sample.py`：纳入 138 单，无法判断归属的撤单 12 单单列）；改价历史 943 行 / 328 单 / 246 条改价。策略参数化（`config/owner_strategy.yaml`）：开仓买单初始挂单中位数在中间价下方 1.65 个 spread、等待 5–120 秒按经验分布抽样、改价追价、跑开 21.75 tick 撤单；成交判定 q = 0.9。验证：实际参数下成交价 / 耗时偏差中位数 0、撤单 100% 一致；按分布抽样只成交 34%（负责人 78%）——挂单位置与时长依赖行情，独立抽样复现不了。V4 在该策略下仍全负（MU 格子均值 −7.94%、QQQ −2.19%；吃价差 −7.41% / −2.58%），策略成交的事件在吃价差口径下更差（逆向选择）；负责人 51 段按策略重放 −5,888 USD（对账单 +9,839），14 段 10:15 后 0DTE −991（对账单 +10,325）；0DTE 不设 10:15 限制的敏感性 MU −14.21%、QQQ −5.63%（更差）。R-039 的结果在 `research/v4_limit_VOID_old_assumption/`，作废。
+- **纪律类规则（R-040，`docs/research/DISCIPLINE_RULES.md`）**：负责人样本叠加紧止损 5 格全部劣于实际（−13,125～−21,086 USD）；V4 H1/H2 加紧止损 120 格最好 +1.22%、最小 p 0.22；共振规则 8 格全负。
+- **出场习惯与出场修正（R-043，`docs/research/EXIT_HABITS.md`、`EXIT_REVISION.md`）**：负责人一次全卖 94%，盈利单中位 +6.1% 卖出、亏损单 −8.9%；V4 每笔 2 张（1 张时 +20% 全卖的修正影响 ≤ 0.15 个百分点）；V4 交易 43%（MU）/ 47%（QQQ）曾达到 +10%，其中 36.5% / 32.0% 最终亏损离场；+10% 即全卖把 MU 每笔从 −7.94% 改善到 −4.13%（胜率 67%、盈亏比 0.49），仍为负；负责人样本上 12 个出场组全部劣于实际。R-041 + R-040 + R-043 合并 339 格 BH 通过 0。
+- **每日影子回放自动化（E，`zr/research/shadow_daily.py`）**：VPS systemd `zr-shadow-daily.timer`（21:40 UTC，冬夏令时都在收盘后），先增量更新官方 2 分钟 K（`zr/data/official_bars.py`），再回放当日录制数据，按日累积到 `$ZR_DATA_ROOT/reports/SHADOW_DAILY.md`（VPS 上 deploy.sh 会 stash 工作区改动，所以累积文件放数据目录；仓库 `docs/research/SHADOW_DAILY.md` 为合并时的拷贝）。
 
 - **ThetaData 全量拉取**：MU、QQQ 完成（各 767 个交易日，2023-10-02～2026-10-21）；**SPY 按负责人指令暂停于 2024-07-30**（208 天，保留），续拉命令见 DATA_INVENTORY。拉取进程已全部停止；脚本单实例锁改为 noclobber 原子创建。
 - **前视审计完成**（`docs/research/LOOKAHEAD_AUDIT.md`）：截断测试 0/500（快速管线）、0/30（期权链/日历/跨资产）、0/900（合约选择）不一致；ThetaData 1 分钟快照时间戳对齐核实无误；模型 purge/embargo/Optuna 隔离代码审查确认符合要求。发现并修复两类问题：(1) RANGE 三条件同时满足覆盖率仅 4%，改打分制（D-026，阈值 0.3487 在 MU 2024 年标定，2024–2026 覆盖率 0.300/0.303/0.312）；(2) v3 状态层指标只在诊断函数里用了含盘前盘后的连续 K 线，`grid_v3.py`/`own_policy.py`/`model_v3.py` 三个真正产出结果的引擎仍是 RTH-only——自查发现并接到 `load_extended_bars`。延迟测试发现 MU 的 E11 做空配置延迟 1 根反而更赚，逐行审查代码未见前视，判断为真实的突破确认时点现象，记入 STATUS 0d、未改代码。对比见 `docs/research/LOOKAHEAD_FIX_COMPARISON.md`。
