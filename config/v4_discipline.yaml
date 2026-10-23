@@ -18,6 +18,6 @@ confluence:                      # B3：事先写死的共振规则，口径 C 2
   vol_ratio: {v: 1.5, window: 20}  # 本根量 ÷ 前 20 根均量
   exit: a_adverse_bar            # 只用离场 (a) + 强平；不叠加 +20% / −30% / 30 分钟
   guards: v4                     # 时间窗、禁 RANGE、禁逆向点火同 R-033；合约 0/1 DTE 同 R-033
-  cells: [MU, QQQ] × [long, short]   # 4 格；口径 A 另报
+  cells: "[MU, QQQ] × [long, short]"   # 4 格；口径 A 另报
 family:                          # 与 R-039 合为一族：324 + 162 + B1 5 + B2 120 + B3 4 = 615 格，BH q = 0.10
   fdr_q: 0.10
