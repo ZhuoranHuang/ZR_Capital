@@ -130,3 +130,46 @@ def test_reprice_abandon_misses_after_two_stages_and_partial_keeps_fill():
 
 def test_default_queue_prob_is_calibrated_value():
     assert LimitRule().queue_fill_prob == 0.9
+
+
+def _pi(market=(0.5,), limit=(0.0,)):
+    from zr.backtest.fill_limit import PriceImprovement
+
+    return PriceImprovement(
+        {
+            "min_n": 1,
+            "spread_bins": [0, 5, 10, 20, 10_000],
+            "spread_labels": ["≤5", "6–10", "11–20", ">20"],
+            "all": [0.0],
+            "by_kind": {
+                "market": {"all": list(market), "by_spread": {"6–10": list(market)}},
+                "limit": {"all": list(limit), "by_spread": {}},
+            },
+        }
+    )
+
+
+def test_price_improvement_market_and_caps():
+    pi = _pi(market=(0.5,))
+    rng = np.random.default_rng(0)
+    # 价差 0.10 = 10 tick → 「6–10」档，比例 0.5 → 改善 5 tick：买 1.10 − 0.05 = 1.05
+    assert pi.price(1, 1.00, 1.10, "market", SYM, rng) == pytest.approx(1.05)
+    assert pi.price(-1, 1.00, 1.10, "market", SYM, rng) == pytest.approx(1.05)
+    big = _pi(market=(3.0,))  # 改善超过价差 → 不优于己方最优价
+    assert big.price(1, 1.00, 1.10, "market", SYM, rng) == pytest.approx(1.00)
+    neg = _pi(market=(-0.2,))  # 负改善（比对手价差），限价单不越过限价
+    assert neg.price(1, 1.00, 1.10, "market", SYM, rng) == pytest.approx(1.12)
+    assert neg.price(1, 1.00, 1.10, "market", SYM, rng, limit=1.10) == pytest.approx(1.10)
+
+
+def test_price_improvement_hooks_in_cross_and_arrival():
+    pi = _pi(market=(0.5,), limit=(0.2,))
+    b = book([(0, 1.00, 1.10, 10, 10)])
+    c = cross_now(b, 1, _ns(0), 0.0, pi, SYM, np.random.default_rng(0))
+    assert c[1] == pytest.approx(1.05)
+    assert cross_now(b, 1, _ns(0), 0.0)[1] == pytest.approx(1.10)  # 不传模型 = 吃价差
+    # 到达即可成交的限价单（挂 1.10）：limit 类比例 0.2 → 1.10 − 0.02 = 1.08
+    from zr.backtest.fill_limit import _rest
+
+    f, _ = _rest(b, 1, 1.10, _ns(0), _ns(1), 1, np.random.default_rng(0), 1.0, pi, SYM)
+    assert f[0][1] == pytest.approx(1.08)

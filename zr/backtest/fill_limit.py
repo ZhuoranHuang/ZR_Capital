@@ -99,6 +99,54 @@ class Result:
     end_ns: int | None = None  # 挂单结束时刻（最后一段的终点；吃对手价时为成交时刻）
 
 
+@dataclass
+class PriceImprovement:
+    """价格改善模型（R-046，参数 config/price_improvement.yaml 由
+    zr/research/price_improvement.py 生成）：可立即成交的订单成交价 = 对手价 − 方向 × 改善量；
+    改善量 = 价差 × 比例，比例按「类别（market / limit）× 价差档」从负责人订单的经验值抽样
+    （样本不足的格子退回同类别、再退回全部），按 tick 取整；成交价不优于己方最优价，
+    限价单不越过自己的限价。"""
+
+    params: dict
+
+    @classmethod
+    def from_yaml(cls, path) -> PriceImprovement:
+        import yaml
+
+        with open(path, encoding="utf-8") as f:
+            return cls(yaml.safe_load(f))
+
+    def frac(self, kind: str, spread_ticks: float, rng: np.random.Generator) -> float:
+        p = self.params
+        bins, labels = p["spread_bins"], p["spread_labels"]
+        i = int(np.searchsorted(bins, spread_ticks, side="left")) - 1
+        lab = labels[min(max(i, 0), len(labels) - 1)]
+        ent = p["by_kind"].get(kind) or {}
+        pool = (ent.get("by_spread") or {}).get(lab)
+        if not pool:
+            pool = ent.get("all") if len(ent.get("all") or []) >= p["min_n"] else p["all"]
+        return float(rng.choice(pool)) if pool else 0.0
+
+    def price(
+        self,
+        side: int,
+        bid: float,
+        ask: float,
+        kind: str,
+        symbol: str,
+        rng: np.random.Generator,
+        limit: float | None = None,
+    ) -> float:
+        spr = ask - bid
+        tick = _tick(symbol, (ask + bid) / 2)
+        imp = round(self.frac(kind, spr / tick if tick > 0 else 0.0, rng) * spr / tick) * tick
+        px = ask - imp if side == 1 else bid + imp
+        px = max(px, bid) if side == 1 else min(px, ask)
+        if limit is not None:
+            px = min(px, limit) if side == 1 else max(px, limit)
+        return round(px, 6)
+
+
 def _tick(symbol: str, px: float) -> float:
     return float(tick_size(symbol, max(px, 0.01)))
 
@@ -134,6 +182,8 @@ def _rest(
     want: float,
     rng: np.random.Generator,
     qprob: float,
+    pi: PriceImprovement | None = None,
+    symbol: str | None = None,
 ) -> tuple[list[tuple[int, float, float]], float]:
     """挂单 [start, end] 纳秒内的成交事件：返回 [(ns, 价格, 数量)]、剩余数量。"""
     fills = []
@@ -144,7 +194,10 @@ def _rest(
     if i0 is not None and (book.ask[i0] <= px if side == 1 else book.bid[i0] >= px):
         avail = book.ask_size[i0] if side == 1 else book.bid_size[i0]
         q = min(left, avail if np.isfinite(avail) and avail > 0 else left)
-        fills.append((int(start), float(book.ask[i0] if side == 1 else book.bid[i0]), q))
+        opp = float(book.ask[i0] if side == 1 else book.bid[i0])
+        if pi is not None and symbol is not None:
+            opp = pi.price(side, float(book.bid[i0]), float(book.ask[i0]), "limit", symbol, rng, px)
+        fills.append((int(start), opp, q))
         left -= q
     qi = int(np.searchsorted(book.q_ns, start, side="left"))
     qe = int(np.searchsorted(book.q_ns, end, side="right"))
@@ -177,18 +230,30 @@ def _rest(
 
 
 def cross_now(
-    book: Book, side: int, decision_ns: int, lag_s: float = 2.0
+    book: Book,
+    side: int,
+    decision_ns: int,
+    lag_s: float = 2.0,
+    pi: PriceImprovement | None = None,
+    symbol: str | None = None,
+    rng: np.random.Generator | None = None,
 ) -> tuple[int, float] | None:
     """直接吃对手价：+lag 后第一个有效报价的 ask（买）/ bid（卖）；之后再无报价则用当时有效的
     最后一笔报价，成交时刻记为 +lag 那一刻。"""
     t = decision_ns + int(lag_s * 1e9)
     i = book.first_at(t)
+    ts = None
     if i is not None:
-        return int(book.q_ns[i]), float(book.ask[i] if side == 1 else book.bid[i])
-    j = book.asof(t)
-    if j is None:
-        return None
-    return t, float(book.ask[j] if side == 1 else book.bid[j])
+        ts = int(book.q_ns[i])
+    else:
+        i = book.asof(t)
+        if i is None:
+            return None
+        ts = t
+    if pi is not None and symbol is not None:
+        r = rng if rng is not None else np.random.default_rng(0)
+        return ts, pi.price(side, float(book.bid[i]), float(book.ask[i]), "market", symbol, r)
+    return ts, float(book.ask[i] if side == 1 else book.bid[i])
 
 
 def execute(

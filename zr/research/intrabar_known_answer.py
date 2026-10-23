@@ -97,6 +97,75 @@ def pnl(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def acceptance(root: Path, sel, exact: list[dict], pi) -> tuple[pd.DataFrame, dict]:
+    """R-046：(a)(b)(c) 用种子 0 的一次重放，(d) 种子 0–99。"""
+    cache: dict = {}
+    act_total = float(sum(float(sel.loc[k, "pnl_net"]) for k in {lg["episode"] for lg in exact}))
+    totals = []
+    for seed in range(100):
+        d = pd.DataFrame(ib.replay(root, "MU", exact, q=1.0, pi=pi, seed=seed, cache=cache))
+        totals.append(float(pnl(d)["sim_pnl"].sum()))
+        if seed == 0:
+            d0 = d
+    d0["tick"] = [float(tick_size(s, p)) for s, p in zip(d0["symbol"], d0["act_px"], strict=True)]
+    qok = np.isclose(d0["filled"], d0["qty"])
+    both = d0["filled"] > 0
+    diff = (d0["side"] * (d0["px"] - d0["act_px"]) / d0["tick"])[both]  # 正 = 模拟对负责人更差
+    t0 = totals[0]
+    lo, hi = np.quantile(totals, [0.05, 0.95])
+    res = {
+        "a_qty_rate": float(qok.mean()),
+        "b_median_ticks": float(diff.median()),
+        "c_total_sim": t0,
+        "c_total_act": act_total,
+        "c_rel": abs(t0 - act_total) / abs(act_total),
+        "d_p05": float(lo),
+        "d_p95": float(hi),
+        "d_pct_of_actual": float((np.array(totals) < act_total).mean()),
+    }
+    res["a"] = res["a_qty_rate"] >= 0.95
+    res["b"] = abs(res["b_median_ticks"]) <= 1.0
+    res["c"] = res["c_rel"] <= 0.10
+    res["d"] = lo <= act_total <= hi
+    tab = pd.DataFrame(
+        [
+            {
+                "项": "(a) 委托成交张数一致率 ≥ 95%",
+                "结果": f"{res['a_qty_rate']:.1%}",
+                "是否通过": res["a"],
+            },
+            {
+                "项": "(b) 成交价差（按方向，tick）中位数在 ±1 内",
+                "结果": f"{res['b_median_ticks']:+.2f}",
+                "是否通过": res["b"],
+            },
+            {
+                "项": "(c) 48 段合计与对账单相差 ≤ 10%",
+                "结果": f"模拟 {t0:+,.2f} / 对账单 {act_total:+,.2f}（差 {res['c_rel']:.1%}）",
+                "是否通过": res["c"],
+            },
+            {
+                "项": "(d) 对账单合计落在 100 次模拟的 5%–95% 分位",
+                "结果": f"P5 {lo:+,.2f} / P95 {hi:+,.2f}（对账单在第 {res['d_pct_of_actual']:.0%}"
+                " 分位）",
+                "是否通过": res["d"],
+            },
+        ]
+    )
+    # 事后描述（不改变判定）：差额来源
+    pe = pnl(d0)
+    pe["act"] = [float(sel.loc[k, "pnl_net"]) for k in pe["episode"]]
+    pe["diff"] = pe["sim_pnl"] - pe["act"]
+    qbad = set(d0.loc[~qok, "episode"])
+    usd = -d0["side"] * (d0["px"] - d0["act_px"]) * 100 * d0["filled"]
+    res["gap_total"] = float(pe["diff"].sum())
+    res["gap_qty_eps"] = float(pe.loc[pe["episode"].isin(qbad), "diff"].sum())
+    res["n_qty_eps"] = len(qbad)
+    res["gap_px_usd"] = float(usd.fillna(0).sum())
+    res["worst_ep_diff"] = float(pe["diff"].min())
+    return tab, {**res, "totals": totals, "orders": d0}
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     root = get_settings().zr_data_root
@@ -214,8 +283,38 @@ def main() -> int:
         "- 费用按 D-013 计算（对账单费用此前已核对一致，见 KNOWN_ANSWER_AUDIT.md）。",
         "",
     ]
+    from zr.backtest.fill_limit import PriceImprovement
+
+    pi = PriceImprovement.from_yaml(REPO / "config" / "price_improvement.yaml")
+    acc, ar = acceptance(root, sel, exact, pi)
+    passed = all(ar[k] for k in "abcd")
+    lines[1:1] = [
+        "",
+        "## R-046 价格改善模型验收（预登记标准，四项全过才算可用）",
+        "",
+        "重放口径同下文 (1)：真实提交时刻、真实挂单与改价、真实卖出；可立即成交的订单成交价 = 对"
+        "手价 − "
+        "抽样改善量（`config/price_improvement.yaml`，`PRICE_IMPROVEMENT.md`）。",
+        "",
+        df_to_md(acc),
+        "",
+        f"**结论：{'通过' if passed else '不通过'}**（{sum(ar[k] for k in 'abcd')}/4）。"
+        "改善量在同一批订单上校准，属样本内检验。下文为加入改善模型之前（吃价差 / 按挂单价）的检"
+        "验，作对照。",
+        "",
+        "差额来源（事后描述，不改变上面的判定）：种子 0 的模拟合计比对账单少 "
+        f"{-ar['gap_total']:,.2f} USD，其中成交张数不一致的 {ar['n_qty_eps']} 段贡献 "
+        f"{-ar['gap_qty_eps']:,.2f}（最差一段 {ar['worst_ep_diff']:+,.2f}：模拟中平仓卖单没有成交，"
+        "重放把未卖出的持仓按 0 计）；已成交张数上的成交价差合计 "
+        f"{ar['gap_px_usd']:+,.2f} USD（正 = 模拟对负责人更好）。"
+        "未卖出持仓如何估值没有在预登记里规定，这里不据此重新判定。",
+        "",
+    ]
     OUT.write_text("\n".join(lines), encoding="utf-8")
     store = root / "research" / "intrabar"
+    pd.Series(ar["totals"]).to_frame("total").to_parquet(store / "r046_totals.parquet")
+    ar["orders"].to_parquet(store / "r046_orders_seed0.parquet", index=False)
+    print(acc.to_string())
     store.mkdir(parents=True, exist_ok=True)
     ex.to_parquet(store / "ka_exact.parquet", index=False)
     pe.to_parquet(store / "ka_episodes.parquet", index=False)

@@ -31,7 +31,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from zr.backtest.fill_limit import Book, _rest, _round_passive, _tick, cross_now
+from zr.backtest.fill_limit import Book, PriceImprovement, _rest, _round_passive, _tick, cross_now
 from zr.costs.fees import option_order_fees
 from zr.data.calendar import session_close
 from zr.data.thetadata import ET, ThetaClient, lb_symbol, parse_contract
@@ -278,6 +278,7 @@ def place(
     q: float,
     end: int | None,
     rng: np.random.Generator,
+    pi: PriceImprovement | None = None,
 ) -> tuple[float, float, int | None, int]:
     """返回 (成交张数, 均价, 最后成交时刻, 结束时刻)。order：
     {mode: taker} → +lag 后第一个对手价；
@@ -287,7 +288,7 @@ def place(
     lag = int(order.get("lag_s", 2.0) * NS)
     mode = order.get("mode", "taker")
     if mode == "taker":
-        c = cross_now(book, side, t, lag / NS)
+        c = cross_now(book, side, t, lag / NS, pi, sym, rng)
         if c is None:
             return 0.0, math.nan, None, t
         return float(qty), float(c[1]), int(c[0]), int(c[0])
@@ -303,7 +304,7 @@ def place(
         e = t0 + int(float(order.get("wait_s", 60)) * NS)
         if end is not None:
             e = min(e, end)
-        fills, _ = _rest(book, side, px, t0, e, qty, rng, q)
+        fills, _ = _rest(book, side, px, t0, e, qty, rng, q, pi, sym)
     elif mode == "path":
         fills, left = [], float(qty)
         path = order["path"]
@@ -311,7 +312,9 @@ def place(
             if left <= 0:
                 break
             e = path[k + 1][0] if k + 1 < len(path) else order["end_ns"]
-            f, left = _rest(book, side, float(px_k), int(ts_k) + lag, int(e) + lag, left, rng, q)
+            f, left = _rest(
+                book, side, float(px_k), int(ts_k) + lag, int(e) + lag, left, rng, q, pi, sym
+            )
             fills += f
         e = int(order["end_ns"]) + lag
     else:
@@ -365,6 +368,11 @@ def run_day(
     ex = rule.get("exit", {})
     q = float(rule.get("fill", {}).get("queue_fill_prob", 0.9))
     rng = np.random.default_rng(seed)
+    pi = None
+    if rule.get("fill", {}).get("price_improvement"):  # R-046；默认关闭（吃价差 = 保守对照）
+        pi = PriceImprovement.from_yaml(
+            Path(__file__).resolve().parents[2] / "config" / "price_improvement.yaml"
+        )
     trades, k = [], 0
     while k < len(t):
         hit = [d for d in cond if cond[d][k] and in_win[k]]
@@ -412,9 +420,9 @@ def run_day(
         x_order = ex.get("order", {"mode": "taker"})
         if reason in ("sl", "flat"):
             x_order = {"mode": "taker", "lag_s": x_order.get("lag_s", 2.0)}
-        xn, xpx, xt, _ = place(bk, -1, n, cand[reason], x_order, sym, q, flat, rng)
+        xn, xpx, xt, _ = place(bk, -1, n, cand[reason], x_order, sym, q, flat, rng, pi)
         if xn < n:  # 离场挂单没成交完：剩余吃买一
-            c = cross_now(bk, -1, cand[reason], 2.0)
+            c = cross_now(bk, -1, cand[reason], 2.0, pi, sym, rng)
             rem = n - xn
             xpx = ((xpx * xn if xn else 0.0) + c[1] * rem) / n if c else xpx
             xt = c[0] if c else xt
@@ -448,32 +456,41 @@ def run(root: Path, rule: dict, days: list[dt.date], seed: int = 0) -> pd.DataFr
     return pd.DataFrame(rows)
 
 
-def replay(root: Path, und: str, legs: list[dict], q: float = 1.0) -> list[dict]:
-    """已知答案重放：legs = [{symbol, day, side(+1/−1), qty, order}]，按给定订单在 tick 上成交。"""
+def replay(
+    root: Path,
+    und: str,
+    legs: list[dict],
+    q: float = 1.0,
+    pi: PriceImprovement | None = None,
+    seed: int = 0,
+    cache: dict | None = None,
+) -> list[dict]:
+    """已知答案重放：legs = [{symbol, day, side(+1/−1), qty, order}]，按给定订单在 tick 上成交。
+    cache：{(symbol, day): Book}，多次重放时复用。"""
     od = OptionData(root, und)
+    cache = {} if cache is None else cache
     out = []
-    rng = np.random.default_rng(0)
+    rng = np.random.default_rng(seed)
     for lg in legs:
         o = lg["order"]
-        t0 = (
-            int(o.get("path", [(lg["t_ns"], None)])[0][0])
-            if o["mode"] == "path"
-            else int(lg["t_ns"])
-        )
+        t0 = int(o["path"][0][0]) if o["mode"] == "path" else int(lg["t_ns"])
         end = int(o.get("end_ns", t0)) + 120 * NS
-        bk = od.book(
-            lg["symbol"],
-            lg["day"],
-            pd.Timestamp(t0, tz="UTC") - pd.Timedelta(minutes=1),
-            pd.Timestamp(end, tz="UTC"),
-        )
+        key = (lg["symbol"], lg["day"], t0, end)
+        if key not in cache:
+            cache[key] = od.book(
+                lg["symbol"],
+                lg["day"],
+                pd.Timestamp(t0, tz="UTC") - pd.Timedelta(minutes=1),
+                pd.Timestamp(end, tz="UTC"),
+            )
+        bk = cache[key]
         if bk is None:
-            out.append({**lg, "filled": 0.0, "px": math.nan})
+            out.append(
+                {**{k: v for k, v in lg.items() if k != "order"}, "filled": 0.0, "px": math.nan}
+            )
             continue
-        n, px, tl, _ = place(bk, lg["side"], lg["qty"], t0, o, lg["symbol"], q, None, rng)
+        n, px, tl, _ = place(bk, lg["side"], lg["qty"], t0, o, lg["symbol"], q, None, rng, pi)
         out.append(
             {**{k: v for k, v in lg.items() if k != "order"}, "filled": n, "px": px, "fill_ns": tl}
         )
     return out
-
-
