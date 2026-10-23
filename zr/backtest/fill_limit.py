@@ -121,6 +121,9 @@ class PriceImprovement:
         bins, labels = p["spread_bins"], p["spread_labels"]
         i = int(np.searchsorted(bins, spread_ticks, side="left")) - 1
         lab = labels[min(max(i, 0), len(labels) - 1)]
+        if kind == "immediate":  # R-047：全部可立即成交样本合并（市价 + 触价 + 可立即成交的限价单）
+            pool = p["all"]
+            return float(rng.choice(pool)) if pool else 0.0
         ent = p["by_kind"].get(kind) or {}
         pool = (ent.get("by_spread") or {}).get(lab)
         if not pool:
