@@ -138,12 +138,13 @@ def _rest(
     """挂单 [start, end] 纳秒内的成交事件：返回 [(ns, 价格, 数量)]、剩余数量。"""
     fills = []
     left = want
-    # 到达时有效的报价已越过挂单价（可立即成交的挂单）→ 在到达时刻按挂单价成交
+    # 到达时有效的报价已越过挂单价（可立即成交的挂单）→ 在到达时刻按对手价成交（价格改善：
+    # 吃掉的是盘口上的挂单，成交价是对手价而不是自己的限价）
     i0 = book.asof(start)
     if i0 is not None and (book.ask[i0] <= px if side == 1 else book.bid[i0] >= px):
         avail = book.ask_size[i0] if side == 1 else book.bid_size[i0]
         q = min(left, avail if np.isfinite(avail) and avail > 0 else left)
-        fills.append((int(start), px, q))
+        fills.append((int(start), float(book.ask[i0] if side == 1 else book.bid[i0]), q))
         left -= q
     qi = int(np.searchsorted(book.q_ns, start, side="left"))
     qe = int(np.searchsorted(book.q_ns, end, side="right"))

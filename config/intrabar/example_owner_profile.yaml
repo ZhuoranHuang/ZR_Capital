@@ -1,0 +1,48 @@
+# 盘中回测引擎（zr/backtest/intrabar.py）规则模板——示例，未运行完整测试，不是研究结论。
+# 内容取自 2026-10-22 两份诊断（ENTRY_TIMING_DIAG.md、PRE_ENTRY_MICRO.md）描述的负责人入场画像，
+# 仅作为负责人写规则文档时的参考格式。所有数字都是待测参数（CLAUDE.md 规则 11）。
+
+underlying: MU
+convention: C                      # 已完成 2 分钟 K 的指标口径（C：含盘前盘后连续；A：RTH 按日重置）
+days: {from: "2026-09-01", to: "2026-10-21"}
+session:
+  first_entry: "09:32"             # 首根 2 分钟 K 收盘之后才评估
+  last_entry: "15:40"
+  flat: "15:50"
+
+direction: trend                   # long / short / both / trend
+trend:                             # 趋势方向：最近 10 根已完成 2 分钟 K 至少 8 根收在中轨同侧 → 该侧
+  bars: 10
+  min_same: 8
+
+entry:
+  all:                             # 逐秒评估，全部成立即下单（同一时间只持一个仓位）
+    - {feature: ret, window_s: 60, op: ">=", value: 8, directional: true}       # 近 60 秒朝趋势方向涨 ≥ 8 bp
+    - {feature: dist_extreme, window_min: 15, side: with, op: "<=", value: 50}  # 距近 15 分钟顺向极值 ≤ 50 bp
+    # 其他可用条件（格式示例）：
+    # - {feature: boll, ref: mid, op: ">", value: 0, directional: true}         # 当前价在已完成 K 中轨的趋势侧
+    # - {feature: pctb, op: "<=", value: 0.9, directional: true}                # 按方向的 %b
+    # - {feature: macd_hist, op: ">", value: 0, directional: true}             # 已完成 K 的柱与方向同号
+    # - {feature: macd_hist_chg, op: ">", value: 0, directional: true}         # 柱朝方向放大
+
+contract:
+  dte_max: 1                       # 日历日 DTE ≤ 1 中最近的到期日
+  otm_steps: 1                     # 略虚值 1 档（0 = 平值）
+  no_0dte_after: "10:15"           # 可删掉这一行以不限制 0DTE
+
+order:                             # 入场挂单：中间价 − 1 个价差（买入），等待 60 秒，未成交放弃
+  mode: passive                    # taker = 立即按卖一；passive = 中间价 − k × 价差并等待
+  k_spread: 1.0
+  wait_s: 60
+  lag_s: 2                         # 决策到委托到达的延迟
+fill:
+  queue_fill_prob: 0.9             # OPRA 成交恰好等于挂单价时的成交概率（FILL_MODEL_CALIBRATION.md）
+qty: 1
+
+exit:
+  tp: 0.10                         # 权利金（tick 中间价）+10% 全卖
+  sl: 0.15                         # −15% 全卖（止损直接吃买一）
+  max_hold_min: 30
+  order: {mode: taker, lag_s: 2}   # 止盈 / 上限 / 信号离场的卖出方式（passive 同入场格式）
+  # signal:                        # 可选信号离场，格式同 entry.all（例如回到中轨另一侧）
+  #   - {feature: boll, ref: mid, op: "<", value: 0, directional: true}
