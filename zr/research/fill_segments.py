@@ -85,8 +85,16 @@ def _drop_own(t: pd.DataFrame, fills: pd.DataFrame) -> pd.DataFrame:
     return t[keep]
 
 
-def segments(root: Path) -> pd.DataFrame:
-    s = fm.order_sample(root)
+def segments(root: Path, calib_only: bool = True) -> pd.DataFrame:
+    """calib_only：只用 zr/research/calib_sample 纳入的订单
+    （负责人 2026-10-22 指令：D-030 日内单腿）。"""
+    if calib_only:
+        from zr.research.calib_sample import classify
+
+        s = classify(root)
+        s = s[s["calib"]].drop(columns=["calib", "class"])
+    else:
+        s = fm.order_sample(root)
     s["order_id"] = s["order_id"].astype(str)
     h = load_history(root)
     _, ex, _ = load(root)
@@ -298,7 +306,6 @@ def main() -> int:
     print(calibrate_q(seg).to_string())
     coef, tab = fit(seg)
     print(coef.to_string())
-    report(root, seg)
     return 0
 
 

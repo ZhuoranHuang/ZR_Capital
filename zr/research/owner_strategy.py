@@ -7,7 +7,8 @@
 2. 策略参数（extract）：按买（开仓）/ 卖（平仓）分别给出初始挂单位置（相对中间价，spread 倍数）的
    经验分布、首次改价前等待时长、改价间隔与幅度、改价次数、委托总时长（等待时长，截到 5–120 秒）
    的经验分布、撤单前市场走向。写 config/owner_strategy.yaml（脚本生成，勿手改）。
-数据：fill_model.order_sample 的限价单（LO）+ 改价历史（diag/order_history.parquet）+ ThetaData 缓存。
+样本：zr/research/calib_sample.classify 纳入的订单（D-030 日内单腿）中的限价单（LO）；
+数据：改价历史（diag/order_history.parquet）+ ThetaData 缓存。
 运行：uv run python -m zr.research.owner_strategy
 """
 
@@ -31,6 +32,7 @@ log = logging.getLogger("zr.research.owner_strategy")
 REPO = Path(__file__).resolve().parents[2]
 STRAT = REPO / "config" / "owner_strategy.yaml"
 WAIT_CLIP = (5.0, 120.0)
+Q_CAL = 0.9  # 挂单段逐段重放 Brier 最小（zr/research/fill_segments.calibrate_q，校准样本）
 QS = (0.1, 0.25, 0.5, 0.75, 0.9)
 
 
@@ -51,8 +53,10 @@ def _und_px(bars: dict, und: str, ns: int) -> float:
 
 
 def features(root: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
-    s = fm.order_sample(root)
-    s["order_id"] = s["order_id"].astype(str)
+    from zr.research.calib_sample import classify
+
+    s = classify(root)
+    s = s[s["calib"]]
     h = fs.load_history(root)
     _, ex, _ = load(root)
     ex = ex.assign(ts=fm._utc(ex["ts_et"], naive_is_utc=False), order_id=ex["order_id"].astype(str))
@@ -131,12 +135,15 @@ def features(root: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
         rows.append(rec)
         prices = bnd["price"].astype(float).to_numpy()
         for k in range(1, len(st)):
+            if int(st[k]) < open_ns:  # 盘前改价不计
+                continue
             amends.append(
                 {
                     "order_id": o["order_id"],
                     "side": o["side"],
                     "k": k,
                     "interval_s": (int(st[k]) - max(int(st[k - 1]), open_ns)) / 1e9,
+                    "since_submit_s": (int(st[k]) - sub) / 1e9,
                     "step_ticks": sgn * (prices[k] - prices[k - 1]) / tick,
                 }
             )
@@ -148,7 +155,25 @@ def _q(x: pd.Series) -> list[float]:
     return [round(float(x.quantile(p)), 4) for p in QS] if len(x) else []
 
 
-def extract(f: pd.DataFrame, a: pd.DataFrame) -> dict:
+def chase_fit(root: Path) -> dict:
+    """改价幅度 ~ 上次挂单以来中间价朝对手方向的移动（tick），最小二乘（买卖合并；挂单段来自
+    zr/research/fill_segments 的校准样本输出）。"""
+    s = pd.read_parquet(root / "research" / "fill_model" / "owner_segments.parquet")
+    s = s[s["skip"] == ""].sort_values(["order_id", "seg"])
+    sg = np.where(s["side"] == "Buy", 1, -1)
+    s["move"] = sg * (s["mid0"] - s.groupby("order_id")["mid0"].shift()) / s["tick"]
+    s["step"] = sg * (s["limit"] - s.groupby("order_id")["limit"].shift()) / s["tick"]
+    lt = s[s["seg"] > 0].dropna(subset=["move", "step"])
+    b, a = np.polyfit(lt["move"].to_numpy(float), lt["step"].to_numpy(float), 1)
+    return {
+        "chase_a": round(float(a), 4),
+        "chase_b": round(float(b), 4),
+        "chase_n": int(len(lt)),
+        "chase_corr": round(float(lt["move"].corr(lt["step"])), 3),
+    }
+
+
+def extract(f: pd.DataFrame, a: pd.DataFrame, chase: dict | None = None) -> dict:
     """参数化策略（按方向）。经验分布用分位点表示；模拟时按事件逐单抽样（固定种子）。"""
     out = {"quantiles": list(QS), "wait_clip_s": list(WAIT_CLIP)}
     for side in ("Buy", "Sell"):
@@ -170,7 +195,16 @@ def extract(f: pd.DataFrame, a: pd.DataFrame) -> dict:
             else None,
             "amend_count_quantiles": _q(g["n_amend"]),
             "fill_rate": round(float(g["filled"].mean()), 3),
+            # 撤单条件：撤单 / 过期时中间价相对提交时朝对手方向跑开的 tick 数（中位数）
+            "cancel_away_ticks": float(g.loc[~g["filled"], "away_at_cancel_ticks"].median())
+            if (~g["filled"]).any()
+            else None,
+            "n_cancel": int((~g["filled"]).sum()),
+            "amend_counts": [int(x) for x in g["n_amend"]],
+            **({k: chase[k] for k in ("chase_a", "chase_b")} if chase else {}),
         }
+    if chase:
+        out["chase_fit"] = chase
     return out
 
 
@@ -192,12 +226,147 @@ def main() -> int:
     store.mkdir(parents=True, exist_ok=True)
     f.to_parquet(store / "owner_order_strategy.parquet", index=False)
     a.to_parquet(store / "owner_amendments.parquet", index=False)
-    p = extract(f, a)
+    p = extract(f, a, chase_fit(root))
     write_strategy(p)
-    for side in ("Buy", "Sell"):
-        print(side, {k: v for k, v in p[side].items() if k not in ("k0_spread", "wait_s")})
-    print(f.groupby(["side", "status"]).size())
+    from zr.backtest.owner_fill import OwnerStrategy
+
+    strat = OwnerStrategy.from_yaml(STRAT, queue_fill_prob=Q_CAL)
+    v = validate(root, f, strat)
+    v.to_parquet(store / "owner_strategy_validation.parquet", index=False)
+    print(validation_table(v).T.to_string())
     return 0
+
+
+# ---------------- 验证：从负责人提交时刻重放全部校准样本订单 ----------------
+
+N_SEEDS = 50
+
+
+def validate(root: Path, f: pd.DataFrame, strat) -> pd.DataFrame:
+    """每单 N_SEEDS 次抽样（委托在提交时刻到达，lag 0；一律按入场口径——等满或跑开即撤单）。
+    另跑一次「该单实际参数」：k0、等待时长（截到 5–120 s）、改价次数取该单真实值。"""
+    import dataclasses
+
+    from zr.backtest.owner_fill import execute_owner
+    from zr.research.owner_limit import order_book
+
+    st0 = dataclasses.replace(strat, lag_s=0.0)
+    rows = []
+    for _, o in f.iterrows():
+        bk = order_book(root, [o["order_id"]])
+        if bk is None:
+            continue
+        side = 1 if o["side"] == "Buy" else -1
+        sims = []
+        for sd in range(N_SEEDS):
+            r = execute_owner(
+                bk,
+                side,
+                1.0,
+                int(o["submit_ns"]),
+                st0,
+                o["symbol"],
+                np.random.default_rng(sd),
+                "entry",
+            )
+            if r is not None:
+                sims.append(r)
+        own = execute_owner(
+            bk,
+            side,
+            1.0,
+            int(o["submit_ns"]),
+            st0,
+            o["symbol"],
+            np.random.default_rng(0),
+            "entry",
+            draw={
+                "k0": o["k0_spread"],
+                "wait_s": float(np.clip(o["life_s"] + (1.0 if o["filled"] else 0.0), *WAIT_CLIP)),
+                "n_amend": int(o["n_amend"]),
+            },
+        )
+        filled = [r for r in sims if r.filled_qty > 0]
+        sgn = side
+        rows.append(
+            {
+                "order_id": o["order_id"],
+                "side": o["side"],
+                "actual_filled": bool(o["filled"]),
+                "actual_fill_s": o["fill_s"],
+                "actual_px": o["fill_px"],
+                "tick": o["tick"],
+                "sim_fill_prob": len(filled) / len(sims) if sims else np.nan,
+                "sim_fill_s": float(
+                    np.median([(r.first_fill_ns - o["submit_ns"]) / 1e9 for r in filled])
+                )
+                if filled
+                else np.nan,
+                "sim_px": float(np.mean([r.avg_px for r in filled])) if filled else np.nan,
+                "away_cancel_frac": float(np.mean([r.end_reason == "away" for r in sims]))
+                if sims
+                else np.nan,
+                "own_filled": bool(own is not None and own.filled_qty > 0),
+                "own_px": own.avg_px if own is not None and own.filled_qty > 0 else np.nan,
+                "own_fill_s": (own.first_fill_ns - o["submit_ns"]) / 1e9
+                if own is not None and own.filled_qty > 0
+                else np.nan,
+            }
+        )
+    v = pd.DataFrame(rows)
+    v["px_bias_ticks"] = (
+        np.where(v["side"] == "Buy", 1, -1) * (v["sim_px"] - v["actual_px"]) / v["tick"]
+    )
+    v["px_bias_pct"] = (
+        np.where(v["side"] == "Buy", 1, -1) * (v["sim_px"] / v["actual_px"] - 1) * 100
+    )
+    v["own_bias_ticks"] = (
+        np.where(v["side"] == "Buy", 1, -1) * (v["own_px"] - v["actual_px"]) / v["tick"]
+    )
+    v["time_bias_s"] = v["sim_fill_s"] - v["actual_fill_s"]
+    v["own_time_bias_s"] = v["own_fill_s"] - v["actual_fill_s"]
+    _ = sgn
+    return v
+
+
+def validation_table(v: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for side, g in [
+        ("全部", v),
+        ("买（开仓）", v[v["side"] == "Buy"]),
+        ("卖（平仓）", v[v["side"] == "Sell"]),
+    ]:
+        a, c = g[g["actual_filled"]], g[~g["actual_filled"]]
+        rows.append(
+            {
+                "方向": side,
+                "订单": len(g),
+                "实际成交率": round(float(g["actual_filled"].mean()), 3),
+                "模拟成交率（抽样期望）": round(float(g["sim_fill_prob"].mean()), 3),
+                "模拟成交率（该单实际参数）": round(float(g["own_filled"].mean()), 3),
+                "实际成交单：模拟也成交（抽样）": round(float(a["sim_fill_prob"].mean()), 3)
+                if len(a)
+                else np.nan,
+                "实际撤单 / 过期：模拟也未成交（抽样）": round(
+                    float(1 - c["sim_fill_prob"].mean()), 3
+                )
+                if len(c)
+                else np.nan,
+                "实际撤单 / 过期：模拟也未成交（实际参数）": round(
+                    float(1 - c["own_filled"].mean()), 3
+                )
+                if len(c)
+                else np.nan,
+                "成交价偏差中位数 tick（抽样，正 = 模拟更差）": round(
+                    float(a["px_bias_ticks"].median()), 2
+                ),
+                "成交价偏差中位数 %（抽样）": round(float(a["px_bias_pct"].median()), 3),
+                "成交价偏差中位数 tick（实际参数）": round(float(a["own_bias_ticks"].median()), 2),
+                "成交耗时偏差中位数 s（抽样）": round(float(a["time_bias_s"].median()), 1),
+                "成交耗时偏差中位数 s（实际参数）": round(float(a["own_time_bias_s"].median()), 1),
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 if __name__ == "__main__":

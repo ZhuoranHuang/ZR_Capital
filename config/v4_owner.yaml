@@ -1,0 +1,21 @@
+# R-041 预登记：所有重跑改用「负责人挂单策略」成交（负责人 2026-10-22 指令，取代已作废的 R-039）。
+# 运行前固定，运行后不改。未写的一律同 config/v4_decisive.yaml（R-033）与 config/v4_h5.yaml（R-034）。
+strategy: config/owner_strategy.yaml     # zr/research/owner_strategy.py 从 D-030 日内单腿订单提取（脚本生成）
+fill_model: {queue_fill_prob: 0.9, lag_s: 2}
+entry: {mode: entry}            # 买入：按策略挂单 / 改价 / 撤单；结束时未成交的张数放弃（错过），记录同一事件吃价差结果
+exit:
+  strategy: [structure, cap, tp]   # 卖出：同一策略（卖出参数），结束时未成交则吃买一
+  cross: [sl, flat]                # 止损类：触发 +2 s 后第一个买一
+  basis: entry_avg_px
+seeds:
+  primary: 0                    # 每个事件的抽样种子 = hash(seed, 决策时刻, 方向, 离场规则)
+  robustness: [1, 2]            # 另跑两个种子，只报告格子均值的范围
+control: taker                  # 吃价差（R-033 口径）并列
+stats:
+  family: "V4 口径 C 36 格 + H5 18 格 + R-040（以本策略重新补登后）全部格子，BH q = 0.10"
+  fdr_q: 0.10
+  sensitivity_conv: A
+sensitivity_0dte: {d001_last_0dte_entry: "16:00", d001_flat_0dte: "15:30"}   # 不入族
+owner:
+  sample: D-030 入选 51 段（决策 = 每张委托提交时刻；开仓按策略入场口径，平仓按策略离场口径）+ calib_sample 纳入的撤单 / 过期开仓限价单（模拟成交后按离场 (c) 管理）
+  late_0dte: BASE_FINAL_AUDIT 第 6 节 10:15 后开仓、规则无合约的 14 段
