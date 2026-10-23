@@ -55,7 +55,8 @@ def simulate_owner(
     rng: np.random.Generator,
     tp_full_single: bool = False,
 ) -> dict | None:
-    """tp_full_single（R-043 第 2 节修正）：入场只成交 1 张时，+20% 即全部卖出（原实现：不减仓）。"""
+    """tp_full_single（R-043 第 2 节修正）：入场只成交 1 张时，+20% 即全部卖出
+    （原实现：不减仓）。"""
     exe, prem = v4["execution"], v4["premium"]
     qty, lag = exe["qty"], int(strat.lag_s * 1e9)
     if dec + lag >= flat:
