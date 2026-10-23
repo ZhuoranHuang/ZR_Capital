@@ -14,9 +14,13 @@ tick 大小按 D-015（zr/execution/ticks）。
 - OPRA 成交价恰好等于挂单价 → 以概率 queue_fill_prob 成交（排队，校准值来自负责人订单），
   数量 ≤ 该笔成交量；
   随机数用固定种子，同一输入结果可复现。
-超时：ladder="reprice" → 改到中间价 ± 1 tick 再等 T 秒，
-仍未全成则剩余部分以对手价成交（+lag 后第一个有效报价）；
-ladder="abandon" → 剩余部分放弃，记为「错过」并返回随后的中间价走势。
+超时（改价阶梯）：
+- ladder="reprice"：改到中间价 ± 1 tick（向对手方向，不越过对手价）再等 T 秒，仍未全成则剩余部分
+  以对手价成交（离场用：一定出得去）；
+- ladder="reprice_abandon"：同样改价再等 T 秒，仍未全成则剩余部分放弃，记为「错过」（入场用）；
+- ladder="abandon"：不改价，T 秒后剩余部分放弃。
+queue_fill_prob 默认 0.9：负责人 264 个挂单段逐段重放的 Brier 最小值
+（docs/research/FILL_MODEL_CALIBRATION.md，zr/research/fill_segments.py）。
 止损类离场用 cross_now：+lag 后第一个有效 bid（卖出）直接成交。
 """
 
@@ -37,7 +41,7 @@ RULES = ("passive", "mid", "aggressive")
 class LimitRule:
     price: str = "mid"
     T: float = 5.0
-    ladder: str = "reprice"  # reprice / abandon
+    ladder: str = "reprice"  # reprice / reprice_abandon / abandon
     queue_fill_prob: float = 0.9
     lag_s: float = 2.0
     seed: int = 0
@@ -92,6 +96,7 @@ class Result:
     missed_qty: float
     stage: str  # limit / reprice / cross / missed
     limit_px: float
+    end_ns: int | None = None  # 挂单结束时刻（最后一段的终点；吃对手价时为成交时刻）
 
 
 def _tick(symbol: str, px: float) -> float:
@@ -200,24 +205,29 @@ def execute(
     end1 = t0 + T if deadline_ns is None else min(t0 + T, deadline_ns)
     fills, left = _rest(book, side, px, t0, end1, qty, rng, rule.queue_fill_prob)
     stage = "limit"
-    if left > 0 and rule.ladder == "reprice":
+    end_last = end1
+    if left > 0 and rule.ladder in ("reprice", "reprice_abandon"):
         i1 = book.asof(end1)
         tick = _tick(symbol, book.mid(i1))
         px2 = _round_passive(book.mid(i1), tick, side) + side * tick
         px2 = min(px2, book.ask[i1]) if side == 1 else max(px2, book.bid[i1])
         end2 = end1 + T if deadline_ns is None else min(end1 + T, deadline_ns)
         f2, left = _rest(book, side, px2, end1, end2, left, rng, rule.queue_fill_prob)
+        end_last = end2
         fills += f2
         stage = "reprice" if f2 else stage
-        if left > 0:
+        if left > 0 and rule.ladder == "reprice":
             c = cross_now(book, side, end2, lag_s=0.0)
             if c is not None:
                 fills.append((c[0], c[1], left))
                 left = 0
                 stage = "cross"
-    missed = left if rule.ladder == "abandon" else 0.0
+                end_last = c[0]
+    missed = left if rule.ladder in ("abandon", "reprice_abandon") else 0.0
     if not fills:
-        return Result(0.0, float("nan"), None, None, missed, "missed", px)
+        return Result(0.0, float("nan"), None, None, missed, "missed", px, end_last)
     q = sum(f[2] for f in fills)
     avg = sum(f[1] * f[2] for f in fills) / q
-    return Result(q, avg, fills[0][0], fills[-1][0], missed, stage, px)
+    if not left:
+        end_last = fills[-1][0]
+    return Result(q, avg, fills[0][0], fills[-1][0], missed, stage, px, end_last)

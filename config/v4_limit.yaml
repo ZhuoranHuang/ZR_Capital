@@ -1,0 +1,33 @@
+# R-039 预登记：V4（H1–H3、H5）在限价成交下重跑 + 负责人日内单腿模拟（feat/fill-model A 节）。
+# 运行前固定，运行后不改。未写的一律同 config/v4_decisive.yaml（R-033）与 config/v4_h5.yaml（R-034）。
+
+fill_model:                 # zr/backtest/fill_limit.py
+  queue_fill_prob: 0.9      # 负责人 264 个挂单段逐段重放 Brier 最小（FILL_MODEL_CALIBRATION.md）
+  lag_s: 2                  # 决策 → 挂单到达
+entry:
+  rules: [passive, mid, aggressive]   # 买一 + 1 tick / 中间价（向己方取整）/ 卖一 − 1 tick；做空（买 put）同为买入
+  T_s: [2, 5, 10]
+  ladder: reprice_abandon   # T 秒未全成 → 改到中间价 + 1 tick 再等 T 秒 → 仍未成交的张数放弃（错过）
+  partial: keep             # 部分成交：持有已成交张数
+exit:
+  limit: [structure, cap, tp]   # 同一挂单规则与 T（卖出镜像），ladder reprice：两段未成交则吃买一
+  cross: [sl, flat]             # 止损类：触发 +2 s 后第一个买一直接成交
+  basis: entry_avg_px           # +20% / −30% 以实际入场均价为基准，判定用 tick 中间价
+missed:
+  counterfactual: taker     # 错过的入场记录 R-033 吃价差口径下同一事件的结果（事后表现）
+stats:
+  primary_conv: C
+  sensitivity_conv: A
+  family: joint_with_R040   # 主检验族 = 口径 C 324 格（9 组挂单 × 36）+ H5 限价 162 格（9 × 18，p = max(p_A, p_C)）
+                            # + R-040 纪律类全部格子；BH q = 0.10，在 R-040 跑完后统一计算；
+                            # R-039 报告里先给本族内（486 格）的 BH 结果作参考
+  fdr_q: 0.10
+  random_baseline: none     # 随机入场对照不在限价口径下重算（沿用 R-033 吃价差口径的分位）
+sensitivity_0dte:           # 不入族：0DTE 不设 10:15 限制、只保留 15:30 前清仓（15:29 触发）
+  d001_last_0dte_entry: "16:00"
+  d001_flat_0dte: "15:30"
+owner:                      # 描述性，不入族
+  sample: D-030 入选 51 段 + 同期撤单 / 过期的开仓限价单
+  entry_decision: 持仓段第一张开仓委托的提交时刻
+  exit_decision: 第一张平仓委托的提交时刻
+  canceled_exit: [X5_higher_low, tp 0.20, sl 0.30, cap 30]   # 撤单机会若模拟成交，按 V4 离场 (c) 管理

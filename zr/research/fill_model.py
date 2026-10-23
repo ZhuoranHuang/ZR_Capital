@@ -228,7 +228,8 @@ def pull_v4_trades(root: Path, und: str = "MU", concurrency: int = 4) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["pull", "pull-v4-trades", "calibrate"])
+    ap.add_argument("cmd", choices=["pull", "pull-v4-trades", "calibrate", "calibrate-orders"])
+    ap.add_argument("--und", default="MU", help="pull-v4-trades 的标的")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     root = get_settings().zr_data_root
@@ -237,8 +238,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "pull":
         log.info("拉取：%s", pull(root, s))
     elif args.cmd == "pull-v4-trades":
-        log.info("V4 成交拉取：%s", pull_v4_trades(root))
-    elif args.cmd == "calibrate":
+        log.info("V4 成交拉取：%s", pull_v4_trades(root, args.und))
+    elif args.cmd == "calibrate":  # 按挂单段的校准与报告（取代原按订单的版本）
+        from zr.research import fill_segments
+
+        return fill_segments.main()
+    elif args.cmd == "calibrate-orders":
         f = order_features(root, s)
         coef, tab = fit_fill_prob(f)
         store = root / "research" / "fill_model"
@@ -247,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
         head = ["# 限价单成交模型校准（负责人订单，feat/fill-model 第 1 节）", "",
                 f"生成：{dt.datetime.now(dt.UTC).isoformat(timespec='seconds')} UTC · 复现 "
                 "`uv run python -m zr.research.fill_model pull` → `calibrate`", ""]
-        out = REPO / "docs" / "research" / "FILL_MODEL_CALIBRATION.md"
+        out = REPO / "docs" / "research" / "FILL_MODEL_ORDER_LEVEL.md"
         out.write_text("\n".join(head + report_calibration(f, coef, tab)), encoding="utf-8")
         log.info("写入 %s", out)
     return 0
