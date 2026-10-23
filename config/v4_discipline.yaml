@@ -1,7 +1,8 @@
 # R-040 预登记：纪律类规则（feat/fill-model B 节）。运行前固定，运行后不改。
-# 成交一律用校准后的限价模型（config/v4_limit.yaml 的 fill_model），挂单组固定为 mid、T = 5 s
-# （A 节 9 组的中间一组；在看到 A 节 V4 限价格子结果之前选定）。止损类离场直接按 +2 s 后第一个买一。
-fill: {price: mid, T_s: 5}
+# 补登（2026-10-22，运行前）：R-039 已作废，成交改用 R-041 的负责人挂单策略（config/v4_owner.yaml，
+# 种子 0；入场按策略入场口径、(a)(c) 离场按策略离场口径），止损类离场直接按 +2 s 后第一个买一。
+# 原登记的 mid、T = 5 s 作废。
+fill: {model: owner_strategy, seed: 0}
 tight:                           # 三类紧止损（多头；空头镜像）
   a_adverse_bar: true            # 入场后第一根收盘逆向的 2 分钟 K（多头 收盘 < 开盘；空头 收盘 > 开盘，口径 C 正股 K）收盘即离场
   b_premium_sl: [0.10, 0.15]     # 权利金止损 −10% / −15%（tick 中间价 ≤ 入场均价 ×（1 − x）），替代 −30%
@@ -19,5 +20,5 @@ confluence:                      # B3：事先写死的共振规则，口径 C 2
   exit: a_adverse_bar            # 只用离场 (a) + 强平；不叠加 +20% / −30% / 30 分钟
   guards: v4                     # 时间窗、禁 RANGE、禁逆向点火同 R-033；合约 0/1 DTE 同 R-033
   cells: "[MU, QQQ] × [long, short]"   # 4 格；口径 A 另报
-family:                          # 与 R-039 合为一族：324 + 162 + B1 5 + B2 120 + B3 4 = 615 格，BH q = 0.10
+family:                          # 补登：与 R-041 合为一族：V4 36 + H5 18 + B1 5 + B2 120 + B3 4 = 183 格，BH q = 0.10
   fdr_q: 0.10

@@ -234,6 +234,7 @@ def main() -> int:
     v = validate(root, f, strat)
     v.to_parquet(store / "owner_strategy_validation.parquet", index=False)
     print(validation_table(v).T.to_string())
+    report(root)
     return 0
 
 
@@ -367,6 +368,186 @@ def validation_table(v: pd.DataFrame) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
+
+
+# ---------------- 报告 ----------------
+
+OUT = REPO / "docs" / "research" / "FILL_MODEL_CALIBRATION.md"
+
+
+def _dist(x: pd.Series) -> str:
+    x = pd.to_numeric(x, errors="coerce").dropna()
+    if not len(x):
+        return "—"
+    q = x.quantile([0.1, 0.25, 0.5, 0.75, 0.9]).round(2).tolist()
+    return f"P10 {q[0]} / P25 {q[1]} / 中位 {q[2]} / P75 {q[3]} / P90 {q[4]}（n={len(x)}）"
+
+
+def report(root: Path) -> None:
+    from zr.ops.markdown import df_to_md
+    from zr.research.calib_sample import classify
+
+    store = root / "research" / "fill_model"
+    f = pd.read_parquet(store / "owner_order_strategy.parquet")
+    a = pd.read_parquet(store / "owner_amendments.parquet")
+    v = pd.read_parquet(store / "owner_strategy_validation.parquet")
+    seg = pd.read_parquet(store / "owner_segments.parquet")
+    p = yaml.safe_load(STRAT.read_text(encoding="utf-8"))
+    h = fs.load_history(root)
+    cl = classify(root)
+    cls = cl.groupby(["group", "side", "class"]).size().reset_index(name="订单数")
+    unk = int(cl["class"].str.startswith("无法判断").sum())
+    feat_rows = []
+    for side, g in (("买（开仓）", f[f["side"] == "Buy"]), ("卖（平仓）", f[f["side"] == "Sell"])):
+        for col, name in (
+            ("vs_bid_ticks", "挂单价 − 买一（tick，按方向）"),
+            ("vs_ask_ticks", "挂单价 − 卖一（tick，按方向）"),
+            ("vs_mid_ticks", "挂单价 − 中间价（tick，按方向）"),
+            ("vs_last_ticks", "挂单价 − 最新成交价（tick，按方向）"),
+            ("k0_spread", "挂单位置（相对中间价，spread 倍数）"),
+            ("spread_ticks", "提交时 spread（tick）"),
+            ("fill_s", "提交 → 首笔成交（秒，已成交）"),
+            ("life_s", "提交 → 成交完 / 撤单 / 过期（秒）"),
+            ("n_amend", "改价次数"),
+            ("first_amend_s", "提交 → 首次改价（秒）"),
+            ("und_chg_pct", "提交 → 首笔成交 正股变化 %"),
+            ("und_chg_dir_pct", "同上，按期权方向（看涨 +、看跌 −）"),
+        ):
+            feat_rows.append({"方向": side, "量": name, "分布": _dist(g[col])})
+    for side, g in (("买（开仓）", a[a["side"] == "Buy"]), ("卖（平仓）", a[a["side"] == "Sell"])):
+        feat_rows.append({"方向": side, "量": "改价间隔（秒）", "分布": _dist(g["interval_s"])})
+        feat_rows.append(
+            {
+                "方向": side,
+                "量": "改价幅度（tick，正 = 向对手方向）",
+                "分布": _dist(g["step_ticks"]),
+            }
+        )
+    c = f[~f["filled"]]
+    feat_rows.append(
+        {
+            "方向": "全部",
+            "量": "撤单 / 过期时中间价跑开（tick，按方向）",
+            "分布": _dist(c["away_at_cancel_ticks"]),
+        }
+    )
+    fillpos = (
+        f.assign(位置=pd.cut(f["k0_spread"], [-99, -2, -1, -0.5, 0, 0.5, 99]))
+        .groupby(["side", "位置"], observed=True)["filled"]
+        .agg(订单数="size", 成交率="mean")
+        .round(3)
+        .reset_index()
+    )
+    strat_rows = []
+    for side in ("Buy", "Sell"):
+        x = p[side]
+        strat_rows.append(
+            {
+                "方向": "买（开仓）" if side == "Buy" else "卖（平仓）",
+                "订单数": x["n_orders"],
+                "初始位置 k0 分位（P10/25/50/75/90）": x["k0_spread_quantiles"],
+                "等待时长 W 分位（截到 5–120 s）": x["wait_s_quantiles"],
+                "改价次数分位": x["amend_count_quantiles"],
+                "改价间隔中位数 s": x["amend_interval_s"],
+                "改价幅度（a + b × 跑开 tick）": f"{x.get('chase_a')} + {x.get('chase_b')} × 跑开",
+                "撤单：跑开 ≥ tick": x["cancel_away_ticks"],
+                "实际成交率": x["fill_rate"],
+            }
+        )
+    cq = fs.calibrate_q(seg)
+    kb, ks = p["Buy"]["k0_spread_quantiles"], p["Sell"]["k0_spread_quantiles"]
+    lines = [
+        "# 成交模型校准：负责人挂单策略",
+        "",
+        "复现：`uv run python -m zr.research.fill_segments` → `uv run python -m zr.research.own"
+        "er_strategy`"
+        "（行情缓存 `zr.research.fill_model pull`；改价历史在 VPS 上由 `scripts/diag_pull_order"
+        "_history.py` 拉取）。"
+        "本版取代 R-039 的「固定挂单价 × 固定 T」（已作废）。",
+        "",
+        "## 1. 样本（只用 D-030 日内单腿的订单）",
+        "",
+        f"- 改价历史：{len(h)} 行 / {h['order_id'].nunique()} 单，改价（Replaced）记录 "
+        f"{int((h['status'] == 'Replaced').sum())} 条（2026-10-22 VPS 拉取，无需重拉）。",
+        f"- 校准样本 {int(cl['calib'].sum())} 单纳入、{int((~cl['calib']).sum())} 单不纳入，其中"
+        "**无法判断归属的撤单 "
+        f"{unk} 单**（单列，不纳入）。判定规则见 `zr/research/calib_sample.py`（长期合约 = 提交日"
+        " DTE > 7，沿用 D-029）。",
+        f"- 纳入的订单中限价单（LO）进入特征与策略：{len(f)} 单（市价单与触价单不进，盘前提交的 "
+        f"{int(f['premarket_submit'].sum())} 单以 09:30 为决策时刻、不进策略参数）。",
+        "",
+        df_to_md(cls),
+        "",
+        "## 2. 逐单特征（决策时刻 = 委托提交时刻）",
+        "",
+        "tick 差按方向：正 = 比参照价更靠近对手价（买单更高、卖单更低）。最新成交价 = 提交前最后"
+        "一笔 OPRA 成交。"
+        "正股变化只覆盖 MU、QQQ（本地有 1 分钟 K）。",
+        "",
+        df_to_md(pd.DataFrame(feat_rows)),
+        "",
+        "按初始挂单位置的最终成交率：",
+        "",
+        df_to_md(fillpos),
+        "",
+        "## 3. 负责人挂单策略（参数化，`config/owner_strategy.yaml`，脚本生成）",
+        "",
+        df_to_md(pd.DataFrame(strat_rows)),
+        "",
+        f"改价「追价」拟合（买卖合并，{p['chase_fit']['chase_n']} 次改价）：幅度 = "
+        f"{p['chase_fit']['chase_a']} + {p['chase_fit']['chase_b']} × 上次挂单以来中间价朝对手方"
+        "向移动的 tick，"
+        f"相关系数 {p['chase_fit']['chase_corr']}。",
+        "",
+        f"读法：负责人开仓买单的初始挂单位置中位数为中间价 {kb[2]:+.2f} 个 spread"
+        f"（P25 {kb[1]:+.2f}，−0.5 即买一），平仓卖单中位数 {ks[2]:+.2f}；"
+        f"开仓买单最终成交率 {p['Buy']['fill_rate']:.0%}、平仓卖单 {p['Sell']['fill_rate']:.0%}。",
+        "",
+        "模拟时（`zr/backtest/owner_fill.py`）：每单从上述经验分布抽样 k0、等待时长 W（截到 5–1"
+        "20 秒）、改价次数；"
+        "每隔改价间隔中位数改一次价（追价幅度按拟合）；中间价跑开 ≥ 撤单阈值或等满 W 秒即结束——"
+        "入场放弃（错过），"
+        "离场吃买一；止损与强平直接吃买一。成交判定：卖一 ≤ 挂单价、OPRA 成交越过挂单价、恰好等"
+        "于时以 q 成交。",
+        "",
+        "## 4. 成交判定参数 q（挂单段逐段重放，同一校准样本）",
+        "",
+        df_to_md(cq.assign(**{"逐段 Brier": cq["逐段 Brier"].map("{:.4f}".format)})),
+        "",
+        f"取 q = {Q_CAL}（Brier 最小）。OPRA 数据含负责人自己的成交，「实际成交 → 模拟也成交」偏"
+        "乐观；"
+        "去掉自己那一笔后的值是下界。",
+        "",
+        "## 5. 验证：从负责人提交时刻重放全部校准样本限价单",
+        "",
+        f"每单抽样 {N_SEEDS} 次（委托在提交时刻到达；一律按入场口径——等满或跑开即撤单），"
+        "并用「该单实际参数」（实际 k0、实际时长截到 5–120 秒、实际改价次数）各跑一次。",
+        "",
+        df_to_md(validation_table(v).T.reset_index().rename(columns={"index": "指标"})),
+        "",
+        "结论：",
+        "",
+        "- 成交判定本身（同一挂单价与时长）与真实记录一致：实际参数下，两边都成交的单子成交价与"
+        "耗时偏差中位数为 0；"
+        "实际撤单的单子在模拟中也全部未成交。",
+        "- 与情境无关的抽样策略成交率远低于负责人（见上表）：负责人把单子挂在哪里、挂多久，与当"
+        "时行情相关"
+        "（挂得远的单子常常等到价格过来），这部分信息无法由独立抽样复现。截到 120 秒也减少了成交"
+        f"（负责人 120 秒内成交的比例为 {float(((f['fill_s'] <= 120) & f['filled']).mean()):.1%}"
+        "，全部时长为 "
+        f"{float(f['filled'].mean()):.1%}）。",
+        "",
+        "## 边界",
+        "",
+        "- 负责人 2026-06-09～2026-08-19 的期权限价单，D-030 日内单腿口径；117 单，以 MU 为主；"
+        "不外推到其他标的、"
+        "其他时期或其他人。",
+        "- 改价历史时刻为整秒；排队位置不可观测（q 合成）；ThetaData 盘口量只在负责人订单缓存里"
+        "有（V4 缓存无量）。",
+        "- 策略参数在同一样本上提取与验证（样本内）。",
+        "",
+    ]
+    OUT.write_text("\n".join(lines), encoding="utf-8")
 
 
 if __name__ == "__main__":

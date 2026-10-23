@@ -1,4 +1,7 @@
-"""R-039：V4 H1–H3（与 H5 阈值）在限价成交模型下重跑（config/v4_limit.yaml）。
+"""【R-039 已作废（负责人 2026-10-22 指令）：固定挂单价 × 固定 T 的口径不再使用。】本模块只保留
+load_book / greedy_attempts / cells / 费用等公共函数供 R-041（zr/research/v4_owner.py）复用。
+
+原说明：R-039：V4 H1–H3（与 H5 阈值）在限价成交模型下重跑（config/v4_limit.yaml）。
 
 每个 H1–H3 信号事件（R-033 的 build_events：护栏、0/1 DTE 合约、强平时刻都不变）× 9 组挂单
 （买一 + 1 tick / 中间价 / 卖一 − 1 tick × T ∈ {2, 5, 10} 秒）× 所需结构离场规则，逐笔模拟：
