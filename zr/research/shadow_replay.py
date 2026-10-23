@@ -179,9 +179,29 @@ def net_usd(p: Position) -> float:
     return cash
 
 
+def window_start(root: Path, day: dt.date) -> pd.Timestamp:
+    """回放起点：WINDOWS 里登记过的日子用登记值；否则 = 录制器当日第一笔 MU.US 成交的接收时刻
+    向上取整到 2 分钟分箱（第一个完整分箱）。"""
+    if day in WINDOWS:
+        return pd.Timestamp(f"{day} {WINDOWS[day]}", tz=ET).tz_convert("UTC")
+    base = root / "recorder" / f"date={day}" / "underlying=MU"
+    first = min(
+        int(
+            pd.read_parquet(f, columns=["recv_ts_utc_ns", "symbol"])
+            .query("symbol == 'MU.US'")["recv_ts_utc_ns"]
+            .min()
+        )
+        for f in sorted(glob.glob(str(base / "trade_*.parquet")))[:5]
+    )
+    p = 120_000_000_000
+    return pd.Timestamp(first - first % p + p, tz="UTC")
+
+
 def shadow_day(root: Path, day: dt.date, v4: dict, cfg: dict, official: pd.DataFrame):
-    start = pd.Timestamp(f"{day} {WINDOWS[day]}", tz=ET).tz_convert("UTC")
-    end = pd.Timestamp(f"{day} 16:00", tz=ET).tz_convert("UTC")
+    from zr.data.calendar import session_close
+
+    start = window_start(root, day)
+    end = pd.Timestamp(dt.datetime.combine(day, session_close(day)), tz=ET).tz_convert("UTC")
     seed = official[(official.index >= SEED_FROM) & (official.index < start)]
     w = max(1, round(bars_per_day(seed)))
     eng = IncrementalEngine(cfg, v4, w, {day})
@@ -390,12 +410,12 @@ def compare_trades(sh: pd.DataFrame, ba: pd.DataFrame) -> pd.DataFrame:
     return j
 
 
-def run(root: Path) -> dict:
+def run(root: Path, days=None) -> dict:
     v4 = v4d.load_v4()
     cfg = v4d.state_cfg(v4, "C")
     official = load_official(root)
     out = {}
-    for day in WINDOWS:
+    for day in days or WINDOWS:
         inc, sh, late, quotes, chain, start, end = shadow_day(root, day, v4, cfg, official)
         per_bar, ba = batch_day(day, v4, cfg, official, quotes, chain, start, end)
         j = inc.join(
