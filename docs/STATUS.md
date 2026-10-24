@@ -23,6 +23,8 @@
 
 ## 进行中
 
+- **数据补齐（data/backfill-all，2026-10-25 起）**：`zr/data/backfill_all.py` + `scripts/backfill_night.sh` + launchd `com.zr.backfill-night`（每 30 分钟触发，只在新加坡时间 22:00–08:00 运行，单实例锁，断点续传，06:00 后先做每日增量）。优先级 p1 MU 期权逐笔 2026-04-29～10-21 → p2 MU 2025-01～2026-04-28 → p3a QQQ 秒级正股价 / p3b QQQ 期权逐笔 → p4 SPY 1 分钟 → p5 长桥日线（VPS 只读）。进度 `$ZR_DATA_ROOT/logs/backfill_progress.log`，总表 `$ZR_DATA_ROOT/reports/DATA_INVENTORY_BACKFILL.md`。拉取期间不跑研究任务。
+
 - **案例图（viz/case-charts，2026-10-25）**：owner_rule_2 + R-052 出场的 20 笔正股视角案例（MU 2026-04-28 盈 5 亏 5；QQQ 2026-10-19～21 盈 5 亏 5，QQQ 用 1 分钟 K 与 1 分钟期权报价复现），`docs/research/cases/index.html`、`CASES_README.md`。
 
 - **2026-10-24 本轮（feat/owner-entry-mining，早报 `docs/MORNING_BRIEF_2026-10-25.md`）**：入场挖掘 OWNER_ENTRY_MINING.md（520 个方向化特征，截断检验 0 不一致；单特征 0 个通过 BH；模型留一日 AUC 0.46–0.57、置换 p ≥ 0.17；候选规则的搜索流程留一日不成立）；R-049 OWNER_RULES_OOS.md（正股层 10 格通过 BH 但超额 ≤ 0.141% 扣费前；期权层只用 2025-01-02～2026-04-28 的 330 天，26 格全负、0 格通过）；出场挖掘 exit_mining（盈利段卖出时点可区分，HGB 留一日 AUC 0.848、置换 p 0.005（200 次）；挖出的出场规则替换负责人 48 笔真实出场全部更差）；R-052 EXIT_FINALIZE.md（+6.5% / −30% / 30 分钟；套到规则 16 格全负）；R-042 SKILL_VS_LUCK.md（负责人 46 笔扣费后合计在同日随机入场分布的 96–100 分位）；调研规则正股模拟 SURVEY_STOCK_SIM.md（10 万美元：ORB 原版 +35.9%，买入持有 MU +1013.1%）。ThetaData 期权预取于 2026-10-24 17:09 SGT 按负责人指令中止（本机到 ThetaData 往返 ≈256 ms、丢包 10%），2026-04-29 之后无期权逐笔缓存。
