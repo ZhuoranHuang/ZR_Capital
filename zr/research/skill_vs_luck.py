@@ -173,12 +173,13 @@ def one_draw(root: Path, eps: list[dict], holds: np.ndarray, draw: int, random_d
         right = "call" if d == 1 else "put"
         K = strike_at(D.strikes[e["expiry"]], float(D.S[k]), e["n_steps"], right)
         cap = float(rng.choice(holds))
-        pnl = (
-            None
+        pnl, filled = (
+            (None, False)
             if K is None
             else trade(D, lb_symbol("MU", e["expiry"], right, K), k, e["qty"], cap, rng)
         )
         tot[e["group"]] += 0.0 if pnl is None else pnl
+        tot[f"fill_{e['group']}"] += int(filled)
     return tot
 
 
@@ -192,6 +193,7 @@ def owner_same_engine(root: Path, eps: list[dict], days: dict) -> dict:
         hold = (max(e["sells"]) - e["entry_ns"]) / NS / 60
         pnl, filled = trade(D, e["symbol"], e["k"], e["qty"], hold, rng)
         tot[e["group"]] += 0.0 if pnl is None else pnl
+        tot[f"fill_{e['group']}"] += int(filled)
         tot[f"fill_{e['group']}"] += int(filled)
     return tot
 
