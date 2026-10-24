@@ -531,7 +531,8 @@ def run_day(
             cand["signal"] = int(t[j[0]]) if len(j) else big
         reason = min(cand, key=cand.get)
         x_order = ex.get("order", {"mode": "taker"})
-        if reason in ("sl", "flat"):
+        if reason == "flat" or (reason == "sl" and ex.get("sl_order") != "same"):
+            # 清仓吃买一；止损默认吃买一，exit.sl_order: same 时按离场挂单方式卖（R-052）
             x_order = {"mode": "taker", "lag_s": x_order.get("lag_s", 2.0)}
         xn, xpx, xt, _ = place(bk, -1, n, cand[reason], x_order, sym, q, flat, rng, pi)
         if xn < n:  # 离场挂单没成交完：剩余吃买一
