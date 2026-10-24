@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 数据补齐后台循环（替代 launchd：launchd 启动的进程没有外接盘访问权限，见 STATUS）。
 # 从已获得磁盘权限的终端会话启动：nohup bash scripts/backfill_loop.sh >/dev/null 2>&1 &
-# 每 30 分钟调用 scripts/backfill_night.sh（它自己只在新加坡时间 22:00–08:00 运行、单实例锁）；
+# 每 30 分钟调用 scripts/backfill_night.sh（全天运行、单实例锁、断点续传）；
 # 全部补齐完成（backfill_state/ALL_DONE）后发一次 macOS 通知。本循环单实例（pid 文件）。重启后需重新启动。
 set -uo pipefail
 cd "$(dirname "$0")/.."

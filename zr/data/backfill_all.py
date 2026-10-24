@@ -1,8 +1,8 @@
 # ruff: noqa: E501  （内嵌在 VPS 上执行的脚本与中文说明为长行）
 """数据补齐调度（负责人 2026-10-25 指令，分支 data/backfill-all）。
 
-由 scripts/backfill_night.sh 在新加坡时间 22:00–次日 08:00 调用（launchd 每 30 分钟触发，单实例锁）；
-每次运行到 --until（默认当晚 08:00 SGT）为止，所有任务按交易日断点续传（完成标记
+由 scripts/backfill_loop.sh → scripts/backfill_night.sh 调用（全天运行，单实例锁；负责人 2026-10-25 取消
+22:00–08:00 时间窗）；--until 可选截止，所有任务按交易日断点续传（完成标记
 $ZR_DATA_ROOT/backfill_state/<任务>/<日>.done），每完成一个交易日写一行进度
 （$ZR_DATA_ROOT/logs/backfill_progress.log）。
 
@@ -64,6 +64,15 @@ TASKS = {
     "p5": {},
 }
 DAILY_SYMBOLS = ("MU.US", "QQQ.US", "SPY.US", "SMH.US")
+ORDER = ("p1", "p3a", "p4", "p5", "p2", "p3b")  # 负责人 2026-10-25 调整后的优先级
+NAMES = {
+    "p1": "MU 期权逐笔 2026-04-29～10-21",
+    "p3a": "QQQ 秒级正股价 2025-01～2026-10",
+    "p4": "SPY 期权 1 分钟 2024-07～2026-10",
+    "p5": "长桥日线（前复权 / 不复权）",
+    "p2": "MU 期权逐笔 2025-01～2026-04-28",
+    "p3b": "QQQ 期权逐笔 2025-01～2026-10",
+}
 
 
 class Deadline(Exception):
@@ -197,6 +206,8 @@ def run_ticks(root: Path, task: str, deadline: float) -> None:
         if r["status"] in ("ok", "nobars", "nochain"):
             (sd / f"{day}.done").write_text(json.dumps(r, ensure_ascii=False), encoding="utf-8")
         progress(root, f"{task} {cfg['und']} {day} {r} {time.time() - t0:.0f}s")
+        write_progress(root)
+        daily(root, deadline)
 
 
 # ---------------- QQQ 秒级正股价 ----------------
@@ -216,6 +227,8 @@ def run_parity(root: Path, task: str, deadline: float) -> None:
         if exists:
             (sd / f"{day}.done").write_text(json.dumps(row or {}, default=str), encoding="utf-8")
         progress(root, f"{task} {cfg['und']} {day} {row} {time.time() - t0:.0f}s")
+        write_progress(root)
+        daily(root, deadline)
 
 
 # ---------------- SPY 1 分钟 ----------------
@@ -250,6 +263,8 @@ def run_spy_1m(root: Path, task: str, deadline: float) -> None:
             if rc == 0:
                 (sd / f"{key}.done").write_text("ok", encoding="utf-8")
             progress(root, f"{task} SPY {a}～{b} rc={rc} {time.time() - t0:.0f}s")
+            write_progress(root)
+            daily(root, deadline)
         m = (pd.Timestamp(m) - pd.DateOffset(months=1)).date()
 
 
@@ -328,7 +343,7 @@ def last_session(now_et: pd.Timestamp) -> dt.date:
 
 def daily(root: Path, deadline: float) -> None:
     now = dt.datetime.now(SGT)
-    if now.hour < 6 or now.hour >= 22:
+    if now.hour < 6:  # 美股收盘（04:00 / 05:00 SGT）后，新加坡时间 06:00 起做前一交易日
         return
     day = last_session(pd.Timestamp.now(tz=ET))
     sd = state_dir(root, "daily")
@@ -473,10 +488,83 @@ def inventory(root: Path) -> str:
         + "\n\n缺口 = 目标区间内的交易日中没有文件的天数（期权逐笔按「当日有任一合约文件」计，不检查合约是否齐全；"
         "合约级完成情况见 backfill_state/）。\n"
     )
+    txt += "\n" + write_progress(root)
     out = root / "reports" / "DATA_INVENTORY_BACKFILL.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(txt, encoding="utf-8")
     return txt
+
+
+def units(root: Path, task: str) -> tuple[int, int]:
+    """(已完成, 总数)：p1 / p2 / p3a / p3b 按交易日，p4 按月，p5 按「今天是否已刷新」。"""
+    cfg = TASKS[task]
+    done = {f.stem for f in state_dir(root, task).glob("*.done")}
+    if task == "p5":
+        return int(f"{dt.datetime.now(SGT):%Y-%m-%d}" in done), 1
+    if task == "p4":
+        months = pd.period_range(cfg["to"], cfg["from"], freq="M")
+        return sum(f"{m.start_time:%Y-%m}" in done for m in months), len(months)
+    want = trading_days(cfg["to"], cfg["from"])
+    return sum(str(d) in done for d in want), len(want)
+
+
+def _avg_secs(root: Path, task: str, n: int = 20) -> float | None:
+    p = root / "logs" / "backfill_progress.log"
+    if not p.exists():
+        return None
+    xs = [
+        float(m.group(1))
+        for line in p.read_text(encoding="utf-8").splitlines()
+        if f"  {task} " in line and (m := re.search(r" (\d+)s$", line))
+    ]
+    return sum(xs[-n:]) / len(xs[-n:]) if xs else None
+
+
+def write_progress(root: Path) -> str:
+    """各优先级进度与按当前速度（最近 20 个单位的平均耗时）的预计完成时间，顺序累加。"""
+    rows, t_acc = [], time.time()
+    for t in ORDER:
+        d, n = units(root, t)
+        avg = _avg_secs(root, t)
+        left = n - d
+        eta = "已完成" if left == 0 else "—"
+        if left and avg:
+            t_acc += left * avg
+            eta = f"{dt.datetime.fromtimestamp(t_acc, SGT):%Y-%m-%d %H:%M}"
+        rows.append(
+            {
+                "优先级": t,
+                "内容": NAMES[t],
+                "完成 / 总数": f"{d} / {n}",
+                "平均耗时 / 单位（秒）": round(avg, 0) if avg else "—",
+                "预计完成（SGT，按顺序累加）": eta,
+            }
+        )
+    from zr.ops.markdown import df_to_md
+
+    txt = (
+        f"## 补齐进度（{dt.datetime.now(SGT):%Y-%m-%d %H:%M} SGT 更新）\n\n"
+        + df_to_md(pd.DataFrame(rows))
+        + "\n\n单位：p1 / p2 / p3a / p3b = 交易日，p4 = 月，p5 = 当日刷新。预计时间按各项最近 20 个单位的平均耗时"
+        "顺序累加；无历史耗时的项目显示「—」。\n"
+    )
+    out = root / "reports" / "BACKFILL_PROGRESS.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(txt, encoding="utf-8")
+    return txt
+
+
+def notify_if_complete(root: Path, task: str) -> None:
+    d, n = units(root, task)
+    mark = state_dir(root, task) / "NOTIFIED"
+    if task == "p5" or d < n or mark.exists():
+        return
+    msg = f"数据补齐 {task}（{NAMES[task]}）完成：{d} / {n}"
+    subprocess.run(
+        ["osascript", "-e", f'display notification "{msg}" with title "ZR Capital"'], check=False
+    )
+    mark.write_text(f"{dt.datetime.now(SGT):%Y-%m-%d %H:%M}", encoding="utf-8")
+    progress(root, f"通知：{msg}")
 
 
 def status(root: Path) -> str:
@@ -503,7 +591,7 @@ def status(root: Path) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--until", default="08:00", help="新加坡时间 HH:MM（跨午夜按次日）")
+    ap.add_argument("--until", default=None, help="新加坡时间 HH:MM（跨午夜按次日）；默认不设截止")
     ap.add_argument("--only", default=None)
     ap.add_argument("--inventory", action="store_true")
     ap.add_argument("--status", action="store_true")
@@ -517,13 +605,16 @@ def main(argv: list[str] | None = None) -> int:
         print(status(root))
         return 0
     now = dt.datetime.now(SGT)
-    h, m = map(int, args.until.split(":"))
-    end = now.replace(hour=h, minute=m, second=0, microsecond=0)
-    if end <= now:
-        end += dt.timedelta(days=1)
+    if args.until:
+        h, m = map(int, args.until.split(":"))
+        end = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if end <= now:
+            end += dt.timedelta(days=1)
+    else:
+        end = now + dt.timedelta(days=3650)
     deadline = end.timestamp()
     probe(root)
-    tasks = args.only.split(",") if args.only else ["p5", "p1", "p2", "p3a", "p3b", "p4"]
+    tasks = args.only.split(",") if args.only else list(ORDER)
     runners = {
         "p1": run_ticks,
         "p2": run_ticks,
@@ -536,6 +627,8 @@ def main(argv: list[str] | None = None) -> int:
         daily(root, deadline)
         for t in tasks:
             runners[t](root, t, deadline)
+            notify_if_complete(root, t)
+            write_progress(root)
             daily(root, deadline)
         progress(root, "本轮全部任务完成")
         if not args.only:  # 全部优先级都已跑完（未到截止时间）→ 完成标记，供后台循环发通知

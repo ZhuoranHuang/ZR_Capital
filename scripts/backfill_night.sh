@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 数据补齐夜间调度（zr/data/backfill_all.py）。launchd 每 30 分钟调用（deploy/launchd/com.zr.backfill-night.plist）；
-# 只在新加坡时间 22:00–次日 08:00 运行，白天直接退出；单实例（pid 锁）；Theta Terminal 未运行时自动启动。
+# 全天运行（负责人 2026-10-25 取消时间窗）；单实例（pid 锁）；Theta Terminal 未运行时自动启动。
 # 每日增量（新加坡时间 06:00 后）由 backfill_all 在同一进程里先做。手动：bash scripts/backfill_night.sh --now
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -9,10 +9,6 @@ source scripts/lib/data_root.sh
 zr_resolve_data_root || exit 1
 
 UV="${UV:-$HOME/.local/bin/uv}"
-H="$(TZ=Asia/Singapore date +%H)"
-if [ "${1:-}" != "--now" ] && [ "$((10#$H))" -ge 8 ] && [ "$((10#$H))" -lt 22 ]; then
-    exit 0
-fi
 LOG_DIR="$ZR_DATA_ROOT/logs"
 LOCK="$LOG_DIR/backfill.lock"
 mkdir -p "$LOG_DIR"
@@ -36,5 +32,5 @@ if ! up; then
     up || { log "Theta Terminal 仍未响应，退出（下次再试）"; exit 1; }
 fi
 log "开始"
-"$UV" run --no-sync python -m zr.data.backfill_all --until 08:00
+"$UV" run --no-sync python -m zr.data.backfill_all
 log "结束 rc=$?"
