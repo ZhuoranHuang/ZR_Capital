@@ -194,6 +194,7 @@ class OptionData:
         self.client = ThetaClient(concurrency=concurrency)
         self._exps: list[dt.date] = []
         self._strikes: dict[dt.date, np.ndarray] = {}
+        self._books: dict = {}  # (合约, 日, 缓存文件) → Book
 
     def expirations(self) -> list[dt.date]:
         if not self._exps:
@@ -259,6 +260,15 @@ class OptionData:
         qf = sorted(base.glob(f"{sym}_*.parquet"))
         if not qf:
             return None
+        key = (sym, day, tuple(f.name for f in qf))
+        if key in self._books:
+            return self._books[key]
+        if len(self._books) > 64:
+            self._books.clear()
+        self._books[key] = self._load_book(qf, base, day)
+        return self._books[key]
+
+    def _load_book(self, qf: list, base: Path, day: dt.date) -> Book | None:
         q = pd.concat([pd.read_parquet(f) for f in qf], ignore_index=True).drop_duplicates()
         q = q[(q["ask"] > 0) & (q["bid"] > 0) & (q["ask"] >= q["bid"])]
         if q.empty:
