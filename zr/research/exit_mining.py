@@ -267,13 +267,18 @@ def fires(rule: dict, cols: dict[str, np.ndarray], start: int, stop: int) -> int
         if k is None or k >= cap:
             return start + cap if start + cap < stop else None
         return start + k
-    ok = np.ones(stop - start, bool)
-    for name, op, v in rule["conds"]:
-        x = cols[name][start:stop]
-        with np.errstate(invalid="ignore"):
-            ok &= (x >= v) if op == ">=" else (x <= v)
-    h = np.flatnonzero(ok)
-    return start + int(h[0]) if len(h) else None
+    groups = rule.get("any") or [rule["conds"]]  # 任一组条件全部成立即出场（止盈组 或 止损组）
+    best = None
+    for conds in groups:
+        ok = np.ones(stop - start, bool)
+        for name, op, v in conds:
+            x = cols[name][start:stop]
+            with np.errstate(invalid="ignore"):
+                ok &= (x >= v) if op == ">=" else (x <= v)
+        h = np.flatnonzero(ok)
+        if len(h) and (best is None or h[0] < best):
+            best = int(h[0])
+    return None if best is None else start + best
 
 
 def candidates(s: pd.DataFrame, uni: pd.DataFrame, k: int = 6) -> pd.DataFrame:
@@ -340,7 +345,7 @@ def replace(root: Path, rules: list[dict], seed: int = 0) -> pd.DataFrame:
     od = ib.OptionData(root, "MU")
     strat_rng = np.random.default_rng(seed)
     out = []
-    need = {c[0] for r in rules if "conds" in r for c in r["conds"] if c[0] not in STATE}
+    need = {c[0] for r in rules for c in r.get("conds", []) if c[0] not in STATE}
     for day in sorted({e["day"] for e in eps}):
         d = ef.load_day(ctx, day)
         fams = tuple(sorted({ef.family_of(n) for n in need})) or ("cal",)
@@ -423,10 +428,22 @@ def main(argv: list[str] | None = None) -> int:
     if "models" in stages:
         models(s, cols, args.jobs).to_parquet(st / "models.parquet", index=False)
     if "rules" in stages:
-        uni = pd.read_parquet(st / "uni_ALL.parquet")
-        c = candidates(s, uni)
-        c.to_pickle(st / "candidates.pkl")
-        rules = pick(c)
+        # 盈利段与亏损段分开挖：止盈组来自盈利段的卖出，止损组来自亏损段的卖出；规则 = 两组任一成立
+        cw = candidates(s[s["win"]], pd.read_parquet(st / "uni_W.parquet"))
+        cl = candidates(s[~s["win"]], pd.read_parquet(st / "uni_L.parquet"))
+        pd.concat([cw.assign(src="W"), cl.assign(src="L")]).to_pickle(st / "candidates.pkl")
+        tp, sl = pick(cw, 2), pick(cl, 2)
+        rules = [
+            {
+                "name": f"exit_rule_{i * 2 + j + 1}",
+                "any": [a["conds"], b["conds"]],
+                "conds": a["conds"] + b["conds"],
+                "tp": a,
+                "sl": b,
+            }
+            for i, a in enumerate(tp)
+            for j, b in enumerate(sl)
+        ]
         pd.to_pickle(rules, st / "rules.pkl")
         rep = replace(root, [HABIT, *rules])
         rep.to_parquet(st / "replace.parquet", index=False)
@@ -435,7 +452,7 @@ def main(argv: list[str] | None = None) -> int:
         best = next(r for r in rules if r["name"] == tot.idxmax())
         pd.to_pickle(best, st / "chosen_rule.pkl")
         log.info("R-050 出场规则：%s（合计 %.2f）", best["name"], tot.max())
-        log.info("规则 %d 条（候选 %d）", len(rules), len(c))
+        log.info("规则 %d 条（止盈候选 %d、止损候选 %d）", len(rules), len(cw), len(cl))
     return 0
 
 
