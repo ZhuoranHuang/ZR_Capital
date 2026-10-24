@@ -94,6 +94,8 @@ def write(root: Path, rules: dict, days: list, stock: pd.DataFrame, opt: pd.Data
     a("")
     a("## 3. 第二层：期权（盘中引擎，1 张，费用 D-013）")
     a("")
+    a(option_coverage(root, days))
+    a("")
     if len(os_):
         a(
             "exec：owner = 负责人挂单策略（R-041）入场、止盈与时间上限按 R-041 卖出、止损吃买一；"
@@ -133,3 +135,29 @@ def write(root: Path, rules: dict, days: list, stock: pd.DataFrame, opt: pd.Data
     a("")
     o.OUT.write_text("\n".join(L), encoding="utf-8")
     return {"stock": ss, "option": os_}
+
+
+def option_coverage(root: Path, days: list) -> str:
+    """期权层用到 / 跳过的交易日（预取中止后只用已缓存数据）。"""
+    ck = o.store(root) / "option_days"
+    used = sorted(f.stem for f in ck.glob("*.parquet"))
+    sk = {f.stem: f.read_text(encoding="utf-8") for f in ck.glob("*.skipped")}
+    late = sorted(d for d, r in sk.items() if r.startswith("预取中止"))
+    bad = sorted(d for d in sk if d not in late)
+
+    def rng(x):
+        return f"{x[0]}～{x[-1]}，{len(x)} 天" if x else "无"
+
+    s = (
+        "**结果基于部分样本。** 期权逐笔数据预取于 2026-10-24 17:09 SGT 按负责人指令中止（Theta"
+        "Data "
+        "拉取速度下降），之后不再拉取任何期权数据；期权层只用已完整缓存的交易日，其余跳过。\n\n"
+        f"- 第一层（正股）样本外交易日：{rng([str(d) for d in days])}。\n"
+        f"- 期权层用到：{rng(used)}。\n"
+        f"- 跳过（未预取，{o.PREFETCH_DONE_THROUGH} 之后）：{rng(late)}。\n"
+        f"- 跳过（{o.PREFETCH_DONE_THROUGH} 及之前但所需时间窗缓存不完整或文件损坏）：{rng(bad)}"
+    )
+    if bad:
+        s += "（" + "、".join(bad) + "）"
+    s += "。\n- 期权层结果不覆盖 2026-04-29 之后（含 2026-09～10 全部样本外月份）。"
+    return s
