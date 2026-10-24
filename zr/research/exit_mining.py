@@ -1,8 +1,9 @@
 """出场规律挖掘（负责人指令四步队列第 2 步；PROFIT_LABEL_MINING.md 第 2 节）。
 
-事件 = D-030 入选段中 MU 持仓的每张卖出委托的提交时刻（「出场事件」）；对照 = 同一
-持仓期间（买入成交后、最后一张卖单提交前）每 10 秒一个仍持有、未卖出的时刻（剔除卖单
-提交前后 10 秒）。盈利段与亏损段分开（任务 W / L），另报合并（任务 ALL）。
+事件 = D-030 入选段中 MU 持仓的每张卖出委托的成交时刻（「出场事件」；51 张卖单中
+11 张挂单超过 60 秒才成交，提交时刻不是卖出时刻）；对照 = 同一
+持仓期间（买入成交后、最后一张卖单成交前）每 10 秒一个仍持有、未卖出的时刻（剔除卖单
+成交前后 10 秒）。盈利段与亏损段分开（任务 W / L），另报合并（任务 ALL）。
 特征：入场挖掘同一套方向化特征（zr/features/entry_features.py，方向 = 持仓方向）+
 持仓状态（该段所持合约 ThetaData 逐笔中间价）：已持有秒数、当前浮盈 %（中间价 /
 买入均价 − 1）、最高浮盈 %、已回吐比例（(最高中间价 − 当前) / (最高中间价 − 买入价)，
@@ -75,7 +76,9 @@ def episodes(root: Path) -> list[dict]:
                 "buy_fees": float(
                     sum(ib.fees(q, p, "Buy") for q, p in zip(b["qty"], b["act_px"], strict=True))
                 ),
-                "sells": [int(x) for x in s["submit_ns"]],
+                "sells": [int(x) for x in s["fill_ns"]],  # 出场事件 = 卖单成交时刻（卖出那一刻）
+                "sell_qty": [float(x) for x in s["qty"]],
+                "sell_px": [float(x) for x in s["act_px"]],
                 "last_sell_fill_ns": int(s["fill_ns"].max()),
                 "pnl": float(sel.loc[ep, "pnl_net"]),
             }
@@ -427,6 +430,11 @@ def main(argv: list[str] | None = None) -> int:
         pd.to_pickle(rules, st / "rules.pkl")
         rep = replace(root, [HABIT, *rules])
         rep.to_parquet(st / "replace.parquet", index=False)
+        # R-050 预登记的选择标准：替换后扣费合计（R-041 卖出）最高的一条挖掘规则
+        tot = rep[(rep["exec"] == "owner") & (rep["rule"] != "habit")].groupby("rule")["sim"].sum()
+        best = next(r for r in rules if r["name"] == tot.idxmax())
+        pd.to_pickle(best, st / "chosen_rule.pkl")
+        log.info("R-050 出场规则：%s（合计 %.2f）", best["name"], tot.max())
         log.info("规则 %d 条（候选 %d）", len(rules), len(c))
     return 0
 
