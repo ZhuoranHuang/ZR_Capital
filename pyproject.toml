@@ -22,6 +22,7 @@ dependencies = [
     "lightgbm",
     "scikit-learn",
     "optuna>=5.0.0",
+    "pymoo>=0.6.2",
 ]
 
 [project.optional-dependencies]
