@@ -9,7 +9,7 @@ family: ma_pullback
 category: pullback
 sources: [tv_double_ema_pullback, tv_coral_pullback, ft_trendrider, mql5_trendinggoldea, mql5_trend_pullback_scalper]
 oos_pick: true                     # 第三条 R-049 必测：最常见的顺势回调规则
-engine_ready: false
+engine_ready: true                 # R-049：entry 已改写为 entry_features 的 ef 条件
 owner_situation: channel_pullback
 
 underlying: MU
@@ -41,7 +41,7 @@ features_needed:
       已完成 2 分钟 K（含盘前盘后，口径 C）。不带方向。
     params: [period]
 
-entry:
+entry_original:                    # 调研原文的条件（features_needed 定义）
   all:
     - {feature: ma_align, ma: ema, fast: 50, slow: 200, op: ">", value: 0, directional: true}  # 趋势：EMA50 在 EMA200 趋势侧
     - {feature: ma_side_lag, ma: ema, period: 50, lag: 5, op: "==", value: 1, directional: true} # 5 根前收盘在 EMA50 趋势侧
@@ -56,3 +56,12 @@ order: {mode: taker, lag_s: 2}
 fill: {queue_fill_prob: 0.9}
 qty: 1
 exit: {tp: 0.10, sl: 0.15, max_hold_min: 30, order: {mode: taker, lag_s: 2}}
+
+# R-049 引擎条件：features_needed 的实现 = zr/features/entry_features.py（svy_* 族；RSI(2) / ADX(14) = b2_rsi2 / b2_adx14，
+# 均为已完成 2 分钟 K、口径 C、Wilder），与 entry_original 逐条对应，参数不变。
+entry:
+  all:
+    - {feature: ef, name: svy_ema50_200_align_bp, op: ">", value: 0, role: trend}
+    - {feature: ef, name: svy_ema50_side_lag5, op: "==", value: 1, role: trend}
+    - {feature: ef, name: svy_ema50_cross, op: "==", value: 1, role: trigger}
+    - {feature: ef, name: b2_adx14, op: ">", value: 20, role: no_trade}

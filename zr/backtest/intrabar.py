@@ -17,7 +17,11 @@
 - pctb：当前价在已完成 K 布林中的 %b（directional=true：看跌用 1 − %b）；
 - macd_hist：已完成 K 的柱（directional=true 时乘方向）；macd_hist_chg：柱相对上一根的变化；
 - trend：最近 bars 根已完成 K 中收在中轨同侧的根数 ≥ min_same 的那一侧
-  （direction=trend 时用作方向）。
+  （direction=trend 时用作方向）；
+- ef：zr/features/entry_features.py 中的任一方向化特征（name 指定；入场挖掘与样本外检验共用）。
+下单 mode 另有 owner：负责人挂单策略（zr/backtest/owner_fill.execute_owner，参数
+config/owner_strategy.yaml）。合约 nearest_expiry: true = 最近到期日（受 no_0dte_after 约束）；
+flat_0dte：0DTE 仓位的清仓时刻（D-001：10:45）。
 """
 
 from __future__ import annotations
@@ -32,6 +36,7 @@ import pandas as pd
 import yaml
 
 from zr.backtest.fill_limit import Book, PriceImprovement, _rest, _round_passive, _tick, cross_now
+from zr.backtest.owner_fill import OwnerStrategy, execute_owner
 from zr.costs.fees import option_order_fees
 from zr.data.calendar import session_close
 from zr.data.thetadata import ET, ThetaClient, lb_symbol, parse_contract
@@ -43,6 +48,14 @@ log = logging.getLogger("zr.backtest.intrabar")
 NS = 1_000_000_000
 MAX_AGE = 10 * NS
 OPS = {">": np.greater, ">=": np.greater_equal, "<": np.less, "<=": np.less_equal, "==": np.equal}
+REPO = Path(__file__).resolve().parents[2]
+_OWNER: dict = {}
+
+
+def owner_strategy() -> OwnerStrategy:
+    if "s" not in _OWNER:
+        _OWNER["s"] = OwnerStrategy.from_yaml(REPO / "config" / "owner_strategy.yaml")
+    return _OWNER["s"]
 
 
 def load_rule(path: Path) -> dict:
@@ -121,12 +134,32 @@ def features(g: pd.DataFrame, bs: BarState, specs: list[dict]) -> dict[str, np.n
     return out
 
 
+def ef_features(ctx, day: dt.date, specs: list[dict]) -> dict | None:
+    """规则里 feature: ef 的条件所需的 entry_features（只算用到的特征族）。"""
+    from zr.features import entry_features as efm
+
+    names = [c["name"] for c in specs if c["feature"] == "ef"]
+    if not names:
+        return {}
+    d = efm.load_day(ctx, day)
+    if d is None:
+        return None
+    fams = tuple(sorted({efm.family_of(n) for n in names}))
+    fs = efm.day_features(d, fams)
+    return {n: fs[n] for n in names}
+
+
 def evaluate(feat: dict, specs: list[dict], d: int) -> np.ndarray:
     """方向 d（+1 / −1）下全部条件同时成立的布尔数组。"""
     s = feat["S"]
     ok = np.isfinite(s)
     for c in specs:
         f, op, v = c["feature"], OPS[c["op"]], float(c.get("value", 0))
+        if f == "ef":  # 方向化已在 entry_features 里定义
+            x = feat["ef"][c["name"]].directional(np.full(len(s), d))
+            with np.errstate(invalid="ignore"):
+                ok &= op(x, v)
+            continue
         sgn = d if c.get("directional", True) else 1
         if f == "ret":
             x = sgn * feat[f"ret_{int(c['window_s'])}"]
@@ -161,6 +194,7 @@ class OptionData:
         self.client = ThetaClient(concurrency=concurrency)
         self._exps: list[dt.date] = []
         self._strikes: dict[dt.date, np.ndarray] = {}
+        self._books: dict = {}  # (合约, 日, 缓存文件) → Book
 
     def expirations(self) -> list[dt.date]:
         if not self._exps:
@@ -177,7 +211,8 @@ class OptionData:
 
     def pick(self, day: dt.date, t_et: dt.time, d: int, spot: float, rule: dict) -> str | None:
         c = rule.get("contract", {})
-        exps = [e for e in self.expirations() if 0 <= (e - day).days <= c.get("dte_max", 1)]
+        dmax = 10_000 if c.get("nearest_expiry") else c.get("dte_max", 1)
+        exps = [e for e in self.expirations() if 0 <= (e - day).days <= dmax]
         cut = c.get("no_0dte_after")
         if cut and t_et > dt.time.fromisoformat(cut):
             exps = [e for e in exps if e != day]
@@ -225,6 +260,15 @@ class OptionData:
         qf = sorted(base.glob(f"{sym}_*.parquet"))
         if not qf:
             return None
+        key = (sym, day, tuple(f.name for f in qf))
+        if key in self._books:
+            return self._books[key]
+        if len(self._books) > 64:
+            self._books.clear()
+        self._books[key] = self._load_book(qf, base, day)
+        return self._books[key]
+
+    def _load_book(self, qf: list, base: Path, day: dt.date) -> Book | None:
         q = pd.concat([pd.read_parquet(f) for f in qf], ignore_index=True).drop_duplicates()
         q = q[(q["ask"] > 0) & (q["bid"] > 0) & (q["ask"] >= q["bid"])]
         if q.empty:
@@ -288,6 +332,21 @@ def place(
     {mode: path, path: [(t_ns, 价格), ...], end_ns} → 按给定价格路径挂单 / 改价（已知答案重放）。"""
     lag = int(order.get("lag_s", 2.0) * NS)
     mode = order.get("mode", "taker")
+    if mode == "owner":  # 负责人挂单策略（R-041）；离场未成交部分在策略结束时吃对手价
+        r = execute_owner(
+            book,
+            side,
+            qty,
+            t,
+            owner_strategy(),
+            sym,
+            rng,
+            mode="entry" if side == 1 else "exit",
+            deadline_ns=end,
+        )
+        if r is None or r.filled_qty <= 0:
+            return 0.0, math.nan, None, r.end_ns if r is not None else t
+        return float(r.filled_qty), float(r.avg_px), int(r.last_fill_ns), int(r.end_ns)
     if mode == "taker":
         c = cross_now(book, side, t, lag / NS, pi, sym, rng)
         if c is None:
@@ -357,29 +416,58 @@ def fees(n: float, px: float, side: str) -> float:
 # ---------------- 主循环 ----------------
 
 
+def entry_conditions(
+    rule: dict, g: pd.DataFrame, feat: dict | None, bs: BarState
+) -> tuple[dict, np.ndarray]:
+    """{方向: 入场条件逐秒布尔数组}（feat=None 时只返回时段掩码）与入场时段掩码。"""
+    t = g["t"].to_numpy()
+    hm = np.asarray(pd.DatetimeIndex(t).tz_localize("UTC").tz_convert(ET).strftime("%H:%M"))
+    sess = rule.get("session", {})
+    in_win = (hm >= sess.get("first_entry", "09:32")) & (hm <= sess.get("last_entry", "15:40"))
+    if feat is None:
+        return {}, in_win
+    ent = rule["entry"]["all"]
+    dirs = {"long": [1], "short": [-1], "both": [1, -1]}.get(rule.get("direction", "both"))
+    if rule.get("direction") == "trend":
+        tr = rule["trend"]
+        trend = bs.trend(t, int(tr["bars"]), int(tr["min_same"]))
+        return {
+            1: evaluate(feat, ent, 1) & (trend == 1),
+            -1: evaluate(feat, ent, -1) & (trend == -1),
+        }, in_win
+    return {d: evaluate(feat, ent, d) for d in dirs}, in_win
+
+
 def run_day(
-    root: Path, rule: dict, day: dt.date, bs: BarState, od: OptionData, seed: int = 0
+    root: Path,
+    rule: dict,
+    day: dt.date,
+    bs: BarState,
+    od: OptionData,
+    seed: int = 0,
+    ctx=None,
+    cond_override: dict | None = None,
 ) -> list[dict]:
+    """cond_override：{+1: 布尔数组, −1: 布尔数组}（与当日秒网格等长），给定时不再计算入场条件
+    （样本外检验按天预先算好、多个执行方式复用）。"""
     g = second_grid(root, rule["underlying"], day)
     if g is None:
         return []
     ent = rule["entry"]["all"]
     feat = features(g, bs, ent + rule.get("exit", {}).get("signal", []))
+    if cond_override is None and any(c["feature"] == "ef" for c in ent):
+        e = ef_features(ctx, day, ent)
+        if e is None:
+            return []
+        feat["ef"] = e
     t = g["t"].to_numpy()
     et = pd.DatetimeIndex(t).tz_localize("UTC").tz_convert(ET)
-    hm = np.asarray(et.strftime("%H:%M"))
     sess = rule.get("session", {})
-    in_win = (hm >= sess.get("first_entry", "09:32")) & (hm <= sess.get("last_entry", "15:40"))
-    dirs = {"long": [1], "short": [-1], "both": [1, -1]}.get(rule.get("direction", "both"))
-    if rule.get("direction") == "trend":
-        tr = rule["trend"]
-        trend = bs.trend(t, int(tr["bars"]), int(tr["min_same"]))
-        cond = {
-            1: evaluate(feat, ent, 1) & (trend == 1),
-            -1: evaluate(feat, ent, -1) & (trend == -1),
-        }
+    if cond_override is None:
+        cond, in_win = entry_conditions(rule, g, feat, bs)
     else:
-        cond = {d: evaluate(feat, ent, d) for d in dirs}
+        _, in_win = entry_conditions(rule, g, None, bs)
+        cond = {d: np.asarray(v, bool) for d, v in cond_override.items()}
     sig_exit = rule.get("exit", {}).get("signal")
     flat = pd.Timestamp(
         dt.datetime.combine(day, dt.time.fromisoformat(sess.get("flat", "15:50"))), tz=ET
@@ -425,6 +513,12 @@ def run_day(
         qt, mid = bk.q_ns[i0:], (bk.bid[i0:] + bk.ask[i0:]) / 2
         big = np.iinfo(np.int64).max
         cand = {"flat": flat, "cap": te + hold}
+        f0 = rule.get("contract", {}).get("flat_0dte")
+        if f0 and parse_contract(sym)["expiry"] == day:  # D-001：0DTE 仓位在 f0 前清仓
+            cand["flat"] = min(
+                flat,
+                pd.Timestamp(dt.datetime.combine(day, dt.time.fromisoformat(f0)), tz=ET).value,
+            )
         if "tp" in ex:
             h = qt[mid >= px0 * (1 + float(ex["tp"]))]
             cand["tp"] = int(h[0]) if len(h) else big
@@ -437,7 +531,8 @@ def run_day(
             cand["signal"] = int(t[j[0]]) if len(j) else big
         reason = min(cand, key=cand.get)
         x_order = ex.get("order", {"mode": "taker"})
-        if reason in ("sl", "flat"):
+        if reason == "flat" or (reason == "sl" and ex.get("sl_order") != "same"):
+            # 清仓吃买一；止损默认吃买一，exit.sl_order: same 时按离场挂单方式卖（R-052）
             x_order = {"mode": "taker", "lag_s": x_order.get("lag_s", 2.0)}
         xn, xpx, xt, _ = place(bk, -1, n, cand[reason], x_order, sym, q, flat, rng, pi)
         if xn < n:  # 离场挂单没成交完：剩余吃买一
@@ -463,6 +558,9 @@ def run_day(
             }
         )
         k = int(np.searchsorted(t, xt or cand[reason], side="right"))
+        cap = rule.get("max_entries_per_day")
+        if cap and sum(1 for x in trades if x.get("filled", 0) > 0) >= int(cap):
+            break
     return trades
 
 
@@ -486,14 +584,47 @@ def check_out_of_sample(days: list[dt.date]) -> None:
         )
 
 
-def run(root: Path, rule: dict, days: list[dt.date], seed: int = 0) -> pd.DataFrame:
+def run(
+    root: Path,
+    rule: dict,
+    days: list[dt.date],
+    seed: int = 0,
+    conds: dict | None = None,
+) -> pd.DataFrame:
+    """conds：{day: {+1: 布尔数组, −1: 布尔数组}}（可选，见 run_day 的 cond_override）。"""
     check_out_of_sample(days)
     bs = BarState(root, rule["underlying"], max(days), rule.get("convention", "C"))
     od = OptionData(root, rule["underlying"])
+    ctx = None
+    if conds is None and any(c["feature"] == "ef" for c in rule["entry"]["all"]):
+        from zr.features.entry_features import Ctx
+
+        ctx = Ctx.load(root, rule["underlying"])
     rows = []
     for day in days:
-        rows += run_day(root, rule, day, bs, od, seed)
+        co = conds.get(day) if conds is not None else None
+        if conds is not None and co is None:
+            continue
+        rows += run_day(root, rule, day, bs, od, seed, ctx, co)
     return pd.DataFrame(rows)
+
+
+def with_execution(rule: dict, execution: str, zero_dte: str = "d001") -> dict:
+    """规则 YAML 的 executions[execution] → 引擎用的 order / exit.order；zero_dte：
+    d001 = 10:15 后不开 0DTE、0DTE 在 10:45 前清仓（D-001）；free = 不限（敏感性）。"""
+    import copy
+
+    r = copy.deepcopy(rule)
+    ex = r["executions"][execution]
+    r["order"] = ex["entry"]
+    r.setdefault("exit", {})["order"] = ex["exit"]
+    c = r.setdefault("contract", {})
+    if zero_dte == "d001":
+        c["no_0dte_after"], c["flat_0dte"] = "10:15", "10:45"
+    else:
+        c.pop("no_0dte_after", None)
+        c.pop("flat_0dte", None)
+    return r
 
 
 def replay(

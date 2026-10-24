@@ -1,0 +1,68 @@
+name: fused_rule_3
+description: owner_rule_3 与公开策略调研的融合修订（STRATEGY_SURVEY.md：调研中最常见的趋势判定 = 「方向（价格 / 均线相对长均线）+
+  强度（ADX 20–25）」）：在原条件上加 EMA50 在 EMA200 趋势侧（方向）与 ADX(14) > 20（排除震荡），均为 2 分钟 K、口径 C；参数取调研常用默认值，未在任何数据上调整。
+underlying: MU
+convention: C
+direction: both
+entry:
+  all:
+  - feature: ef
+    name: b1_m6_dif_side
+    op: '>='
+    value: 0.0
+    role: trend
+  - feature: ef
+    name: f_vol1m_cv300
+    op: '>='
+    value: 0.219821
+    role: trigger
+  - feature: ef
+    name: v_rel1_20d
+    op: '>='
+    value: 0.887497
+    role: no_trade
+  - feature: ef
+    name: svy_ema50_200_align_bp
+    op: '>'
+    value: 0
+    role: survey_trend
+  - feature: ef
+    name: b2_adx14
+    op: '>'
+    value: 20
+    role: survey_range_filter
+session:
+  first_entry: 09:32
+  last_entry: '15:40'
+  flat: '15:50'
+contract:
+  nearest_expiry: true
+  otm_steps: 1
+  no_0dte_after: '10:15'
+exit:
+  tp: 0.1
+  sl: 0.15
+  max_hold_min: 30
+  basis: mid
+executions:
+  owner:
+    entry:
+      mode: owner
+    exit:
+      mode: owner
+  taker:
+    entry:
+      mode: taker
+      lag_s: 2.0
+    exit:
+      mode: taker
+      lag_s: 2.0
+qty: 1
+in_sample:
+  data: MU D-030 开仓买入委托 2026-07-07～2026-08-06（不得用于检验，D-033）
+  win_cover: 11
+  win_share: 0.3143
+  random_share: 0.1371
+  lose_cover: 3
+  lift: 2.391
+derived_from: owner_rule_3

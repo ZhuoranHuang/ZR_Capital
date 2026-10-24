@@ -39,14 +39,32 @@ CALIB_YEAR, CALIB_Q = 2024, 0.30
 PULLBACK_LOW, PULLBACK_MID = 913.37, 912.69
 
 CONVENTIONS = {
-    "A": {"label": "RTH-only、按日重置、不足 20 根为空值（D-027 现实现）", "ext": False,
-          "reset": True, "warmup": "nan"},
-    "B": {"label": "RTH-only、按日重置、部分窗口", "ext": False, "reset": True,
-          "warmup": "partial"},
-    "C": {"label": "含盘前盘后连续、不按日重置（长桥原始 K，不清洗）", "ext": True, "reset": False,
-          "warmup": "nan", "clean": False},
-    "C*": {"label": "同 C，但用 D-026 的坏 bar 清洗（会误删 RTH 大振幅 bar，对照用）", "ext": True,
-           "reset": False, "warmup": "nan", "clean": True},
+    "A": {
+        "label": "RTH-only、按日重置、不足 20 根为空值（D-027 现实现）",
+        "ext": False,
+        "reset": True,
+        "warmup": "nan",
+    },
+    "B": {
+        "label": "RTH-only、按日重置、部分窗口",
+        "ext": False,
+        "reset": True,
+        "warmup": "partial",
+    },
+    "C": {
+        "label": "含盘前盘后连续、不按日重置（长桥原始 K，不清洗）",
+        "ext": True,
+        "reset": False,
+        "warmup": "nan",
+        "clean": False,
+    },
+    "C*": {
+        "label": "同 C，但用 D-026 的坏 bar 清洗（会误删 RTH 大振幅 bar，对照用）",
+        "ext": True,
+        "reset": False,
+        "warmup": "nan",
+        "clean": True,
+    },
 }
 
 
@@ -82,19 +100,22 @@ def parity_table(root: Path) -> pd.DataFrame:
     """各口径在 3 个截图时刻的 15 个值，按 App 显示精度（3 位小数）是否完全相等。"""
     day = CHECK_DAY
     variants = {
-        "RTH-only、按日重置（A/B 在截图时刻相同）": resample_bars(load_bars(root, "MU", day, day),
-                                                    "2min"),
+        "RTH-only、按日重置（A/B 在截图时刻相同）": resample_bars(
+            load_bars(root, "MU", day, day), "2min"
+        ),
         "含盘前盘后连续（本地 1 分钟聚合，修正分箱、不清洗）": resample_bars(
-            load_extended_bars(root, "MU", day - dt.timedelta(days=50), day, clean=False),
-            "2min"),
+            load_extended_bars(root, "MU", day - dt.timedelta(days=50), day, clean=False), "2min"
+        ),
         "RTH-only 跨日连续（不重置）": resample_bars(
-            load_bars(root, "MU", day - dt.timedelta(days=50), day), "2min"),
+            load_bars(root, "MU", day - dt.timedelta(days=50), day), "2min"
+        ),
     }
     direct = root / "diag" / "indicator_parity" / "min2_noadjust.parquet"
     if direct.exists():
         d2 = pd.read_parquet(direct).set_index("ts").sort_index()
-        variants["含盘前盘后连续（长桥原生 2 分钟 K，10-19 起）"] = d2[d2.index.tz_convert(ET).date
-                                                               <= day]
+        variants["含盘前盘后连续（长桥原生 2 分钟 K，10-19 起）"] = d2[
+            d2.index.tz_convert(ET).date <= day
+        ]
     rows = []
     for name, b in variants.items():
         c = b["close"]
@@ -106,8 +127,9 @@ def parity_table(root: Path) -> pd.DataFrame:
                 v = float(src.loc[ts, k])
                 exact += round(v, 3) == w[k]
                 worst = max(worst, abs(v - w[k]))
-        rows.append({"口径": name, "3 位小数完全相等": f"{exact}/15",
-                     "最大绝对差": round(worst, 5)})
+        rows.append(
+            {"口径": name, "3 位小数完全相等": f"{exact}/15", "最大绝对差": round(worst, 5)}
+        )
     return pd.DataFrame(rows)
 
 
@@ -123,25 +145,49 @@ def checkpoint_rows(root: Path, cfg: dict, key: str, conv: dict, thr: float):
         names = [STATE_NAMES[v] for v in reg["state"].to_numpy()[m]]
         dirs = reg["dir"].to_numpy()[m]
         nan_bars = int(np.isnan(x["pctb"].to_numpy()[m]).sum())
-        hit = np.mean([(n == st and (d == 0 or di == d)) for n, di in zip(names, dirs,
-                                                                          strict=True)])
-        dist = pd.Series([f"{n}{'' if di == 0 else ('↑' if di > 0 else '↓')}"
-                          for n, di in zip(names, dirs, strict=True)]).value_counts().to_dict()
-        rows.append({"口径": key, "核对点": note, "K 线数": int(m.sum()),
-                     "BOLL 为空的 K": nan_bars, "符合比例": round(float(hit), 2),
-                     "实际分布": ", ".join(f"{k} {v}" for k, v in dist.items())})
+        hit = np.mean(
+            [(n == st and (d == 0 or di == d)) for n, di in zip(names, dirs, strict=True)]
+        )
+        dist = (
+            pd.Series(
+                [
+                    f"{n}{'' if di == 0 else ('↑' if di > 0 else '↓')}"
+                    for n, di in zip(names, dirs, strict=True)
+                ]
+            )
+            .value_counts()
+            .to_dict()
+        )
+        rows.append(
+            {
+                "口径": key,
+                "核对点": note,
+                "K 线数": int(m.sum()),
+                "BOLL 为空的 K": nan_bars,
+                "符合比例": round(float(hit), 2),
+                "实际分布": ", ".join(f"{k} {v}" for k, v in dist.items()),
+            }
+        )
     # 13:00 回踩点
     lows = b["low"].to_numpy()
     k = np.flatnonzero(on & (np.abs(lows - PULLBACK_LOW) < 0.006))
     pb = {"口径": key, "回踩 K": None}
     if len(k):
         i = int(k[0])
-        fired = [pt.entry_name(e) for e in pt.entry_configs(c) if e["entry"] == "E1"
-                 and pt.entry_signal(b, x, reg, e, c)[i] == 1]
-        pb = {"口径": key, "回踩 K（标签）": hhmm[i], "最低": round(float(lows[i]), 2),
-              "中轨（我们）": round(float(x["mid"].iat[i]), 2), "中轨（App）": PULLBACK_MID,
-              "状态": f"{STATE_NAMES[int(reg['state'].iat[i])]}{int(reg['dir'].iat[i]):+d}",
-              "E1 识别定义数": f"{len(fired)}/36"}
+        fired = [
+            pt.entry_name(e)
+            for e in pt.entry_configs(c)
+            if e["entry"] == "E1" and pt.entry_signal(b, x, reg, e, c)[i] == 1
+        ]
+        pb = {
+            "口径": key,
+            "回踩 K（标签）": hhmm[i],
+            "最低": round(float(lows[i]), 2),
+            "中轨（我们）": round(float(x["mid"].iat[i]), 2),
+            "中轨（App）": PULLBACK_MID,
+            "状态": f"{STATE_NAMES[int(reg['state'].iat[i])]}{int(reg['dir'].iat[i]):+d}",
+            "E1 识别定义数": f"{len(fired)}/36",
+        }
     first_valid = et[on & ~np.isnan(x["mid"].to_numpy()) & rth_mask(b.index)]
     fv = first_valid[0].strftime("%H:%M") if len(first_valid) else "无"
     return rows, pb, fv
@@ -157,9 +203,17 @@ def main() -> int:
         cp += r
         pbs.append(pb)
         fvs[k] = fv
-    conv_tab = pd.DataFrame([{"口径": k, "说明": v["label"], "RANGE 阈值（同规则重标）": thr[k],
-                              "10-21 首个有效 BOLL 的 bar 标签": fvs[k]}
-                             for k, v in CONVENTIONS.items()])
+    conv_tab = pd.DataFrame(
+        [
+            {
+                "口径": k,
+                "说明": v["label"],
+                "RANGE 阈值（同规则重标）": thr[k],
+                "10-21 首个有效 BOLL 的 bar 标签": fvs[k],
+            }
+            for k, v in CONVENTIONS.items()
+        ]
+    )
     L = [
         "# V4 第 0 节：指标口径复核与三个状态校验点",
         "",
@@ -176,8 +230,8 @@ def main() -> int:
         "- D-027 写的「含盘前盘后反而更不匹配（误差 44%）」**是本地分箱 bug，不是 App 行为**："
         "原始 1 分钟数据每天都有 04:00 那根，但 D-026 的坏 bar 清洗常把它删掉、当日首根变成 04:01"
         "（MU 767 天里 286 天、QQQ 276 天；不清洗 0 天），`resample_bars` 原来用 "
-        "`origin=\"start\"`（锚在首根），于是全天 2 分钟分箱锚在奇数分钟（11:27/11:29 而不是 "
-        "11:28）。本分支已改为 `origin=\"start_day\"`；RTH-only 数据每天首根都是 09:30"
+        '`origin="start"`（锚在首根），于是全天 2 分钟分箱锚在奇数分钟（11:27/11:29 而不是 '
+        '11:28）。本分支已改为 `origin="start_day"`；RTH-only 数据每天首根都是 09:30'
         "（767/767），结果不变。D-026 时期含盘前盘后的状态层在这 37% 的天里分箱错位。",
         "- 截图唯一能排除的是「RTH-only 跨日连续」。「是否含盘前盘后」「是否按日重置」都没有被截图"
         "确定。D-027 的这两条应降级为「与截图一致的候选之一」。",

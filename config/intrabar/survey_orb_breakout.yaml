@@ -10,7 +10,7 @@ category: breakout
 sources: [paper_orb_qqq, qc_orb_stocks_in_play, tv_orb_chrismoody, tv_orb_zzzcrypto, tv_torb_zeiierman,
           gh_myquant_hans123, gh_myquant_skypark, gh_myquant_dual_thrust]
 oos_pick: true                     # 第三条 R-049 必测：最常见的趋势突破规则
-engine_ready: false
+engine_ready: true                 # R-049：entry 已改写为 entry_features 的 ef 条件
 owner_situation: ignition
 
 underlying: MU
@@ -35,7 +35,7 @@ features_needed:
     definition: 区间最后一秒价格 / 区间第一秒价格 − 1（bp），directional=true 时乘 d。
     params: [minutes]
 
-entry:
+entry_original:                    # 调研原文的条件（features_needed 定义）
   all:
     - {feature: or_dir, minutes: 5, op: ">", value: 0, directional: true}    # 第一段 5 分钟朝方向收
     - {feature: or_break, minutes: 5, op: ">", value: 0, directional: true}  # 当前价越过区间同向边界
@@ -48,3 +48,10 @@ order: {mode: taker, lag_s: 2}
 fill: {queue_fill_prob: 0.9}
 qty: 1
 exit: {tp: 0.10, sl: 0.15, max_hold_min: 30, order: {mode: taker, lag_s: 2}}
+
+# R-049 引擎条件：features_needed 的实现 = zr/features/entry_features.py（svy_* 族；RSI(2) / ADX(14) = b2_rsi2 / b2_adx14，
+# 均为已完成 2 分钟 K、口径 C、Wilder），与 entry_original 逐条对应，参数不变。
+entry:
+  all:
+    - {feature: ef, name: svy_or5_dir_bp, op: ">", value: 0, role: trend}
+    - {feature: ef, name: svy_or5_break_bp, op: ">", value: 0, role: trigger}
