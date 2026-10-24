@@ -42,6 +42,7 @@ NS = 1_000_000_000
 STEP = 10
 EXCL = 10
 N_PERM = 500
+N_PERM_TREE = 200  # 出场模型的梯度提升树只置换 200 次（负责人 2026-10-24 指令；入场挖掘仍为 500）
 SEED = 0
 STATE = ("st_hold_s", "st_float_pct", "st_max_float_pct", "st_giveback", "st_since_max_s")
 HABIT = {"name": "habit", "tp": 10.0, "sl": 15.0, "cap_min": 30.0}
@@ -234,9 +235,10 @@ def models(s: pd.DataFrame, cols: list[str], jobs: int) -> pd.DataFrame:
         days, g = sub["day"].to_numpy(), sub["episode"].to_numpy()
         for model in ("hgb", "l1"):
             a = oem.auc(y, oem.lodo(X, y, days, model))
+            n_perm = N_PERM_TREE if model == "hgb" else N_PERM
             null = np.array(
                 Parallel(n_jobs=jobs)(
-                    delayed(_perm_model)(X, y, days, g, model, SEED + 1 + k) for k in range(N_PERM)
+                    delayed(_perm_model)(X, y, days, g, model, SEED + 1 + k) for k in range(n_perm)
                 )
             )
             rows.append(
@@ -246,7 +248,8 @@ def models(s: pd.DataFrame, cols: list[str], jobs: int) -> pd.DataFrame:
                     "n_sell": int(y.sum()),
                     "n": len(y),
                     "oos_auc": a,
-                    "p": float((1 + (null >= a - 1e-12).sum()) / (N_PERM + 1)),
+                    "n_perm": n_perm,
+                    "p": float((1 + (null >= a - 1e-12).sum()) / (n_perm + 1)),
                     "null_p95": float(np.nanquantile(null, 0.95)),
                 }
             )
