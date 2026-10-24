@@ -311,10 +311,17 @@ def _shard_option(root: Path, rules: dict, days: list, seed: int) -> list:
     bs = ib.BarState(root, "MU", max(days))
     od = ib.OptionData(root, "MU")
     out = []
+    ck = store(root) / "option_days"
+    ck.mkdir(exist_ok=True)
     for day in days:
+        done = ck / f"{day}.parquet"
+        if done.exists():  # 断点续跑：已完成的交易日直接读回
+            out += pd.read_parquet(done).to_dict("records")
+            continue
         g = ib.second_grid(root, "MU", day)
         if g is None:
             continue
+        n0 = len(out)
         for name, rule in rules.items():
             co = load_conds(root, day, name, len(g))
             if co is None or not any(v.any() for v in co.values()):
@@ -324,6 +331,9 @@ def _shard_option(root: Path, rules: dict, days: list, seed: int) -> list:
                     r = ib.with_execution(rule, ex, z)
                     for tr in ib.run_day(root, r, day, bs, od, seed, None, co):
                         out.append({"rule": name, "exec": ex, "zdte": z, **tr})
+        pd.DataFrame(
+            out[n0:], columns=["rule", "exec", "zdte", "day"] if n0 == len(out) else None
+        ).to_parquet(done, index=False)
         log.info("%s 期权层完成（累计 %d 笔）", day, len(out))
     return out
 
