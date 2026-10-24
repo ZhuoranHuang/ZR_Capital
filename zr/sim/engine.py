@@ -9,7 +9,8 @@
   （否则 late_quote）；出场：time / bracket（mid 判断，触发后 > 的第一条有效报价的 bid）；
   清仓：这些出场的有效报价落在 flat 之后或不存在时，flat 之后（>=）120 秒内第一条可清仓报价
   （bid >= 0 且 ask >= bid，不按价差过滤）按 bid 成交；窗口内无报价 → ValueError；
-  计数 flat_late（成交晚于 flat）、flat_wide（价差 > max_spread_pct）、flat_zero（bid == 0）；
+  DayResult.counters 计 flat_late（成交晚于 flat）、flat_wide（价差 > max_spread_pct）、
+  flat_zero（bid == 0）；
 - 信号过滤顺序：outside_session → in_position → cooldown → no_quote → late_quote → size_zero；
 - 费用：zr.costs.fees.option_order_fees，买卖两侧分别计算后相加；权益按笔累加，
   下一笔按新权益定张数。
@@ -30,18 +31,10 @@ from zr.costs.fees import option_order_fees
 
 ET = ZoneInfo("America/New_York")
 NS = 1_000_000_000
-SKIP_KEYS = (
-    "outside_session",
-    "in_position",
-    "cooldown",
-    "no_quote",
-    "late_quote",
-    "size_zero",
-    # 以下为计数，不参与信号过滤顺序
-    "flat_late",
-    "flat_wide",
-    "flat_zero",
-)
+# 信号过滤（按此顺序判定，每个信号至多计一次）
+SKIP_KEYS = ("outside_session", "in_position", "cooldown", "no_quote", "late_quote", "size_zero")
+# 清仓计数（每笔走清仓规则的交易计入，不参与信号过滤）
+COUNTER_KEYS = ("flat_late", "flat_wide", "flat_zero")
 FLAT_WINDOW_NS = 120 * NS  # 清仓：flat 之后（>=）120 秒内取第一条可清仓报价
 
 
@@ -83,12 +76,15 @@ class DayResult:
     trades: list
     equity_start: float
     equity_end: float
-    skipped: dict  # 键 = SKIP_KEYS（过滤计数 + 清仓计数 flat_late / flat_wide / flat_zero）
+    skipped: dict  # 键 = SKIP_KEYS（信号过滤）；sum(skipped) + len(trades) == len(signals)
+    counters: dict  # 键 = COUNTER_KEYS（清仓计数）
 
 
 def size_position(account: Account, premium_px: float, stop_frac: float | None) -> int:
     per_contract = premium_px * account.multiplier
     if not (per_contract > 0):
+        return 0
+    if stop_frac is not None and stop_frac <= 0:
         return 0
     eq = account.equity_usd
     if account.sizing_basis == "stop" and stop_frac is not None:
@@ -209,6 +205,7 @@ def simulate_day(
     loose = {sym: _Book(g, float("inf"), clearable=True) for sym, g in q.groupby("symbol")}
     raw_ts = {sym: g["ts_ns"].to_numpy(np.int64) for sym, g in q.groupby("symbol")}
     skipped = dict.fromkeys(SKIP_KEYS, 0)
+    counters = dict.fromkeys(COUNTER_KEYS, 0)
     trades: list[Trade] = []
     equity0 = float(account.equity_usd)
     equity = equity0
@@ -247,12 +244,12 @@ def simulate_day(
             j = _flat(raw_ts[symbol], lb, flat_ns, symbol)
             exit_ts, exit_px, reason = int(lb.ts[j]), float(lb.bid[j]), "flat"
             if exit_ts > flat_ns:
-                skipped["flat_late"] += 1
+                counters["flat_late"] += 1
             mid = (lb.ask[j] + lb.bid[j]) / 2
             if mid > 0 and (lb.ask[j] - lb.bid[j]) / mid > policy.max_spread_pct:
-                skipped["flat_wide"] += 1
+                counters["flat_wide"] += 1
             if exit_px == 0:
-                skipped["flat_zero"] += 1
+                counters["flat_zero"] += 1
         fees = float(option_order_fees(qty, "Buy", entry_px)["total"]) + float(
             option_order_fees(qty, "Sell", exit_px)["total"]
         )
@@ -278,4 +275,5 @@ def simulate_day(
         equity_start=equity0,
         equity_end=equity0 + sum(t.pnl_usd for t in trades),
         skipped=skipped,
+        counters=counters,
     )

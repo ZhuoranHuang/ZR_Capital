@@ -39,6 +39,11 @@ def every_second(start: str, end: str, fn) -> list[tuple[int, float, float]]:
     return [(t, *fn((t - a) // NS)) for t in range(a, b + 1, NS)]
 
 
+def _inv(r, n_signals: int) -> None:
+    """计数恒等：每个信号要么成交一笔，要么在 skipped 里计一次。"""
+    assert sum(r.skipped.values()) + len(r.trades) == n_signals
+
+
 def fees_total(n: int, side: str, px: float) -> float:
     return float(option_order_fees(n, side, px)["total"])
 
@@ -65,6 +70,7 @@ def test_t1_cash_identity():
     assert t.fees_usd == pytest.approx(expect_fees, abs=1e-9)
     assert t.pnl_usd == pytest.approx((1.20 - 1.10) * 100 * 4 - t.fees_usd, abs=1e-9)
     assert r.equity_end == pytest.approx(r.equity_start + t.pnl_usd, abs=1e-9)
+    _inv(r, 1)
 
 
 # ---------------- T2 仓位 ----------------
@@ -93,6 +99,7 @@ def test_t2_sizing():
     )
     assert r.trades == []
     assert r.skipped["size_zero"] == 1
+    _inv(r, 1)
 
 
 # ---------------- T3 时间顺序 ----------------
@@ -116,6 +123,7 @@ def test_t3_time_order_and_flat():
         assert t.entry_ts_ns <= t.exit_ts_ns <= flat_ns + 120 * 10**9
     assert r.trades[0].exit_ts_ns == flat_ns
     assert r.trades[0].reason == "flat"
+    _inv(r, 1)
 
 
 # ---------------- T4 冷却 ----------------
@@ -137,8 +145,10 @@ def test_t4_cooldown():
     r60 = simulate_day(q, sig, acct, session, SimPolicy(lag_s=0, min_coverage=0.0, cooldown_s=60))
     assert len(r60.trades) == 1
     assert r60.skipped["cooldown"] == 1
+    _inv(r60, 2)
     r0 = simulate_day(q, sig, acct, session, SimPolicy(lag_s=0, min_coverage=0.0, cooldown_s=0))
     assert len(r0.trades) == 2
+    _inv(r0, 2)
 
 
 # ---------------- T5 持仓期间忽略 ----------------
@@ -152,6 +162,7 @@ def test_t5_in_position_ignored():
         assert len(r.trades) == 1
         assert r.skipped["in_position"] == 1
         assert r.skipped["cooldown"] == 0
+        _inv(r, 2)
 
 
 # ---------------- T6 确定性 ----------------
@@ -168,6 +179,7 @@ def test_t6_deterministic():
     b = simulate_day(q, sig, acct, session, pol)
     assert a == b
     assert all(isinstance(t, Trade) for t in a.trades)
+    _inv(a, len(sig))
 
 
 # ---------------- T7 无效报价 ----------------
@@ -199,6 +211,8 @@ def test_t7_invalid_quotes():
     rc = _t7_run(lambda s: (1.00, 1.00) if s == 60 else (0.98, 1.05))
     assert rc.trades[0].entry_ts_ns == ts("10:01:00")
     assert rc.trades[0].entry_px == pytest.approx(1.00, abs=1e-9)
+    for r in (ra, rb, rc):
+        _inv(r, 1)
 
 
 # ---------------- T8 覆盖率 ----------------
@@ -257,12 +271,12 @@ def test_t10_flat_with_bad_quotes():
     assert ta.exit_ts_ns == ts("10:10:00")
     assert ta.exit_px == pytest.approx(0.60, abs=1e-9)
     assert ta.reason == "flat"
-    assert ra.skipped["flat_wide"] == 1
+    assert ra.counters["flat_wide"] == 1
     # (b) flat 后 1 分钟才出现第一条报价
     rb = _t10_run(every_second("10:11:00", "10:12:00", lambda s: (1.00, 1.05)))
     assert rb.trades[0].exit_ts_ns == ts("10:11:00")
     assert rb.trades[0].reason == "flat"
-    assert rb.skipped["flat_late"] == 1
+    assert rb.counters["flat_late"] == 1
     # (c) flat 后 10 分钟才有报价
     with pytest.raises(ValueError):
         _t10_run(every_second("10:20:00", "10:21:00", lambda s: (1.00, 1.05)))
@@ -276,8 +290,10 @@ def test_t10_flat_with_bad_quotes():
     # (e) flat 时刻唯一报价为 0 / 0 → 成交价 0，flat_wide 不加，flat_zero += 1
     re_ = _t10_run([(ts("10:10:00"), 0.0, 0.0)])
     assert re_.trades[0].exit_px == pytest.approx(0.0, abs=1e-9)
-    assert re_.skipped["flat_wide"] == 0
-    assert re_.skipped["flat_zero"] == 1
+    assert re_.counters["flat_wide"] == 0
+    assert re_.counters["flat_zero"] == 1
+    for r in (ra, rb, rd, re_):
+        _inv(r, 1)
 
 
 # ---------------- T12 入场等待上限 ----------------
@@ -301,3 +317,77 @@ def test_t12_late_quote():
     )
     assert r.trades == []
     assert r.skipped["late_quote"] == 1
+    _inv(r, 1)
+
+
+# ---------------- T13 bracket 出场 ----------------
+
+
+def _t13_run(fn, rule, signal="10:01:00"):
+    """10:00:00–10:12:00 每秒一条，fn(秒偏移) → (bid, ask)；flat=10:10。"""
+    q = quotes(every_second("10:00:00", "10:12:00", fn))
+    session = {"first_entry": "10:00", "last_entry": "10:09", "flat": "10:10"}
+    r = simulate_day(
+        q,
+        [(ts(signal), 1, SYM, rule)],
+        Account(equity_usd=10000, sizing_basis="premium"),
+        session,
+        SimPolicy(lag_s=0, min_coverage=0.0),
+    )
+    _inv(r, 1)
+    return r
+
+
+def test_t13_bracket_exit():
+    base = (0.90, 1.00)  # 入场 ask = 1.00，mid = 0.95
+    # (a) tp：10:02:00 mid 升至 1.10（1.06 / 1.14），
+    #     严格之后第一条有效报价 10:02:01（1.07 / 1.15）按 bid 成交
+    ra = _t13_run(
+        lambda s: (1.06, 1.14) if s == 120 else (1.07, 1.15) if s > 120 else base,
+        {"kind": "bracket", "tp": 0.10, "sl": 0.30, "max_hold_min": 30},
+    )
+    ta = ra.trades[0]
+    assert ta.entry_px == pytest.approx(1.00, abs=1e-9)
+    assert ta.reason == "tp"
+    assert ta.exit_ts_ns == ts("10:02:01")
+    assert ta.exit_px == pytest.approx(1.07, abs=1e-9)
+    # (b) sl：10:02:00 mid 跌至 0.70（0.67 / 0.73），之后 0.66 / 0.72
+    rb = _t13_run(
+        lambda s: (0.67, 0.73) if s == 120 else (0.66, 0.72) if s > 120 else base,
+        {"kind": "bracket", "tp": 0.10, "sl": 0.30, "max_hold_min": 30},
+    )
+    tb = rb.trades[0]
+    assert tb.reason == "sl"
+    assert tb.exit_px < tb.entry_px
+    # (c) 入场基准：入场后 mid 一直是 0.95（低于 ask 1.00），不触发 sl=0.30
+    rc = _t13_run(lambda s: base, {"kind": "bracket", "tp": 0.10, "sl": 0.30, "max_hold_min": 3})
+    assert rc.trades[0].reason != "sl"
+    assert rc.trades[0].reason == "time"
+    # (d) 时间先到：max_hold 5 分钟，tp / sl 都不触发 → time；
+    #     tp 在 max_hold 之后（10:07:00）才触发 → 仍为 time
+    rd1 = _t13_run(lambda s: base, {"kind": "bracket", "tp": 0.10, "sl": 0.30, "max_hold_min": 5})
+    assert rd1.trades[0].reason == "time"
+    assert rd1.trades[0].exit_ts_ns == ts("10:06:00")
+    rd2 = _t13_run(
+        lambda s: (1.07, 1.15) if s >= 420 else base,
+        {"kind": "bracket", "tp": 0.10, "sl": 0.30, "max_hold_min": 5},
+    )
+    assert rd2.trades[0].reason == "time"
+    assert rd2.trades[0].exit_ts_ns == ts("10:06:00")
+    # (e) 触发落在 flat 之后：10:05:00 入场，tp 在 10:10:30 才触发 → 清仓规则，reason == "flat"
+    re_ = _t13_run(
+        lambda s: (1.07, 1.15) if s >= 630 else base,
+        {"kind": "bracket", "tp": 0.10, "sl": 0.30, "max_hold_min": 30},
+        signal="10:05:00",
+    )
+    assert re_.trades[0].reason == "flat"
+    assert re_.trades[0].exit_ts_ns == ts("10:10:00")
+
+
+# ---------------- T14 止损距离非正 ----------------
+
+
+def test_t14_nonpositive_stop_frac():
+    s5 = Account(equity_usd=2000, max_risk_pct=0.05, sizing_basis="stop")
+    assert size_position(s5, 0.92, 0.0) == 0
+    assert size_position(s5, 0.92, -0.30) == 0
