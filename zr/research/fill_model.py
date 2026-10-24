@@ -249,14 +249,17 @@ def main(argv: list[str] | None = None) -> int:
         store = root / "research" / "fill_model"
         store.mkdir(parents=True, exist_ok=True)
         f.to_parquet(store / "owner_order_features.parquet", index=False)
-        head = ["# 限价单成交模型校准（负责人订单，feat/fill-model 第 1 节）", "",
-                f"生成：{dt.datetime.now(dt.UTC).isoformat(timespec='seconds')} UTC · 复现 "
-                "`uv run python -m zr.research.fill_model pull` → `calibrate`", ""]
+        head = [
+            "# 限价单成交模型校准（负责人订单，feat/fill-model 第 1 节）",
+            "",
+            f"生成：{dt.datetime.now(dt.UTC).isoformat(timespec='seconds')} UTC · 复现 "
+            "`uv run python -m zr.research.fill_model pull` → `calibrate`",
+            "",
+        ]
         out = REPO / "docs" / "research" / "FILL_MODEL_ORDER_LEVEL.md"
         out.write_text("\n".join(head + report_calibration(f, coef, tab)), encoding="utf-8")
         log.info("写入 %s", out)
     return 0
-
 
 
 # ---------------- 第 1 节：校准 ----------------

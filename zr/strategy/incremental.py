@@ -149,9 +149,7 @@ class EngineState:
 
 
 class IncrementalEngine:
-    def __init__(
-        self, cfg: dict, v4: dict, range_w: int, days: set, daily_reset: bool = False
-    ):
+    def __init__(self, cfg: dict, v4: dict, range_w: int, days: set, daily_reset: bool = False):
         """daily_reset=False：口径 C（连续、不重置）；True：口径 A（调用方只喂 RTH K，
         BOLL / MACD 与中轨斜率每个交易日从头算，其余状态量跨日连续，
         与批量 `indicators(daily_reset=True)` 一致）。"""

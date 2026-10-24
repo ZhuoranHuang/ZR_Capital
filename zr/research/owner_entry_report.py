@@ -315,11 +315,10 @@ def write(root: Path, s: pd.DataFrame, cols: list[str]) -> None:
     a("")
     a("## 9. 外部策略对照")
     a("")
-    a(
-        "见第二条 `STRATEGY_SURVEY.md`；融合规则 `config/intrabar/fused_rule_*.yaml`（本节由融合"
-        "步骤补写）。"
-    )
+    block = external_comparison(uni)
+    a(block)
     a("")
+    _write_survey_section(block)
     a("## 10. 边界")
     a("")
     a(
@@ -396,3 +395,71 @@ def _compare_prior(root: Path, uc: pd.DataFrame) -> str:
         + "\n\nENTRY_TIMING_DIAG.md：提交时刻在 2 分钟 K 中的位置分布、正在形成的 K 的柱方向与"
         "所买方向一致的比例（44%–50%）等，在本文对应 live2_* 与 b2_m6_* 特征（第 2 节）。"
     )
+
+
+SURVEY_MAP = (
+    ("价格在长均线趋势侧", "b2_dist_ma60_atr"),
+    ("价格在长均线趋势侧", "b5_dist_ma60_atr"),
+    ("均线排列", "b2_ma_align"),
+    ("均线排列", "b5_ma_align"),
+    ("通道 / 当日极值突破（距顺向当日极值，越小越近）", "s_ext_with_day_bp"),
+    ("通道突破（处在 60 分钟新极值）", "s_at_ext_with60m"),
+    ("开盘区间方向（相对开盘价）", "s_vs_open_bp"),
+    ("ADX 强度", "b2_adx14"),
+    ("ADX 强度", "b5_adx14"),
+    ("摆动结构（高低点）", "b2_struct10"),
+    ("高周期确认（15 分钟中轨同侧）", "b15_side_count10"),
+    ("RSI(2) 回调（方向化，越低越是回调）", "b2_rsi2"),
+    ("均值回归（%b 方向化，越低越靠逆向轨）", "live2_pctb"),
+    ("负责人特征：距逆向 15 分钟极值", "s_ext_against15m_bp"),
+    ("负责人特征：近 10 分钟方向化涨跌", "s_ret600_bp"),
+)
+
+
+def external_comparison(uni: dict) -> str:
+    """调研中常见的「趋势怎么判断」→ 本文最接近的方向化特征，在负责人盈利入场上的表现。"""
+    A, B = uni["A"].set_index("feature"), uni["B"].set_index("feature")
+    rows = []
+    for lab, f in SURVEY_MAP:
+        if f not in A.index:
+            continue
+        rows.append(
+            {
+                "调研中的判定方式": lab,
+                "对应特征": f,
+                "盈利入场中位数": A.loc[f, "med_entry"],
+                "随机中位数": A.loc[f, "med_random"],
+                "任务 A 百分位均值": A.loc[f, "pct_mean"],
+                "任务 A 经验 p": A.loc[f, "p_perm"],
+                "任务 B AUC（盈 vs 亏）": B.loc[f, "auc"],
+            }
+        )
+    t = pd.DataFrame(rows).round(3)
+    fused = sorted(m.RULE_DIR.glob("fused_rule_*.yaml"))
+    return (
+        "调研（STRATEGY_SURVEY.md）中最常见的趋势判定 = 方向（价格 / 均线相对长均线、均线排列、通道"
+        "或开盘区间突破）+ 强度（ADX 20–25）。这些判定在负责人盈利入场时刻与同日随机时刻上的差别"
+        "（数据与口径同第 1 节；任务 A 百分位均值 0.5 = 无差别）：\n\n"
+        + df_to_md(t)
+        + "\n\n融合规则（`config/intrabar/fused_rule_*.yaml`，"
+        f"{len(fused)} 条）：每条 owner_rule 加上调研最常见的「EMA50 在 EMA200 趋势侧 + ADX(14) "
+        "> 20」，"
+        "参数取调研默认值、未在任何数据上调整；与 owner_rule、调研三条必测规则一起进入 R-049 样本外"
+        "检验（OWNER_RULES_OOS.md）。"
+    )
+
+
+def _write_survey_section(block: str) -> None:
+    p = m.REPO / "docs" / "research" / "STRATEGY_SURVEY.md"
+    if not p.exists():
+        return
+    txt = p.read_text(encoding="utf-8")
+    i = txt.find("## 7. 与负责人入场规律的对照")
+    j = txt.find("\n## 8.", i)
+    if i < 0 or j < 0:
+        return
+    new = (
+        "## 7. 与负责人入场规律的对照\n\n由 `zr/research/owner_entry_report.py` 生成"
+        f"（第一条 OWNER_ENTRY_MINING.md 第 9 节）。\n\n{block}\n"
+    )
+    p.write_text(txt[:i] + new + txt[j:], encoding="utf-8")

@@ -144,7 +144,10 @@ def pull_or_load_ticks(client: ThetaClient, root: Path, c: dict) -> pd.DataFrame
 def sample_minutes(root: Path, c: dict, rng: random.Random, m: int) -> pd.DataFrame:
     symbol = lb_symbol(c["underlying"], c["expiry"], c["right"], c["strike"])
     q = pd.read_parquet(
-        root / "options_1m" / f"underlying={c['underlying']}" / f"date={c['day'].isoformat()}"
+        root
+        / "options_1m"
+        / f"underlying={c['underlying']}"
+        / f"date={c['day'].isoformat()}"
         / "quotes.parquet"
     )
     q = q[q["symbol"] == symbol]
@@ -199,9 +202,7 @@ def run(
             continue
         ts_sorted = ticks["ts"].dt.tz_convert("UTC").dt.tz_localize(None).to_numpy()
         ask, bid = ticks["ask"].to_numpy(), ticks["bid"].to_numpy()
-        meta_rows.append(
-            {**c, "n_ticks": len(ticks), "n_minutes_sampled": len(snaps)}
-        )
+        meta_rows.append({**c, "n_ticks": len(ticks), "n_minutes_sampled": len(snaps)})
         for _, snap_row in snaps.iterrows():
             for r in compare_one(ts_sorted, ask, bid, snap_row):
                 detail_rows.append(
