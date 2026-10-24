@@ -46,7 +46,14 @@ def _fee(n: int, side: str, px: float) -> float:
 
 
 def day_trades(
-    name: str, rule: dict, exit_kind: str, g: pd.DataFrame, cond: dict, svy: dict, cash: float
+    name: str,
+    rule: dict,
+    exit_kind: str,
+    g: pd.DataFrame,
+    cond: dict,
+    svy: dict,
+    cash: float,
+    fees: bool = True,
 ) -> tuple[list[dict], float]:
     S = pd.Series(g["S"].to_numpy()).ffill().to_numpy()
     t = g["t"].to_numpy()
@@ -98,23 +105,33 @@ def day_trades(
         x_sig = e + 1 + j_rel
         x = min(x_sig + LAG, n - 1) if x_sig < flat else flat
         px1 = S[x] - d * TICK
-        f_in = _fee(q, "Buy" if d == 1 else "Sell", px0)
-        f_out = _fee(q, "Sell" if d == 1 else "Buy", px1)
+        f_in = _fee(q, "Buy" if d == 1 else "Sell", px0) if fees else 0.0
+        f_out = _fee(q, "Sell" if d == 1 else "Buy", px1) if fees else 0.0
         pnl = d * q * (px1 - px0) - f_in - f_out
         cash += pnl
         out.append(
-            {"entry_ns": int(t[e]), "dir": d, "qty": q, "px0": px0, "px1": px1, "pnl_usd": pnl}
+            {
+                "entry_ns": int(t[e]),
+                "dir": d,
+                "qty": q,
+                "px0": px0,
+                "px1": px1,
+                "pnl_usd": pnl,
+                "fees_usd": f_in + f_out,
+            }
         )
         k = x + 1
     return out, cash
 
 
-def run(root: Path) -> pd.DataFrame:
+def run(root: Path, capital_usd: float | None = None, fees: bool = True) -> pd.DataFrame:
+    """capital_usd=None：1 万人民币按 USDCNY 折美元（原版）；否则用给定美元初始资金。"""
     rules = {k: v for k, v in o.load_rules().items() if k in RULES}
     days = o.oos_days(root)
     ctx = ef.Ctx.load(root)
     rows = []
-    cash = {(r, x): CAPITAL_CNY / USDCNY for r in RULES for x in EXITS}
+    c0 = CAPITAL_CNY / USDCNY if capital_usd is None else capital_usd
+    cash = {(r, x): c0 for r in RULES for x in EXITS}
     for day in days:
         g = ib.second_grid(root, "MU", day)
         if g is None:
@@ -126,7 +143,7 @@ def run(root: Path) -> pd.DataFrame:
             if cond is None:
                 continue
             for x in EXITS:
-                tr, cash[(name, x)] = day_trades(name, rule, x, g, cond, svy, cash[(name, x)])
+                tr, cash[(name, x)] = day_trades(name, rule, x, g, cond, svy, cash[(name, x)], fees)
                 rows += [{"rule": name, "exit": x, "day": day, **r} for r in tr]
     return pd.DataFrame(rows)
 
@@ -167,6 +184,103 @@ def weekly_table(tr: pd.DataFrame, days: list[dt.date]) -> pd.DataFrame:
     return pd.DataFrame(out)
 
 
+def buy_hold(root: Path, capital: float, days: list[dt.date]) -> pd.DataFrame:
+    """买入持有 MU（长桥前复权日线）：每个测试区间首日开盘全仓买入整数股（+1 tick、D-013 费用），
+    区间末日收盘卖出（−1 tick），下一区间用新权益重新买入；按日收盘计权益。"""
+    d = pd.read_parquet(root / "diag" / "daily_fwd" / "MU.parquet")
+    d["day"] = pd.to_datetime(d["ts"]).dt.date  # 时间戳为 naive UTC 04:00 / 05:00，日期即美东交易日
+    d = d.set_index("day").sort_index()
+    eq, cash, fees_tot = [], capital, 0.0
+    for a, b in o.RANGES:
+        seg = d[(d.index >= a) & (d.index <= b) & d.index.isin(days)]
+        if seg.empty:
+            continue
+        px0 = float(seg["open"].iloc[0]) + TICK
+        q = int(cash // px0)
+        f0 = _fee(q, "Buy", px0)
+        left = cash - q * px0 - f0
+        for day, r in seg.iterrows():
+            eq.append((day, left + q * float(r["close"])))
+        px1 = float(seg["close"].iloc[-1]) - TICK
+        f1 = _fee(q, "Sell", px1)
+        cash = left + q * px1 - f1
+        fees_tot += f0 + f1
+        eq[-1] = (eq[-1][0], cash)
+    s = pd.Series(dict(eq))
+    return s, fees_tot
+
+
+def usd_table(
+    root: Path, tr: pd.DataFrame, tr0: pd.DataFrame, days: list[dt.date], capital: float
+) -> pd.DataFrame:
+    """10 万美元版：每条策略 × 出场按周（美元）+ 扣费前总收益率、费用占比；另加买入持有 MU。"""
+    weeks = sorted({x - dt.timedelta(days=x.weekday()) for x in days})
+    out = []
+
+    def dd(eq: np.ndarray) -> str:
+        peak = np.maximum.accumulate(eq)
+        i = int(np.argmax(peak - eq))
+        return f"{peak[i] - eq[i]:,.0f}（{(peak[i] - eq[i]) / peak[i]:.1%}）"
+
+    for (r, x), sub in tr.groupby(["rule", "exit"]):
+        wk = sub.assign(w=[v - dt.timedelta(days=v.weekday()) for v in sub["day"]])
+        s = wk.groupby("w")["pnl_usd"].sum().reindex(weeks, fill_value=0.0)
+        g0 = tr0[(tr0["rule"] == r) & (tr0["exit"] == x)]["pnl_usd"].sum()
+        eq = capital + np.r_[0.0, np.cumsum(sub.sort_values("entry_ns")["pnl_usd"].to_numpy())]
+        out.append(
+            {
+                "策略": r.replace("survey_", ""),
+                "出场": x,
+                "交易笔数": len(sub),
+                "每周中位数": round(s.median(), 2),
+                "每周平均": round(s.mean(), 2),
+                "最好一周": round(s.max(), 2),
+                "最差一周": round(s.min(), 2),
+                "亏损周占比": f"{(s < 0).mean():.0%}",
+                "期末权益": round(capital + s.sum(), 2),
+                "总收益率（扣费后）": f"{s.sum() / capital:+.1%}",
+                "扣费前总收益率": f"{g0 / capital:+.1%}",
+                "费用占比（总费用 / 初始资金）": f"{sub['fees_usd'].sum() / capital:.1%}",
+                "最大回撤": dd(eq),
+            }
+        )
+    bh, fees_bh = buy_hold(root, capital, days)
+    wk = bh.groupby([v - dt.timedelta(days=v.weekday()) for v in bh.index]).last()
+    wchg = wk.diff().fillna(wk.iloc[0] - capital).reindex(weeks, fill_value=0.0)
+    out.append(
+        {
+            "策略": "买入持有 MU",
+            "出场": "区间末收盘",
+            "交易笔数": 2 * len(o.RANGES),
+            "每周中位数": round(wchg.median(), 2),
+            "每周平均": round(wchg.mean(), 2),
+            "最好一周": round(wchg.max(), 2),
+            "最差一周": round(wchg.min(), 2),
+            "亏损周占比": f"{(wchg < 0).mean():.0%}",
+            "期末权益": round(float(bh.iloc[-1]), 2),
+            "总收益率（扣费后）": f"{bh.iloc[-1] / capital - 1:+.1%}",
+            "扣费前总收益率": f"{(bh.iloc[-1] + fees_bh) / capital - 1:+.1%}",
+            "费用占比（总费用 / 初始资金）": f"{fees_bh / capital:.2%}",
+            "最大回撤": dd(np.r_[capital, bh.to_numpy()]),
+        }
+    )
+    return pd.DataFrame(out)
+
+
+def main_usd(capital: float = 100_000.0) -> pd.DataFrame:
+    root = get_settings().zr_data_root
+    st = o.store(root)
+    p1, p0 = st / "survey_stock_sim_usd.parquet", st / "survey_stock_sim_usd_nofee.parquet"
+    if not p1.exists():
+        run(root, capital, True).to_parquet(p1, index=False)
+    if not p0.exists():
+        run(root, capital, False).to_parquet(p0, index=False)
+    tr, tr0 = pd.read_parquet(p1), pd.read_parquet(p0)
+    for x in (tr, tr0):
+        x["day"] = pd.to_datetime(x["day"]).dt.date
+    return usd_table(root, tr, tr0, o.oos_days(root), capital)
+
+
 def main() -> int:
     root = get_settings().zr_data_root
     p = o.store(root) / "survey_stock_sim.parquet"
@@ -181,3 +295,42 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def write_report() -> None:
+    """docs/research/SURVEY_STOCK_SIM.md：1 万人民币与 10 万美元两档的表（读落盘结果）。"""
+    from zr.ops.markdown import df_to_md
+
+    root = get_settings().zr_data_root
+    st = o.store(root)
+    days = o.oos_days(root)
+    tr = pd.read_parquet(st / "survey_stock_sim.parquet")
+    tr["day"] = pd.to_datetime(tr["day"]).dt.date
+    L = [
+        "# 调研三条规则的正股模拟（满仓复利）",
+        "",
+        "`zr/research/survey_stock_sim.py`。信号 = R-049 第一层的逐秒入场条件（条件由假变真的秒"
+        "），信号后 2 秒"
+        "秒级价 ± 1 tick 成交，D-013 正股费用，做空不计借券费与保证金（未覆盖），同一时间一笔、"
+        "整数股、"
+        "15:50 清仓。测试期 MU 2025-01-02～2026-05-31、2026-09-01～2026-10-21（388 个交易日），"
+        "按周汇总、"
+        "无交易的周计 0。价格变动与收益率为 %。",
+        "",
+        f"## 初始 1 万人民币（USD/CNY {USDCNY}，XE 2026-10-23 中间价），金额为人民币",
+        "",
+        df_to_md(weekly_table(tr, days)),
+        "",
+        "## 初始 10 万美元，金额为美元",
+        "",
+        df_to_md(pd.read_parquet(st / "survey_stock_sim_usd_table.parquet")),
+        "",
+        "扣费前总收益率：同样规则、费用置 0 的独立复利模拟（交易序列可能因权益不同而略有差异）。"
+        "费用占比 = 扣费版全部订单费用之和 / 初始资金。买入持有 MU：长桥前复权日线，每个测试区间"
+        "首日开盘"
+        "全仓买入、末日收盘卖出，再进入下一区间。",
+        "",
+    ]
+    (Path(__file__).resolve().parents[2] / "docs" / "research" / "SURVEY_STOCK_SIM.md").write_text(
+        "\n".join(L), encoding="utf-8"
+    )

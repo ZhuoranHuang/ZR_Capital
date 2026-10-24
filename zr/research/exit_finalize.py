@@ -232,3 +232,54 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def write_report(root: Path) -> None:
+    from zr.ops.markdown import df_to_md
+
+    st = store(root)
+    g = pd.read_parquet(st / "grid_table.parquet")
+    g = g.assign(
+        止损=g["sl"].map(lambda v: "不设" if v < 0 else f"−{v:.0f}%"),
+        持仓上限=g["cap"].map(lambda v: "到 15:50" if v < 0 else f"{v:.0f} 分钟"),
+    )[["止损", "持仓上限", "total", "diff_vs_actual", "win", "hold_mean", "hold_med"]]
+    ch = pd.read_pickle(st / "chosen.pkl")
+    a = pd.read_parquet(st / "apply_table.parquet")
+    used = sorted(f.stem for f in (st / "option_days").glob("*.parquet"))
+    L = [
+        "# R-052：出场定型",
+        "",
+        "`uv run python -m zr.research.exit_finalize`；预登记见 RESEARCH_LOG R-052。金额为扣费后"
+        " USD。",
+        "",
+        "## 第 1 步：负责人 48 笔真实入场（样本内）",
+        "",
+        "止盈 = 期权中间价 +6.5% 全卖；止盈 / 止损 / 上限按负责人挂单策略 R-041 卖出，15:50 吃买"
+        "一。"
+        f"实际（对账单）合计 +{ACTUAL:,.2f}。",
+        "",
+        df_to_md(g.round(2)),
+        "",
+        f"选定（有止损、合计最接近实际）：止损 −{ch['sl']:.0f}%、持仓上限 {cap_txt(ch)}。",
+        "",
+        "## 第 2 步：套用到 R-049 规则（期权层，D-001）",
+        "",
+        f"只用已缓存的 {len(used)} 个交易日（{used[0]}～{used[-1]}），不拉新数据；BH q = 0.10（1"
+        "6 格）。",
+        "",
+        df_to_md(a.round(3)),
+        "",
+        "## 边界",
+        "",
+        "- 第 1 步在 D-033 校准窗口（负责人 2026-07～08）上，只用于定参数；第 2 步样本外但只覆盖"
+        "到 2026-04-28。",
+        "- 1 张、同一时间一个仓位；成交引擎 R-048 验收版。",
+        "",
+    ]
+    (Path(__file__).resolve().parents[2] / "docs" / "research" / "EXIT_FINALIZE.md").write_text(
+        "\n".join(L), encoding="utf-8"
+    )
+
+
+def cap_txt(ch: dict) -> str:
+    return "到 15:50" if ch["cap"] is None else f"{ch['cap']:.0f} 分钟"
