@@ -276,8 +276,45 @@ def main() -> int:
     pd.to_pickle({k: res[k] for k in ("owner_sim", "actual")}, st / "totals.pkl")
     res["eps"].to_parquet(st / "eps.parquet", index=False)
     print(t.round(3).to_string())
+    write_report(root)
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def write_report(root: Path) -> None:
+    from zr.ops.markdown import df_to_md
+
+    st = store(root)
+    t = pd.read_parquet(st / "table.parquet")
+    L = [
+        "# R-042：负责人盈利是能力还是运气",
+        "",
+        "`uv run python -m zr.research.skill_vs_luck`；预登记见 RESEARCH_LOG R-042。金额为扣费后"
+        " USD。",
+        "",
+        df_to_md(t.round(3)),
+        "",
+        "分位 = 随机 1,000 次合计中低于该值的比例。判断：≥ 0.95 能力；0.5–0.95 不确定；< 0.5 运"
+        "气。",
+        "",
+        "## 边界",
+        "",
+        "- 样本：负责人 D-030 MU 段 48 笔中有本地 1 分钟期权报价的 46 笔（2026-07-09～2026-08-06；"
+        "剔除 DTE 10、6 的 2 笔）。A 组按「0DTE 且入场成交在 10:15 ET 之后」定义为 8 笔，负责人"
+        "指令写 14 笔，"
+        "定义不一致（未核实负责人的口径）。",
+        "- 引擎：1 分钟 NBBO 构造的盘口，只有报价越过挂单价才成交、没有 OPRA 逐笔成交，成交率明"
+        "显低于 tick 引擎"
+        "（随机平均成交约 8 / 46 笔；负责人真实入场时刻在同引擎下成交 20 / 46，A 组 0 / 8）。未"
+        "成交的入场按 0 计。",
+        "- 随机对照的出场为 R-052 选定组（+6.5% / −30% / 抽样持仓上限），对账单为负责人真实出场"
+        "——主比较同时"
+        "包含入场与出场能力；同引擎对照只差入场时刻与合约。",
+        "- 2026-07～08 为 D-033 校准窗口，本结果是对负责人历史交易的描述，不是任何规则的样本外检"
+        "验。",
+        "",
+    ]
+    OUT.write_text("\n".join(L), encoding="utf-8")
