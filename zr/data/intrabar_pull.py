@@ -5,7 +5,7 @@
 （相邻行权价之差，来自当日期权链）才换档。每段向 ThetaData 拉两条腿的逐笔 NBBO
 （段起点前 10 秒起），在两条腿合并的报价时间轴上反推 S = C_mid − P_mid + K·e^(−rT)
 （r = 0.04，到期 16:00 ET，不计股息与提前行权；任一条腿超过 10 秒未更新则不出值）。
-落盘：$ZR_DATA_ROOT/intrabar/underlying=MU/date=YYYY-MM-DD/S.parquet
+落盘：$ZR_DATA_ROOT/intrabar/underlying=<UND>/date=YYYY-MM-DD/S.parquet（--underlying，默认 MU）
 （ts、S、strike、expiry、c_mid、p_mid、c_spread、p_spread），每日质检写 qa.csv：RTH 秒级覆盖率
 （该秒有 10 秒内更新过的反推价的比例）、与长桥 1 分钟收盘的误差（bp）。
 已有 S.parquet 的日子跳过（断点续传）。按日期倒序。
@@ -87,32 +87,34 @@ def implied(c: tuple, p: tuple, strike: float, expiry: dt.date) -> pd.DataFrame:
     return df[np.isfinite(df["S"])]
 
 
-_EXPS: list[dt.date] = []
-_STRIKES: dict[dt.date, np.ndarray] = {}
+_EXPS: dict[str, list[dt.date]] = {}
+_STRIKES: dict[tuple[str, dt.date], np.ndarray] = {}
 
 
-def expirations(client: ThetaClient) -> list[dt.date]:
+def expirations(client: ThetaClient, und: str = "MU") -> list[dt.date]:
     """期权链到期日（ThetaData list 端点，含已过期日期）。"""
-    if not _EXPS:
-        _EXPS.extend(client.list_expirations("MU"))
-    return _EXPS
+    if und not in _EXPS:
+        _EXPS[und] = list(client.list_expirations(und))
+    return _EXPS[und]
 
 
-def strikes_for(client: ThetaClient, exp: dt.date) -> np.ndarray:
-    if exp not in _STRIKES:
+def strikes_for(client: ThetaClient, exp: dt.date, und: str = "MU") -> np.ndarray:
+    if (und, exp) not in _STRIKES:
         rows = client.get_json(
-            "/option/list/strikes", symbol="MU", expiration=exp.strftime("%Y%m%d")
+            "/option/list/strikes", symbol=und, expiration=exp.strftime("%Y%m%d")
         )
-        _STRIKES[exp] = np.sort(np.array([float(r["strike"]) for r in rows]))
-    return _STRIKES[exp]
+        _STRIKES[(und, exp)] = np.sort(np.array([float(r["strike"]) for r in rows]))
+    return _STRIKES[(und, exp)]
 
 
-def build_day(root: Path, client: ThetaClient, day: dt.date, bars: pd.DataFrame) -> dict | None:
-    exps = [e for e in expirations(client) if e >= day]
+def build_day(
+    root: Path, client: ThetaClient, day: dt.date, bars: pd.DataFrame, und: str = "MU"
+) -> dict | None:
+    exps = [e for e in expirations(client, und) if e >= day]
     if not exps or bars.empty:
         return None
     exp = exps[0]
-    strikes = strikes_for(client, exp)
+    strikes = strikes_for(client, exp, und)
     if not len(strikes):
         return None
     px = bars["close"].shift(1).fillna(bars["open"])  # 每分钟用上一分钟收盘（首分钟用开盘）选档
@@ -121,7 +123,7 @@ def build_day(root: Path, client: ThetaClient, day: dt.date, bars: pd.DataFrame)
     def pull(seg, right):
         a, b, k = seg
         df = client.history_quote(
-            "MU",
+            und,
             exp,
             day,
             interval="tick",
@@ -146,7 +148,7 @@ def build_day(root: Path, client: ThetaClient, day: dt.date, bars: pd.DataFrame)
     if not parts:
         return {"day": str(day), "segments": len(segs), "rows": 0}
     out = pd.concat(parts, ignore_index=True).sort_values("ts", kind="stable")
-    dd = base_dir(root) / f"date={day}"
+    dd = base_dir(root, und) / f"date={day}"
     dd.mkdir(parents=True, exist_ok=True)
     out.to_parquet(dd / "S.parquet", index=False)
     # 质检
@@ -173,8 +175,8 @@ def build_day(root: Path, client: ThetaClient, day: dt.date, bars: pd.DataFrame)
     }
 
 
-def upsert_qa(root: Path, row: dict) -> None:
-    p = base_dir(root) / "qa.csv"
+def upsert_qa(root: Path, row: dict, und: str = "MU") -> None:
+    p = base_dir(root, und) / "qa.csv"
     old = pd.read_csv(p, dtype=str) if p.exists() else pd.DataFrame()
     if len(old):
         old = old[old["day"] != row["day"]]
@@ -183,9 +185,25 @@ def upsert_qa(root: Path, row: dict) -> None:
     )
 
 
+def build_one(root: Path, client: ThetaClient, day: dt.date, und: str = "MU") -> dict | None:
+    """单日构建并写 qa（供回填调度器调用）；已有 S.parquet 返回 None。"""
+    if (base_dir(root, und) / f"date={day}" / "S.parquet").exists():
+        return None
+    bars = load_bars(root, und, day, day)
+    try:
+        row = build_day(root, client, day, bars, und)
+    except Exception as e:  # noqa: BLE001 - 单日失败不中断，记 qa 后继续
+        log.warning("%s %s 失败：%s", und, day, e)
+        row = {"day": str(day), "error": str(e)[:200]}
+    if row is not None:
+        upsert_qa(root, row, und)
+    return row
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ranges", default="2026-09-01:2026-10-21,2025-01-01:2026-05-31")
+    ap.add_argument("--underlying", default="MU")
     ap.add_argument("--concurrency", type=int, default=4)
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -194,23 +212,13 @@ def main(argv: list[str] | None = None) -> int:
     for r in args.ranges.split(","):
         a, b = (dt.date.fromisoformat(x) for x in r.split(":"))
         days += trading_days(a, b)
-    days = sorted(set(days), reverse=True)
-    allbars = load_bars(root, "MU", min(days), max(days))
-    bday = np.asarray(allbars.index.tz_convert(ET).date)
     client = ThetaClient(concurrency=args.concurrency)
     done = 0
-    for day in days:
-        if (base_dir(root) / f"date={day}" / "S.parquet").exists():
-            continue
-        try:
-            row = build_day(root, client, day, allbars[bday == day])
-        except Exception as e:  # noqa: BLE001 - 单日失败不中断，记 qa 后继续
-            log.warning("%s 失败：%s", day, e)
-            row = {"day": str(day), "error": str(e)[:200]}
+    for day in sorted(set(days), reverse=True):
+        row = build_one(root, client, day, args.underlying)
         if row is not None:
-            upsert_qa(root, row)
             done += 1
-            log.info("%s：%s（本次 %d 天）", day, row, done)
+            log.info("%s %s：%s（本次 %d 天）", args.underlying, day, row, done)
     return 0
 
 
