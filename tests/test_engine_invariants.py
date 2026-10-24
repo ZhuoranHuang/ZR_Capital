@@ -112,7 +112,8 @@ def test_t3_time_order_and_flat():
     assert len(r.trades) == 1
     flat_ns = ts("15:50:00")
     for t in r.trades:
-        assert t.entry_ts_ns <= t.exit_ts_ns <= flat_ns
+        # 清仓容差：flat 之后 120 秒内取第一条可清仓报价，所以出场可晚于 flat 至多 120 秒
+        assert t.entry_ts_ns <= t.exit_ts_ns <= flat_ns + 120 * 10**9
     assert r.trades[0].exit_ts_ns == flat_ns
     assert r.trades[0].reason == "flat"
 
@@ -190,9 +191,9 @@ def test_t7_invalid_quotes():
     ra = _t7_run(lambda s: (0.0, 1.05) if 120 <= s < 130 else (1.00, 1.05))
     assert ra.trades[0].exit_ts_ns == ts("10:02:10")
     assert ra.trades[0].exit_px > 0
-    # (b) 10:01:00–10:01:04 bid=0.68 / ask=1.05（价差约 43%），10:01:05 起 0.98 / 1.05
-    rb = _t7_run(lambda s: (0.68, 1.05) if 60 <= s < 65 else (0.98, 1.05))
-    assert rb.trades[0].entry_ts_ns == ts("10:01:05")
+    # (b) 10:01:00–10:01:01 bid=0.68 / ask=1.05（价差约 43%），2 秒后（10:01:02）起 0.98 / 1.05
+    rb = _t7_run(lambda s: (0.68, 1.05) if 60 <= s < 62 else (0.98, 1.05))
+    assert rb.trades[0].entry_ts_ns == ts("10:01:02")
     assert rb.trades[0].entry_px == pytest.approx(1.05, abs=1e-9)
     # (c) ask == bid 视为有效，可在该报价成交
     rc = _t7_run(lambda s: (1.00, 1.00) if s == 60 else (0.98, 1.05))
@@ -214,3 +215,89 @@ def test_t8_coverage():
         simulate_day(q, sig, acct, session, SimPolicy(min_coverage=0.95))
     r = simulate_day(q, sig, acct, session, SimPolicy(min_coverage=0.0))
     assert r.equity_start == pytest.approx(10000, abs=1e-9)
+
+
+# ---------------- T9 清仓断流 ----------------
+
+
+def test_t9_flat_no_quotes_raises():
+    # 报价到 10:09:59 为止；flat=10:10；持有 30 分钟 → 需要清仓，但 flat 后 120 秒内没有任何报价行
+    q = quotes(every_second("10:00:00", "10:09:59", lambda s: (1.00, 1.05)))
+    session = {"first_entry": "10:00", "last_entry": "10:09", "flat": "10:10"}
+    with pytest.raises(ValueError):
+        simulate_day(
+            q,
+            [(ts("10:01:00"), 1, SYM, {"kind": "time", "minutes": 30})],
+            Account(equity_usd=10000, sizing_basis="premium"),
+            session,
+            SimPolicy(lag_s=0, min_coverage=0.0),
+        )
+
+
+# ---------------- T10 清仓时报价无效 ----------------
+
+
+def _t10_run(after_flat: list[tuple[int, float, float]]):
+    """10:00:00–10:09:59 每秒 1.00 / 1.05；flat=10:10；after_flat 为 flat 及之后的报价行。"""
+    q = quotes(every_second("10:00:00", "10:09:59", lambda s: (1.00, 1.05)) + after_flat)
+    session = {"first_entry": "10:00", "last_entry": "10:09", "flat": "10:10"}
+    return simulate_day(
+        q,
+        [(ts("10:01:00"), 1, SYM, {"kind": "time", "minutes": 30})],
+        Account(equity_usd=10000, sizing_basis="premium"),
+        session,
+        SimPolicy(lag_s=0, min_coverage=0.0),
+    )
+
+
+def test_t10_flat_with_bad_quotes():
+    # (a) flat 起 2 分钟内只有价差 40% 的报价（bid=0.60 / ask=0.90）
+    ra = _t10_run(every_second("10:10:00", "10:12:00", lambda s: (0.60, 0.90)))
+    ta = ra.trades[0]
+    assert ta.exit_ts_ns == ts("10:10:00")
+    assert ta.exit_px == pytest.approx(0.60, abs=1e-9)
+    assert ta.reason == "flat"
+    assert ra.skipped["flat_wide"] == 1
+    # (b) flat 后 1 分钟才出现第一条报价
+    rb = _t10_run(every_second("10:11:00", "10:12:00", lambda s: (1.00, 1.05)))
+    assert rb.trades[0].exit_ts_ns == ts("10:11:00")
+    assert rb.trades[0].reason == "flat"
+    assert rb.skipped["flat_late"] == 1
+    # (c) flat 后 10 分钟才有报价
+    with pytest.raises(ValueError):
+        _t10_run(every_second("10:20:00", "10:21:00", lambda s: (1.00, 1.05)))
+    # (d) flat 时报价 bid=0 / ask=0.05 → 按 0 成交，pnl = −(入场成本 + 费用)
+    rd = _t10_run([(ts("10:10:00"), 0.0, 0.05)])
+    td = rd.trades[0]
+    assert td.exit_px == pytest.approx(0.0, abs=1e-9)
+    expect_fees = fees_total(td.qty, "Buy", td.entry_px) + fees_total(td.qty, "Sell", 0.0)
+    assert td.fees_usd == pytest.approx(expect_fees, abs=1e-9)
+    assert td.pnl_usd == pytest.approx((0 - td.entry_px) * 100 * td.qty - td.fees_usd, abs=1e-9)
+    # (e) flat 时刻唯一报价为 0 / 0 → 成交价 0，flat_wide 不加，flat_zero += 1
+    re_ = _t10_run([(ts("10:10:00"), 0.0, 0.0)])
+    assert re_.trades[0].exit_px == pytest.approx(0.0, abs=1e-9)
+    assert re_.skipped["flat_wide"] == 0
+    assert re_.skipped["flat_zero"] == 1
+
+
+# ---------------- T12 入场等待上限 ----------------
+
+
+def test_t12_late_quote():
+    # lag 2 秒；信号 10:01:00；10:01:00–10:01:11 只有宽报价，
+    # 第一条紧报价在 10:01:12（= lag + 10 秒 > 5 秒上限）
+    q = quotes(
+        every_second(
+            "10:00:00", "10:10:00", lambda s: (0.68, 1.05) if 60 <= s < 72 else (0.98, 1.05)
+        )
+    )
+    session = {"first_entry": "10:00", "last_entry": "10:09", "flat": "10:10"}
+    r = simulate_day(
+        q,
+        [(ts("10:01:00"), 1, SYM, {"kind": "time", "minutes": 1})],
+        Account(equity_usd=10000, sizing_basis="premium"),
+        session,
+        SimPolicy(lag_s=2, min_coverage=0.0, max_entry_wait_s=5.0),
+    )
+    assert r.trades == []
+    assert r.skipped["late_quote"] == 1

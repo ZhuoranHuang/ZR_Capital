@@ -5,9 +5,12 @@
 - 报价：有效 = bid > 0、ask > 0、ask >= bid、相对价差 <= max_spread_pct；无效报价视为不存在；
 - 覆盖率：signals 中每个标的，first_entry 至 flat（含两端）的美东分钟里至少有 1 行报价的分钟占比；
   任一标的 < min_coverage 或 quotes 为空 → ValueError；
-- 入场：信号 + lag_s 之后（>=）第一条有效报价的 ask；出场：time / bracket（mid 判断，
-  触发后 > 的第一条有效报价的 bid）/ flat（>= flat 的第一条有效报价，无条件）；
-- 信号过滤顺序：outside_session → in_position → cooldown → no_quote → size_zero；
+- 入场：信号 + lag_s 之后（>=）第一条有效报价的 ask，且不晚于信号 + lag_s + max_entry_wait_s
+  （否则 late_quote）；出场：time / bracket（mid 判断，触发后 > 的第一条有效报价的 bid）；
+  清仓：这些出场的有效报价落在 flat 之后或不存在时，flat 之后（>=）120 秒内第一条可清仓报价
+  （bid >= 0 且 ask >= bid，不按价差过滤）按 bid 成交；窗口内无报价 → ValueError；
+  计数 flat_late（成交晚于 flat）、flat_wide（价差 > max_spread_pct）、flat_zero（bid == 0）；
+- 信号过滤顺序：outside_session → in_position → cooldown → no_quote → late_quote → size_zero；
 - 费用：zr.costs.fees.option_order_fees，买卖两侧分别计算后相加；权益按笔累加，
   下一笔按新权益定张数。
 """
@@ -27,7 +30,19 @@ from zr.costs.fees import option_order_fees
 
 ET = ZoneInfo("America/New_York")
 NS = 1_000_000_000
-SKIP_KEYS = ("outside_session", "in_position", "cooldown", "no_quote", "size_zero")
+SKIP_KEYS = (
+    "outside_session",
+    "in_position",
+    "cooldown",
+    "no_quote",
+    "late_quote",
+    "size_zero",
+    # 以下为计数，不参与信号过滤顺序
+    "flat_late",
+    "flat_wide",
+    "flat_zero",
+)
+FLAT_WINDOW_NS = 120 * NS  # 清仓：flat 之后（>=）120 秒内取第一条可清仓报价
 
 
 @dataclass(frozen=True)
@@ -46,6 +61,7 @@ class SimPolicy:
     min_coverage: float = 0.95
     max_spread_pct: float = 0.15
     lag_s: float = 2.0  # 信号到下单的延迟
+    max_entry_wait_s: float = 5.0  # 入场报价最晚 = 信号 + lag + 该值，超时计 late_quote
 
 
 @dataclass(frozen=True)
@@ -67,7 +83,7 @@ class DayResult:
     trades: list
     equity_start: float
     equity_end: float
-    skipped: dict  # 键固定为 outside_session, in_position, cooldown, no_quote, size_zero
+    skipped: dict  # 键 = SKIP_KEYS（过滤计数 + 清仓计数 flat_late / flat_wide / flat_zero）
 
 
 def size_position(account: Account, premium_px: float, stop_frac: float | None) -> int:
@@ -105,13 +121,18 @@ def _coverage(q: pd.DataFrame, symbols: set, day: dt.date, session: dict, policy
 
 
 class _Book:
-    """单标的的有效报价（按时间升序）。"""
+    """单标的的报价（按时间升序）。默认 = 有效报价（bid > 0、ask > 0、ask >= bid、
+    价差 <= max_spread）；clearable=True = 可清仓报价（bid >= 0 且 ask >= bid，含 0 / 0），
+    只供 flat 使用。"""
 
-    def __init__(self, q: pd.DataFrame, max_spread: float):
+    def __init__(self, q: pd.DataFrame, max_spread: float, clearable: bool = False):
         bid, ask = q["bid"].to_numpy(float), q["ask"].to_numpy(float)
         with np.errstate(invalid="ignore", divide="ignore"):
             mid = (ask + bid) / 2
-            ok = (bid > 0) & (ask > 0) & (ask >= bid) & ((ask - bid) / mid <= max_spread)
+            if clearable:
+                ok = (bid >= 0) & (ask >= bid)
+            else:
+                ok = (bid > 0) & (ask > 0) & (ask >= bid) & ((ask - bid) / mid <= max_spread)
         self.ts = q["ts_ns"].to_numpy(np.int64)[ok]
         self.bid, self.ask, self.mid = bid[ok], ask[ok], mid[ok]
 
@@ -124,8 +145,9 @@ class _Book:
         return i if i < len(self.ts) else None
 
 
-def _exit(book: _Book, i_entry: int, entry_px: float, rule: dict, flat_ns: int) -> tuple[int, str]:
-    """返回 (出场报价下标, 原因)。"""
+def _exit(book: _Book, i_entry: int, entry_px: float, rule: dict, flat_ns: int):
+    """tp / sl / time 出场：返回 (strict 报价下标, 原因)；需要清仓（没有 flat 之前的
+    出场报价）返回 None。"""
     t_entry = int(book.ts[i_entry])
     cand: tuple[int, str] | None = None
     hold_min = rule["minutes"] if rule["kind"] == "time" else rule.get("max_hold_min")
@@ -147,11 +169,25 @@ def _exit(book: _Book, i_entry: int, entry_px: float, rule: dict, flat_ns: int) 
         if x is not None:
             cand = (x, "time")
     if cand is None or book.ts[cand[0]] >= flat_ns:
-        x = book.first_ge(flat_ns)
-        if x is None:  # flat 之后没有有效报价：取最后一条有效报价（不晚于 flat）
-            x = len(book.ts) - 1
-        cand = (x, "flat")
+        return None
     return cand
+
+
+def _flat(raw_ts: np.ndarray, loose: _Book, flat_ns: int, symbol: str) -> int:
+    """清仓：flat 之后（>=）120 秒内第一条可清仓报价（loose 下标）。窗口内没有任何报价行或没有
+    可清仓报价 → ValueError。"""
+    j = loose.first_ge(flat_ns)
+    if j is not None and loose.ts[j] <= flat_ns + FLAT_WINDOW_NS:
+        return j
+    any_row = bool(((raw_ts >= flat_ns) & (raw_ts <= flat_ns + FLAT_WINDOW_NS)).any())
+    raise ValueError(
+        f"{symbol} 清仓：flat 后 120 秒内"
+        + (
+            "有报价行但没有可清仓报价（ask < bid 或缺值）"
+            if any_row
+            else "没有任何报价行（数据缺失）"
+        )
+    )
 
 
 def simulate_day(
@@ -169,7 +205,9 @@ def simulate_day(
     fe = _ns_at(day, session["first_entry"])
     le = _ns_at(day, session["last_entry"])
     flat_ns = _ns_at(day, session["flat"])
-    books = {sym: _Book(g, policy.max_spread_pct) for sym, g in q.groupby("symbol")}
+    books = {sym: _Book(g, policy.max_spread_pct) for sym, g in q.groupby("symbol")}  # strict
+    loose = {sym: _Book(g, float("inf"), clearable=True) for sym, g in q.groupby("symbol")}
+    raw_ts = {sym: g["ts_ns"].to_numpy(np.int64) for sym, g in q.groupby("symbol")}
     skipped = dict.fromkeys(SKIP_KEYS, 0)
     trades: list[Trade] = []
     equity0 = float(account.equity_usd)
@@ -191,14 +229,30 @@ def simulate_day(
         if i is None or book.ts[i] > le:
             skipped["no_quote"] += 1
             continue
+        if book.ts[i] > ts_ns + int(policy.lag_s * NS) + int(policy.max_entry_wait_s * NS):
+            skipped["late_quote"] += 1
+            continue
         entry_px = float(book.ask[i])
         stop = float(rule["sl"]) if rule.get("kind") == "bracket" and "sl" in rule else None
         qty = size_position(dataclasses.replace(account, equity_usd=equity), entry_px, stop)
         if qty == 0:
             skipped["size_zero"] += 1
             continue
-        x, reason = _exit(book, i, entry_px, rule, flat_ns)
-        exit_px = float(book.bid[x])
+        ex = _exit(book, i, entry_px, rule, flat_ns)
+        if ex is not None:
+            x, reason = ex
+            exit_ts, exit_px = int(book.ts[x]), float(book.bid[x])
+        else:
+            lb = loose[symbol]
+            j = _flat(raw_ts[symbol], lb, flat_ns, symbol)
+            exit_ts, exit_px, reason = int(lb.ts[j]), float(lb.bid[j]), "flat"
+            if exit_ts > flat_ns:
+                skipped["flat_late"] += 1
+            mid = (lb.ask[j] + lb.bid[j]) / 2
+            if mid > 0 and (lb.ask[j] - lb.bid[j]) / mid > policy.max_spread_pct:
+                skipped["flat_wide"] += 1
+            if exit_px == 0:
+                skipped["flat_zero"] += 1
         fees = float(option_order_fees(qty, "Buy", entry_px)["total"]) + float(
             option_order_fees(qty, "Sell", exit_px)["total"]
         )
@@ -210,7 +264,7 @@ def simulate_day(
                 entry_ts_ns=int(book.ts[i]),
                 entry_px=entry_px,
                 qty=qty,
-                exit_ts_ns=int(book.ts[x]),
+                exit_ts_ns=exit_ts,
                 exit_px=exit_px,
                 reason=reason,
                 fees_usd=fees,
@@ -218,7 +272,7 @@ def simulate_day(
             )
         )
         equity += pnl
-        last_exit = int(book.ts[x])
+        last_exit = exit_ts
     return DayResult(
         trades=trades,
         equity_start=equity0,
