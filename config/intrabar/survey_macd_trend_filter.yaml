@@ -1,0 +1,54 @@
+# 公开策略调研（STRATEGY_SURVEY.md）提炼的候选规则——未运行、未调参，不是研究结论。
+# 多指标共振（macd_cross_filter）：MACD 柱过零 + 长均线方向 + ADX 强度。对应负责人截图策略 1
+# 「非支配遗传算法-MACD 复合量化策略」的公开同类（截图里的具体过滤条件与 NSGA-II 优化出的参数未能找到原文）。
+# 组合取最常见的三件：MACD(12,26,9) 柱按方向过零（ChartArt MACD+SMA200、掘金 MACD-STOCK、QuantDinger MACD+KDJ），
+# 收盘在 EMA200 趋势侧（ChartArt、MACD Pullback Sniper），ADX(14) > 20（QuantDinger Resonance、MACD Pullback Sniper）。
+# 注意：MACD 用公开策略的 12/26/9，不是负责人 App 的 6/13/6；不调参。
+
+name: survey_macd_trend_filter
+family: macd_cross_filter
+category: confluence
+sources: [tv_macd_sma200_chartart, gh_quantdinger_resonance, gh_quantdinger_macd_kdj, gh_myquant_macd, tv_macd_pullback_sniper, paper_nsga2]
+oos_pick: false
+engine_ready: false
+owner_situation: ignition
+
+underlying: MU
+convention: C
+bar_minutes: 2
+days: {from: "2025-01-02", to: "2026-05-31"}
+oos_windows:
+  - {from: "2025-01-02", to: "2026-05-31"}
+  - {from: "2026-09-01", to: "2026-10-21"}
+session: {first_entry: "09:32", last_entry: "15:40", flat: "15:50"}
+
+direction: both
+
+features_needed:
+  - name: macd_cross
+    definition: >-
+      MACD(fast, slow, signal)：DIF = EMA_fast − EMA_slow，DEA = EMA(DIF, signal)，hist = DIF − DEA（标准 EMA，span=n、adjust=False），
+      已完成 2 分钟 K 收盘。最近一根 K i：d·hist_i > 0 且 d·hist_{i−1} ≤ 0 → 1，否则 0。
+    params: [fast, slow, signal]
+  - name: ma_dist
+    definition: 同 survey_rsi2_pullback.yaml。
+    params: [ma, period, price]
+  - name: adx
+    definition: 同 survey_ema_pullback.yaml。
+    params: [period]
+
+entry:
+  all:
+    - {feature: macd_cross, fast: 12, slow: 26, signal: 9, op: "==", value: 1, directional: true}
+    - {feature: ma_dist, ma: ema, period: 200, price: bar_close, op: ">", value: 0, directional: true}
+    - {feature: adx, period: 14, op: ">", value: 20, directional: false}
+
+native_exit:                       # 多数同类：反向过零
+  - {feature: macd_cross, fast: 12, slow: 26, signal: 9, op: "==", value: 1, directional: false, note: 反向}
+
+contract: {dte_max: 7, otm_steps: 1, no_0dte_after: "10:15"}
+executions: [owner, taker]
+order: {mode: taker, lag_s: 2}
+fill: {queue_fill_prob: 0.9}
+qty: 1
+exit: {tp: 0.10, sl: 0.15, max_hold_min: 30, order: {mode: taker, lag_s: 2}}

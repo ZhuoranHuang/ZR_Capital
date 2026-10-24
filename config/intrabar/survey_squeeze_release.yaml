@@ -1,0 +1,55 @@
+# 公开策略调研（STRATEGY_SURVEY.md）提炼的候选规则——未运行、未调参，不是研究结论。
+# 波动率过滤（squeeze_release）：LazyBear Squeeze Momentum（117512 赞，TradingView 本次检索最高）及 03.freeman 的策略版。
+# 入场 = 最近一根已完成 2 分钟 K 由「非释放」变为「释放」（BOLL 跑出 KC），且动量柱朝方向并放大。
+# 参数用 LazyBear 默认 BOLL(20, 2.0)、KC(20, 1.5, TR)；注意 LazyBear 原码 BOLL 偏差误用了 1.5（multKC），
+# 这里按其输入的本意 2.0（与 03.freeman 策略版一致），差异记入 STRATEGY_SURVEY.md。
+
+name: survey_squeeze_release
+family: squeeze_release
+category: vol_filter
+sources: [tv_squeeze_lazybear, tv_squeeze_strategy_freeman, tv_intraday_ts_marcovalente]
+oos_pick: false
+engine_ready: false
+owner_situation: ignition
+
+underlying: MU
+convention: C
+bar_minutes: 2
+days: {from: "2025-01-02", to: "2026-05-31"}
+oos_windows:
+  - {from: "2025-01-02", to: "2026-05-31"}
+  - {from: "2026-09-01", to: "2026-10-21"}
+session: {first_entry: "09:32", last_entry: "15:40", flat: "15:50"}
+
+direction: both
+
+features_needed:
+  - name: squeeze_fire
+    definition: >-
+      BB = SMA(close, bb_len) ± bb_mult × std(close, bb_len, ddof=0)；KC = SMA(close, kc_len) ± kc_mult × SMA(TR, kc_len)；
+      sqzOff_i = (BB下 < KC下) 且 (BB上 > KC上)。最近一根已完成 K i 满足 sqzOff_i 且 not sqzOff_{i−1} → 1，否则 0。不带方向。
+    params: [bb_len, bb_mult, kc_len, kc_mult]
+  - name: sqz_mom
+    definition: >-
+      val = linreg(close − avg(avg(HH_n, LL_n), SMA_n), n, 0)（n = kc_len，线性回归在最后一点的拟合值）；
+      输出 d·val（价格单位）。
+    params: [kc_len]
+  - name: sqz_mom_chg
+    definition: d·(val_i − val_{i−1})。
+    params: [kc_len]
+
+entry:
+  all:
+    - {feature: squeeze_fire, bb_len: 20, bb_mult: 2.0, kc_len: 20, kc_mult: 1.5, op: "==", value: 1, directional: false}
+    - {feature: sqz_mom, kc_len: 20, op: ">", value: 0, directional: true}
+    - {feature: sqz_mom_chg, kc_len: 20, op: ">", value: 0, directional: true}
+
+native_exit:                       # 03.freeman：动量柱转暗（d·Δval < 0）即平
+  - {feature: sqz_mom_chg, kc_len: 20, op: "<", value: 0, directional: true}
+
+contract: {dte_max: 7, otm_steps: 1, no_0dte_after: "10:15"}
+executions: [owner, taker]
+order: {mode: taker, lag_s: 2}
+fill: {queue_fill_prob: 0.9}
+qty: 1
+exit: {tp: 0.10, sl: 0.15, max_hold_min: 30, order: {mode: taker, lag_s: 2}}

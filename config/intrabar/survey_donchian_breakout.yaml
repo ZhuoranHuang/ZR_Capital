@@ -1,0 +1,43 @@
+# 公开策略调研（STRATEGY_SURVEY.md）提炼的候选规则——未运行、未调参，不是研究结论。
+# 通道突破（channel_breakout）：海龟 Donchian 20（tmr0 Pine、QuantDinger Turtle 模板、MQL5 Donchian EA）。
+# 当前秒价格越过前 20 根已完成 2 分钟 K 的最高 / 最低（口径 C，含盘前盘后）。原参数照搬，不调参。
+
+name: survey_donchian_breakout
+family: channel_breakout
+category: breakout
+sources: [tv_turtles_tmr0, gh_quantdinger_turtle, mql5_donchian_portfolio]
+oos_pick: false
+engine_ready: false
+owner_situation: ignition
+
+underlying: MU
+convention: C
+bar_minutes: 2
+days: {from: "2025-01-02", to: "2026-05-31"}
+oos_windows:
+  - {from: "2025-01-02", to: "2026-05-31"}
+  - {from: "2026-09-01", to: "2026-10-21"}
+session: {first_entry: "09:32", last_entry: "15:40", flat: "15:50"}
+
+direction: both
+
+features_needed:
+  - name: donchian
+    definition: >-
+      HH = 前 bars 根已完成 2 分钟 K 的最高价最大值，LL = 最低价最小值（不含正在形成的 K）；
+      d = +1：(S_t / HH − 1) × 1e4；d = −1：(LL / S_t − 1) × 1e4（bp）。
+    params: [bars]
+
+entry:
+  all:
+    - {feature: donchian, bars: 20, op: ">", value: 0, directional: true}   # 当前价按方向越过 20 根通道
+
+native_exit:                       # 海龟：反向触及 10 根通道
+  - {feature: donchian, bars: 10, op: ">", value: 0, directional: false, note: 反向}
+
+contract: {dte_max: 7, otm_steps: 1, no_0dte_after: "10:15"}
+executions: [owner, taker]
+order: {mode: taker, lag_s: 2}
+fill: {queue_fill_prob: 0.9}
+qty: 1
+exit: {tp: 0.10, sl: 0.15, max_hold_min: 30, order: {mode: taker, lag_s: 2}}
