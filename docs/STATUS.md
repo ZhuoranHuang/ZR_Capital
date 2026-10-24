@@ -23,6 +23,8 @@
 
 ## 进行中
 
+- **案例图（viz/case-charts，2026-10-25）**：owner_rule_2 + R-052 出场的 20 笔正股视角案例（MU 2026-04-28 盈 5 亏 5；QQQ 2026-10-19～21 盈 5 亏 5，QQQ 用 1 分钟 K 与 1 分钟期权报价复现），`docs/research/cases/index.html`、`CASES_README.md`。
+
 - **2026-10-24 本轮（feat/owner-entry-mining，早报 `docs/MORNING_BRIEF_2026-10-25.md`）**：入场挖掘 OWNER_ENTRY_MINING.md（520 个方向化特征，截断检验 0 不一致；单特征 0 个通过 BH；模型留一日 AUC 0.46–0.57、置换 p ≥ 0.17；候选规则的搜索流程留一日不成立）；R-049 OWNER_RULES_OOS.md（正股层 10 格通过 BH 但超额 ≤ 0.141% 扣费前；期权层只用 2025-01-02～2026-04-28 的 330 天，26 格全负、0 格通过）；出场挖掘 exit_mining（盈利段卖出时点可区分，HGB 留一日 AUC 0.848、置换 p 0.005（200 次）；挖出的出场规则替换负责人 48 笔真实出场全部更差）；R-052 EXIT_FINALIZE.md（+6.5% / −30% / 30 分钟；套到规则 16 格全负）；R-042 SKILL_VS_LUCK.md（负责人 46 笔扣费后合计在同日随机入场分布的 96–100 分位）；调研规则正股模拟 SURVEY_STOCK_SIM.md（10 万美元：ORB 原版 +35.9%，买入持有 MU +1013.1%）。ThetaData 期权预取于 2026-10-24 17:09 SGT 按负责人指令中止（本机到 ThetaData 往返 ≈256 ms、丢包 10%），2026-04-29 之后无期权逐笔缓存。
 - **暂停（负责人指令）**：R-050（以盈亏为标签的机会挖掘，代码已备）、R-051（挤压 → 回踩 → MACD，代码在分支 research/squeeze-pullback-macd，未合并）、四步队列第 1 步补报与 PROFIT_LABEL_MINING.md、热门共振后续、MACD + 布林中轨、H1 诊断。
 - **网上流行共振策略正股回测（research/popular-confluence-stock，`docs/research/POPULAR_CONFLUENCE_STOCK.md`，`zr/research/popular_confluence.py`）**：MU、QQQ，日线（长桥前复权，2021-10-01～2026-10-21）与 1 小时 / 15 分钟（本地 1 分钟合成，2023-10-02～2026-10-21）；六条策略（Squeeze+EMA200、SuperTrend+ADX+EMA200、ChartArt BB+RSI（负责人参数与源码默认 RSI(6)/50 两版）、WaveTrend+MFI、四指标共振、MACD 复合 NSGA-II 样本内优化→样本外），多空与只做多、两档资金，D-013 费用、下一根开盘 + 1 tick。除 MACD 复合的日线样本内段（即优化所用区间）外，没有一格跑赢同期买入持有（MU 日线 +1,211%、QQQ +108%）；MACD 复合样本外全部落后买入持有；满仓做空 MU 日线两条爆仓。数字见文档主表。
