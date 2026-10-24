@@ -307,9 +307,63 @@ def prefetch(root: Path, days: list, concurrency: int = 4) -> pd.DataFrame:
     return w
 
 
+class MissingData(Exception):
+    """离线模式下某合约某时间窗没有完整缓存。"""
+
+
+class CachedOptionData(ib.OptionData):
+    """离线期权数据（负责人 2026-10-24 指令：停止预取、不再拉取任何期权数据）：到期日与行权价只从
+    当日已缓存的逐笔文件名推出（预取覆盖了当日价格区间内全部虚值一档合约，见 prefetch），逐笔 NBBO
+    与 OPRA 成交只读缓存；需要的时间窗没有完整缓存或文件损坏 → MissingData（整日跳过）。不连
+    ThetaData。"""
+
+    def __init__(self, root: Path, und: str = "MU"):
+        self.root, self.und = root, und
+        self._books: dict = {}
+        self._cs: list = []
+
+    def _base(self, kind: str, day) -> Path:
+        return self.root / "diag" / kind / f"underlying={self.und}" / f"date={day}"
+
+    def pick(self, day, t_et, d, spot, rule):
+        syms = {f.stem.rsplit("_", 1)[0] for f in self._base("v4_ticks", day).glob("*.parquet")}
+        if not syms:
+            raise MissingData(f"{day} 无任何期权缓存")
+        self._cs = [ib.parse_contract(x) for x in syms]
+        return super().pick(day, t_et, d, spot, rule)
+
+    def expirations(self):
+        return sorted({c["expiry"] for c in self._cs})
+
+    def strikes(self, exp):
+        return np.sort(
+            np.array(sorted({float(c["strike"]) for c in self._cs if c["expiry"] == exp}))
+        )
+
+    def book(self, sym, day, start, end):
+        have = v4d._cached_intervals(self.root, self.und, sym, day)
+        if v4d.uncovered(start, end, have):
+            raise MissingData(f"{sym} {day} {start}–{end}")
+        qf = sorted(self._base("v4_ticks", day).glob(f"{sym}_*.parquet"))
+        if any(not (self._base("v4_trades", day) / f.name).exists() for f in qf):
+            raise MissingData(f"{sym} {day} 缺 OPRA 成交缓存")
+        key = (sym, day, tuple(f.name for f in qf))
+        if key not in self._books:
+            if len(self._books) > 64:
+                self._books.clear()
+            try:
+                self._books[key] = self._load_book(qf, self._base("v4_ticks", day), day)
+            except Exception as e:  # noqa: BLE001 - 预取被中止时可能留下损坏文件
+                raise MissingData(f"{sym} {day} 缓存读取失败：{e}") from e
+        return self._books[key]
+
+    def _trades(self, sym, day):
+        raise MissingData("离线模式不拉取 OPRA 成交")
+
+
 def _shard_option(root: Path, rules: dict, days: list, seed: int) -> list:
     bs = ib.BarState(root, "MU", max(days))
-    od = ib.OptionData(root, "MU")
+    od = CachedOptionData(root, "MU")
     out = []
     ck = store(root) / "option_days"
     ck.mkdir(exist_ok=True)
@@ -318,19 +372,18 @@ def _shard_option(root: Path, rules: dict, days: list, seed: int) -> list:
         if done.exists():  # 断点续跑：已完成的交易日直接读回
             out += pd.read_parquet(done).to_dict("records")
             continue
+        if (ck / f"{day}.skipped").exists():
+            continue
         g = ib.second_grid(root, "MU", day)
         if g is None:
             continue
         n0 = len(out)
-        for name, rule in rules.items():
-            co = load_conds(root, day, name, len(g))
-            if co is None or not any(v.any() for v in co.values()):
-                continue
-            for ex in EXECUTIONS:
-                for z in ZERO_DTE:
-                    r = ib.with_execution(rule, ex, z)
-                    for tr in ib.run_day(root, r, day, bs, od, seed, None, co):
-                        out.append({"rule": name, "exec": ex, "zdte": z, **tr})
+        try:
+            out += _option_day(root, rules, day, g, bs, od, seed)
+        except MissingData as e:  # 期权缓存不完整：整日跳过（不拉取）
+            (ck / f"{day}.skipped").write_text(str(e), encoding="utf-8")
+            log.info("%s 跳过（期权缓存不完整）：%s", day, e)
+            continue
         pd.DataFrame(
             out[n0:], columns=["rule", "exec", "zdte", "day"] if n0 == len(out) else None
         ).to_parquet(done, index=False)
@@ -338,8 +391,32 @@ def _shard_option(root: Path, rules: dict, days: list, seed: int) -> list:
     return out
 
 
+def _option_day(root: Path, rules: dict, day, g, bs, od, seed: int) -> list:
+    out = []
+    for name, rule in rules.items():
+        co = load_conds(root, day, name, len(g))
+        if co is None or not any(v.any() for v in co.values()):
+            continue
+        for ex in EXECUTIONS:
+            for z in ZERO_DTE:
+                r = ib.with_execution(rule, ex, z)
+                for tr in ib.run_day(root, r, day, bs, od, seed, None, co):
+                    out.append({"rule": name, "exec": ex, "zdte": z, **tr})
+    return out
+
+
+# 预取于 2026-10-24 17:09 SGT 按负责人指令中止；中止时进行中的批次从 2026-04-29 开始，
+# 之前的交易日已完整预取（由文件写入时刻与预取日志的批次边界确定）。之后的交易日期权层全部跳过。
+PREFETCH_DONE_THROUGH = dt.date(2026, 4, 28)
+
+
 def run_option(root: Path, rules: dict, days: list, jobs: int, seed: int = 0) -> pd.DataFrame:
     ib.check_out_of_sample(days)
+    ck = store(root) / "option_days"
+    ck.mkdir(exist_ok=True)
+    for d in days:
+        if d > PREFETCH_DONE_THROUGH:
+            (ck / f"{d}.skipped").write_text("预取中止，未预取", encoding="utf-8")
     shards = [days[k::jobs] for k in range(jobs)]
     parts = Parallel(n_jobs=jobs)(delayed(_shard_option)(root, rules, sh, seed) for sh in shards)
     df = pd.DataFrame([x for p in parts for x in p])
