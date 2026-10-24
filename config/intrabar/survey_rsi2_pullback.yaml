@@ -2,14 +2,14 @@
 # Connors RSI(2) 的盘中改写，同时是负责人截图策略 2「RSI 超卖反弹趋势策略（只做多）」的多空对称版。
 # 原规则（日线）：收盘 > SMA200 时 RSI(2) < 10（或 < 5）且收盘 < SMA5 买入，收盘上穿 SMA5 卖出；空头镜像。
 # 改写：原参数直接搬到已完成的 2 分钟 K（口径 C），不按分钟线重新换算、不调参（规则 11：全部是待测参数）。
-# 来源见 sources；新特征定义见 features_needed（引擎尚未实现，engine_ready: false）。
+# 来源见 sources；新特征定义见 features_needed（R-049 已在 entry_features 中实现，见文件末尾的 entry）。
 
 name: survey_rsi2_pullback
 family: oscillator_pullback
 category: pullback
 sources: [paper_connors_rsi2, tv_rsi2_chrismoody]
 oos_pick: true                     # 第三条 R-049 必测：盘中 RSI(2) 改写
-engine_ready: false
+engine_ready: true                 # R-049：entry 已改写为 entry_features 的 ef 条件
 owner_situation: channel_pullback
 
 underlying: MU
@@ -35,7 +35,7 @@ features_needed:
       directional=true 时 d = −1 用 100 − RSI，所以「≤ 10」对空头即 RSI ≥ 90。
     params: [period]
 
-entry:
+entry_original:                    # 调研原文的条件（features_needed 定义）
   all:
     - {feature: ma_dist, ma: sma, period: 200, price: bar_close, op: ">", value: 0, directional: true}  # 趋势：收盘在 SMA200 趋势侧
     - {feature: ma_dist, ma: sma, period: 5, price: bar_close, op: "<", value: 0, directional: true}    # 回调：收盘在 SMA5 逆向侧
@@ -59,3 +59,11 @@ exit:                              # 负责人离场习惯：mid +10% 全卖 / �
   sl: 0.15
   max_hold_min: 30
   order: {mode: taker, lag_s: 2}
+
+# R-049 引擎条件：features_needed 的实现 = zr/features/entry_features.py（svy_* 族；RSI(2) / ADX(14) = b2_rsi2 / b2_adx14，
+# 均为已完成 2 分钟 K、口径 C、Wilder），与 entry_original 逐条对应，参数不变。
+entry:
+  all:
+    - {feature: ef, name: svy_sma200_dist_bp, op: ">", value: 0, role: trend}
+    - {feature: ef, name: svy_sma5_dist_bp, op: "<", value: 0, role: pullback}
+    - {feature: ef, name: b2_rsi2, op: "<=", value: 10, role: trigger}

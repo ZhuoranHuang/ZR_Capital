@@ -69,8 +69,26 @@ def load_rules() -> dict[str, dict]:
             r = yaml.safe_load(f.read_text(encoding="utf-8"))
             if pat.startswith("survey") and not r.get("oos_pick"):
                 continue
-            out[f.stem] = r
+            out[f.stem] = normalize(r)
     return out
+
+
+def normalize(r: dict) -> dict:
+    """R-049 预登记的统一口径：合约最近到期、虚值一档；离场 +10% / −15% / 30 分钟（中间价）；
+    执行 owner（R-041）与 taker 对照。0DTE 口径由 intrabar.with_execution 设定。"""
+    r = dict(r)
+    r["contract"] = {"nearest_expiry": True, "otm_steps": 1}
+    r["exit"] = {"tp": 0.10, "sl": 0.15, "max_hold_min": 30, "basis": "mid"}
+    r["executions"] = {
+        "owner": {"entry": {"mode": "owner"}, "exit": {"mode": "owner"}},
+        "taker": {
+            "entry": {"mode": "taker", "lag_s": 2.0},
+            "exit": {"mode": "taker", "lag_s": 2.0},
+        },
+    }
+    r["qty"] = 1
+    r["direction"] = "both"
+    return r
 
 
 def oos_days(root: Path) -> list[dt.date]:
@@ -135,8 +153,12 @@ def stock_day(root: Path, ctx, bs, rules: dict, day: dt.date, seed: int) -> tupl
         cond, in_win = ib.entry_conditions(rule, g, feat, bs)
         conds[name] = cond
         win_idx = np.flatnonzero(in_win)
-        for d, c in cond.items():
-            ks = _edges(c & in_win & np.isfinite(S), REFRACTORY)
+        trig = {d: _edges(c & in_win & np.isfinite(S), REFRACTORY) for d, c in cond.items()}
+        cap = rule.get("max_entries_per_day")
+        if cap:  # 每天只取最早的 cap 个触发（不分方向）
+            allk = sorted((k, d) for d, ks in trig.items() for k in ks)[: int(cap)]
+            trig = {d: np.array([k for k, dd in allk if dd == d], dtype=int) for d in trig}
+        for d, ks in trig.items():
             if not len(ks):
                 continue
             mt = _metrics(S, fw, ks, d)

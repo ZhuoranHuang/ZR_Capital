@@ -547,6 +547,9 @@ def run_day(
             }
         )
         k = int(np.searchsorted(t, xt or cand[reason], side="right"))
+        cap = rule.get("max_entries_per_day")
+        if cap and sum(1 for x in trades if x.get("filled", 0) > 0) >= int(cap):
+            break
     return trades
 
 

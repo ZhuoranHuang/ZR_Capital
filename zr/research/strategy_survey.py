@@ -81,7 +81,7 @@ RULE_REQUIRED = [
     "oos_pick",
     "features_needed",
 ]
-ENGINE_FEATURES = {"ret", "dist_extreme", "boll", "pctb", "macd_hist", "macd_hist_chg"}
+ENGINE_FEATURES = {"ret", "dist_extreme", "boll", "pctb", "macd_hist", "macd_hist_chg", "ef"}
 CAL_START, CAL_END = "2026-06-01", "2026-08-31"
 
 

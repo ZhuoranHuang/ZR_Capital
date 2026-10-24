@@ -56,7 +56,7 @@ BRUTE_W = (30, 60, 120, 300, 900, 1800)
 CROSS = ("SPY", "QQQ", "SMH")
 TOL_BP = 2.0  # 「处在新极值」：距极值 ≤ 2 bp（平价反推价的噪声量级）
 LOOKBACK_DAYS = 14
-FAMILIES = ("bar", "live", "sec", "vol", "opt", "optvol", "cal", "cross", "brute")
+FAMILIES = ("bar", "live", "sec", "vol", "opt", "optvol", "cal", "cross", "brute", "svy")
 
 
 @dataclass
@@ -668,6 +668,51 @@ def brute(day: Day) -> dict[str, F]:
     return out
 
 
+# ---------------- 调研规则用 ----------------
+
+
+def svy_features(day: Day) -> dict[str, F]:
+    """公开策略调研（STRATEGY_SURVEY.md）三条必测规则需要的特征（已完成 2 分钟 K，口径 C；开盘区间用
+    秒级价）。不参与入场挖掘（挖掘样本在加入本族之前生成）。"""
+    b = resample_bars(day.ext, "2min")
+    b = b[b["close"].notna()]
+    i = _asof_idx(_ns(b.index) + 120 * NS, day.t)
+    c = b["close"]
+    sma200 = c.rolling(200, min_periods=200).mean()
+    sma5 = c.rolling(5, min_periods=5).mean()
+    e50 = c.ewm(span=50, adjust=False).mean()
+    e200 = c.ewm(span=200, adjust=False).mean()
+    side = np.sign((c - e50).to_numpy())
+    prev = _shift(side, 1)
+    blk = {
+        "sma200_dist_bp": F("signed", ((c / sma200 - 1) * 1e4).to_numpy()),
+        "sma5_dist_bp": F("signed", ((c / sma5 - 1) * 1e4).to_numpy()),
+        "ema50_200_align_bp": F("signed", ((e50 / e200 - 1) * 1e4).to_numpy()),
+        "ema50_cross": F(
+            "pair", ((side > 0) & (prev <= 0)) * 1.0, ((side < 0) & (prev >= 0)) * 1.0
+        ),
+        "ema50_side_lag5": F("pair", (_shift(side, 5) > 0) * 1.0, (_shift(side, 5) < 0) * 1.0),
+    }
+    out = _gather(blk, i, "svy")
+    S, n = day.S, len(day.t)
+    w = 300  # 开盘区间 5 分钟（09:30:00–09:34:59），09:35:00 起可用
+    seg = S[:w]
+    if np.isfinite(seg).any():
+        hi, lo = np.nanmax(seg), np.nanmin(seg)
+        fv = seg[np.isfinite(seg)]
+        odir = (fv[-1] / fv[0] - 1) * 1e4
+    else:
+        hi = lo = odir = np.nan
+    avail = np.arange(n) >= w
+    out["svy_or5_break_bp"] = F(
+        "pair",
+        np.where(avail, (S / hi - 1) * 1e4, np.nan),
+        np.where(avail, (lo / S - 1) * 1e4, np.nan),
+    )
+    out["svy_or5_dir_bp"] = F("signed", np.where(avail, odir, np.nan))
+    return out
+
+
 # ---------------- 汇总 ----------------
 
 FAMILY_FN = {
@@ -678,6 +723,7 @@ FAMILY_FN = {
     "cal": cal_features,
     "cross": cross_features,
     "brute": brute,
+    "svy": svy_features,
 }
 
 
@@ -702,6 +748,8 @@ def day_features(day: Day, families: tuple[str, ...] = FAMILIES) -> dict[str, F]
 def family_of(name: str) -> str:
     if name.startswith("live"):
         return "live"
+    if name.startswith("svy_"):
+        return "svy"
     if name.startswith("b") and name[1].isdigit():
         return "bar"
     return {
