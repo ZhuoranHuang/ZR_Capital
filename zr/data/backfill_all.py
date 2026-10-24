@@ -538,6 +538,10 @@ def main(argv: list[str] | None = None) -> int:
             runners[t](root, t, deadline)
             daily(root, deadline)
         progress(root, "本轮全部任务完成")
+        if not args.only:  # 全部优先级都已跑完（未到截止时间）→ 完成标记，供后台循环发通知
+            (root / "backfill_state" / "ALL_DONE").write_text(
+                f"{dt.datetime.now(SGT):%Y-%m-%d %H:%M} SGT", encoding="utf-8"
+            )
     except Deadline:
         progress(root, f"到达截止时间 {end:%H:%M} SGT，暂停（下次自动续传）")
     finally:

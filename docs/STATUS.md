@@ -23,7 +23,7 @@
 
 ## 进行中
 
-- **数据补齐（data/backfill-all，2026-10-25 起）**：`zr/data/backfill_all.py` + `scripts/backfill_night.sh` + launchd `com.zr.backfill-night`（每 30 分钟触发，只在新加坡时间 22:00–08:00 运行，单实例锁，断点续传，06:00 后先做每日增量）。优先级 p1 MU 期权逐笔 2026-04-29～10-21 → p2 MU 2025-01～2026-04-28 → p3a QQQ 秒级正股价 / p3b QQQ 期权逐笔 → p4 SPY 1 分钟 → p5 长桥日线（VPS 只读）。进度 `$ZR_DATA_ROOT/logs/backfill_progress.log`，总表 `$ZR_DATA_ROOT/reports/DATA_INVENTORY_BACKFILL.md`。拉取期间不跑研究任务。
+- **数据补齐（data/backfill-all，2026-10-25 起）**：`zr/data/backfill_all.py` + `scripts/backfill_night.sh` + 后台循环 `scripts/backfill_loop.sh`（nohup，每 30 分钟调用一次 runner；runner 只在新加坡时间 22:00–08:00 运行，单实例锁，断点续传，06:00 后先做每日增量；全部完成后发 macOS 通知；**重启后需重新启动循环**）。**launchd 不可用**：launchd 启动的 /bin/bash 没有外接盘权限（Operation not permitted），已卸载；`com.zr.sync-from-vps` 同样因此自 2026-10-22 起失败——需负责人在「系统设置 → 隐私与安全性」给 /bin/bash 授予「可移除的宗卷」或「完全磁盘访问权限」。优先级 p1 MU 期权逐笔 2026-04-29～10-21 → p2 MU 2025-01～2026-04-28 → p3a QQQ 秒级正股价 / p3b QQQ 期权逐笔 → p4 SPY 1 分钟 → p5 长桥日线（VPS 只读）。进度 `$ZR_DATA_ROOT/logs/backfill_progress.log`，总表 `$ZR_DATA_ROOT/reports/DATA_INVENTORY_BACKFILL.md`。拉取期间不跑研究任务。
 
 - **案例图（viz/case-charts，2026-10-25）**：owner_rule_2 + R-052 出场的 20 笔正股视角案例（MU 2026-04-28 盈 5 亏 5；QQQ 2026-10-19～21 盈 5 亏 5，QQQ 用 1 分钟 K 与 1 分钟期权报价复现），`docs/research/cases/index.html`、`CASES_README.md`。
 
