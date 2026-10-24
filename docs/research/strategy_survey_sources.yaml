@@ -1,0 +1,1197 @@
+# 公开策略调研的来源表（第二条 / docs/strategy-survey，2026-10-23 采集）。
+# 由 `uv run python -m zr.research.strategy_survey` 读取，生成 STRATEGY_SURVEY.md 的计数与来源表。
+# 手工整理，每条的规则都来自所列链接；read 字段说明读到的是什么：
+#   pine = 读了 TradingView 公开 Pine 源码（pubscripts-suggest-json / pine-facade 接口取得）
+#   python / sql = 读了仓库源码；desc = 只读了作者 / 厂商的文字描述；secondary = 二手摘要（搜索引擎、第三方转述），未读原文
+# 热度：TradingView = 脚本点赞数（agreeCount，接口 2026-10-23 读数）；GitHub = 仓库 star（API 2026-10-23 读数）；
+#       MQL5 / 聚宽 / 掘金 / 论文 = 平台不公开或无可比热度，写「未取得」。
+# category：breakout 趋势突破 / pullback 顺势回调 / mean_reversion 均值回归 / confluence 多指标共振 / vol_filter 波动率过滤
+# family：同一入场机制的子类，用于找「最常见」的突破与回调规则
+# trend_def：判断趋势的方式（可多选）：
+#   price_vs_ma 价在均线一侧 / ma_alignment 均线排列 / ma_slope 均线斜率 / adx ADX 或 DI / swing_structure 高低点结构 /
+#   channel 通道（Donchian、Keltner、BOLL、VWAP 带）/ atr_trail ATR 跟踪线状态 / htf 高一级周期确认 /
+#   opening_range 开盘区间方向 / momentum 动量或 MACD 符号 / none 不判断趋势
+# situation：对应负责人三类情形 ignition 点火 / channel_pullback 通道回调 / range_avoid 回避震荡；none = 都不对应
+# symmetric：yes = 原策略多空对称；mirror = 原策略只做一边，下列 mirror 字段给出镜像
+
+sources:
+  # ---------------- TradingView ----------------
+  - id: tv_supertrend_kivanc
+    platform: TradingView
+    name: SuperTrend STRATEGY
+    author: KivancOzbilgic
+    url: https://www.tradingview.com/script/P5Gu6F8k/
+    script_id: PUB;rcRbtoBiKGtjZq96XWjZtnEs2k2dBWaj
+    kind: strategy
+    popularity: 25540
+    pop_unit: tv_likes
+    read: pine
+    bar: 任意（作者未指定）
+    indicators: ATR(10)，乘数 3.0，源 hl2；ATR 用 Wilder（changeATR=true）
+    trend_def: [atr_trail]
+    trend_text: 上轨 / 下轨按 hl2 ∓ 3×ATR 单向收紧；收盘穿越上一根的反向轨 → 趋势翻转
+    entry: 趋势由 −1 翻为 +1 做多，+1 翻为 −1 做空（收盘确认）
+    exit: 反向翻转即反手（始终在场）
+    filters: 只有回测日期窗口
+    claimed: 无
+    risks: 始终在场，震荡期反复翻转；参数无依据；收盘确认，无前视
+    category: breakout
+    family: atr_trail_flip
+    symmetric: yes
+    situation: [ignition]
+  - id: tv_utbot_quantnomad
+    platform: TradingView
+    name: UT Bot Alerts（及 UT Bot Strategy 9006 赞）
+    author: QuantNomad（原作 Yo_adriiiiaan）
+    url: https://www.tradingview.com/script/n8ss8BID/
+    script_id: PUB;fvKf7ZbacOxo47bpXI9rDSN0npXIk48x
+    kind: indicator
+    popularity: 60831
+    pop_unit: tv_likes
+    read: pine
+    bar: 任意
+    indicators: ATR(10)，Key Value 1（止损距离 = 1×ATR）
+    trend_def: [atr_trail]
+    trend_text: 收盘价相对 ATR 跟踪止损线的位置；跟踪线只朝趋势方向移动
+    entry: 收盘上穿跟踪线做多，下穿做空
+    exit: 反向穿越（反手）
+    filters: 可选 Heikin Ashi 源
+    claimed: 无（作者让用户自己回测）
+    risks: 指标脚本（策略版由他人改写）；1×ATR 很近，2 分钟 K 上信号会非常频繁；HA 源会让信号价格与可成交价不一致
+    category: breakout
+    family: atr_trail_flip
+    symmetric: yes
+    situation: [ignition]
+  - id: tv_alphatrend
+    platform: TradingView
+    name: AlphaTrend Strategy
+    author: KivancOzbilgic
+    url: https://www.tradingview.com/script/3wdQu7P3/
+    script_id: PUB;5c59f45a445140a78edb61d9692ab2e5
+    kind: strategy
+    popularity: 7135
+    pop_unit: tv_likes
+    read: pine
+    bar: 任意
+    indicators: SMA(TR,14)，乘数 1；MFI(14) ≥ 50（无量时用 RSI(14) ≥ 50）
+    trend_def: [atr_trail, momentum]
+    trend_text: MFI ≥ 50 时线按 low − ATR 只升不降，否则按 high + ATR 只降不升；线与 2 根前比较的交叉为翻转
+    entry: AlphaTrend 上穿自身 2 根前的值做多，下穿做空
+    exit: 反手
+    filters: 无
+    claimed: 无
+    risks: 与 SuperTrend 同类；MFI 用成交量，盘前盘后低量会扭曲
+    category: breakout
+    family: atr_trail_flip
+    symmetric: yes
+    situation: [ignition]
+  - id: tv_turtles_tmr0
+    platform: TradingView
+    name: 20 years old Turtles strategy still work!!
+    author: tmr0
+    url: https://www.tradingview.com/script/Q1O23zJP/
+    script_id: PUB;2008
+    kind: strategy
+    popularity: 6534
+    pop_unit: tv_likes
+    read: pine
+    bar: 原版海龟为日线
+    indicators: Donchian 入场 20 / 55，出场 10 / 20
+    trend_def: [channel]
+    trend_text: 价格突破过去 N 根最高 / 最低
+    entry: high > 前 20 根最高做多、low < 前 20 根最低做空（55 根为第二系统），盘中触及即入
+    exit: 反向触及 10 根（第二系统 20 根）极值
+    filters: 无；允许加仓 5 次
+    claimed: 标题称「仍然有效」，无数字
+    risks: 盘中触及入场 + 收盘计算的 Pine 回测会高估成交；日线参数直接搬到分钟线没有依据
+    category: breakout
+    family: channel_breakout
+    symmetric: yes
+    situation: [ignition]
+  - id: tv_orb_chrismoody
+    platform: TradingView
+    name: Opening Range Breakout with 2 Profit Targets
+    author: ChrisMoody
+    url: https://www.tradingview.com/script/kpBLjNlk/
+    script_id: PUB;190
+    kind: indicator
+    popularity: 10123
+    pop_unit: tv_likes
+    read: pine
+    bar: 日内（作者示例 5–15 分钟）
+    indicators: 开盘区间高低点；两档目标
+    trend_def: [opening_range]
+    trend_text: 价格离开开盘区间的方向即当日方向
+    entry: 突破开盘区间上沿做多 / 下沿做空
+    exit: 两档固定目标，区间另一侧止损
+    filters: 无
+    claimed: 无
+    risks: 指标脚本，不含成交假设
+    category: breakout
+    family: opening_range_breakout
+    symmetric: yes
+    situation: [ignition]
+  - id: tv_orb_zzzcrypto
+    platform: TradingView
+    name: ORB - Opening Range Breakout
+    author: zzzcrypto123
+    url: https://www.tradingview.com/script/uJsja4dX/
+    script_id: PUB;xLXe22qQZCUf4xebZCMXNXcO4D7zY8J5
+    kind: indicator
+    popularity: 11836
+    pop_unit: tv_likes
+    read: pine
+    bar: 日内，区间 5 分钟（默认时段 09:15–09:20，印度市场）
+    indicators: 开盘前 5 分钟高低点
+    trend_def: [opening_range]
+    trend_text: 同上
+    entry: 只画线，不含入场（用户自行判断突破）
+    exit: 无
+    filters: 无
+    claimed: 无
+    risks: 指标；时段写死为 NSE 开盘
+    category: breakout
+    family: opening_range_breakout
+    symmetric: yes
+    situation: [ignition]
+  - id: tv_keltner_trend_wunder
+    platform: TradingView
+    name: Keltner Channel - Trend Based Strategy
+    author: WunderTrading
+    url: https://www.tradingview.com/script/ezSBm5MS/
+    script_id: PUB;dc020f713d6849ad823c1abede024175
+    kind: strategy
+    popularity: 2516
+    pop_unit: tv_likes
+    read: pine
+    bar: 1 小时（ETH/USDT）
+    indicators: KC = SMA(81) ± 2.5×SMA(TR,81)；DMI(19)、ADX 平滑 10；EMA46 vs SMA46
+    trend_def: [channel, adx, ma_alignment]
+    trend_text: EMA46 > SMA46 视为上行；+DI > −DI 且 +DI > 27
+    entry: 开盘在通道内、收盘站上上轨、+DI > −DI 且 +DI > 27、EMA46 > SMA46 → 做多（源码只有多头）
+    exit: 收盘跌破下轨或 −4% 止损；+4.5%（15%）与 +20% 两档止盈
+    filters: 回测日期窗口
+    claimed: 无数字；参数 81 / 2.5 / 19 / 27 / 46 明显是优化出来的
+    risks: 过拟合风险高（非整参数）；只做多
+    category: breakout
+    family: channel_breakout
+    symmetric: mirror
+    mirror: 开盘在通道内、收盘跌破下轨、−DI > +DI 且 −DI > 27、EMA46 < SMA46 → 做空；收盘站上上轨或 +4% 止损
+    situation: [ignition]
+  - id: tv_vwap_trend_wbburgin
+    platform: TradingView
+    name: VWAP Trendfollow Strategy
+    author: wbburgin
+    url: https://www.tradingview.com/script/XoR8rQaW/
+    script_id: PUB;0279619ca1224ebba48b4fb863b190ad
+    kind: strategy
+    popularity: 4609
+    pop_unit: tv_likes
+    read: pine
+    bar: 日内（锚定 Session 的 VWAP）
+    indicators: 会话 VWAP ± 1σ 带（作者默认倍数），2σ 带止盈
+    trend_def: [channel]
+    trend_text: 收盘穿出 VWAP 1σ 带的方向；可选「VWAP 自身上行」过滤
+    entry: 收盘上穿上 1σ 带做多，下穿下 1σ 带做空
+    exit: 收盘从上方回落穿过上 2σ 带（多）/ 从下方回升穿过下 2σ 带（空）止盈，或反向信号
+    filters: 可选 VWAP 斜率同向
+    claimed: 无
+    risks: 锚点选 Earnings 时用 lookahead_on 的财报序列（默认 Session 不受影响）
+    category: breakout
+    family: channel_breakout
+    symmetric: yes
+    situation: [ignition]
+  - id: tv_torb_zeiierman
+    platform: TradingView
+    name: Timely Opening Range Breakout Strategy [TORB]
+    author: Zeiierman
+    url: https://www.tradingview.com/script/78AVOLmR/
+    script_id: PUB;3ff027b1d38549b6a621e83c571deed3
+    kind: indicator
+    popularity: 3316
+    pop_unit: tv_likes
+    read: pine
+    bar: 日内
+    indicators: 会话区间高低；成交量动量线 PMMV 与其均线
+    trend_def: [opening_range]
+    trend_text: 收盘穿出会话区间
+    entry: 收盘上穿区间高点且 PMMV 高于均线和阈值 → 上突破；下方对称
+    exit: 指标，无
+    filters: 成交量活跃度阈值
+    claimed: 无
+    risks: 指标；量能公式自定义，含 20 根循环确认
+    category: breakout
+    family: opening_range_breakout
+    symmetric: yes
+    situation: [ignition]
+  - id: tv_hhll_lonesome
+    platform: TradingView
+    name: Higher High Lower Low Strategy
+    author: LonesomeTheBlue
+    url: https://www.tradingview.com/script/vcg3prja/
+    script_id: PUB;u6qRMAqYIjak6hyy6ZAIrsdloX7iSXUT
+    kind: indicator
+    popularity: 11237
+    pop_unit: tv_likes
+    read: pine
+    bar: 任意
+    indicators: pivot 左右各 5 根
+    trend_def: [swing_structure]
+    trend_text: 收盘高于最近一个 Lower High → 上行；低于最近一个 Higher Low → 下行
+    entry: 结构翻转（指标版）
+    exit: 反向翻转
+    filters: 无
+    claimed: 无
+    risks: pivot 需要右侧 5 根确认，结构点在 5 根之后才可知（Pine 画在过去位置，看图会产生前视错觉）
+    category: breakout
+    family: structure_break
+    symmetric: yes
+    situation: [ignition, channel_pullback]
+  - id: tv_hull_suite
+    platform: TradingView
+    name: Hull Suite
+    author: InSilico
+    url: https://www.tradingview.com/script/hg92pFwS/
+    script_id: PUB;tAMed007BRbJ7g7QbaMNgynd1CGusK5b
+    kind: indicator
+    popularity: 22594
+    pop_unit: tv_likes
+    read: pine
+    bar: 任意（作者：55 用于波段入场）
+    indicators: HMA(55)
+    trend_def: [ma_slope]
+    trend_text: HULL > HULL[2] 为上行（颜色）
+    entry: 指标；常见用法是颜色翻转入场
+    exit: 反向翻转
+    filters: 可选高一级周期 HMA
+    claimed: 无
+    risks: 指标；高周期 security 未设 lookahead 参数（旧版默认 off）
+    category: breakout
+    family: ma_slope_flip
+    symmetric: yes
+    situation: [ignition]
+  - id: tv_double_ema_pullback
+    platform: TradingView
+    name: Double EMA Pullback - Buy Sell Signal
+    author: hanabil
+    url: https://www.tradingview.com/script/4H3SSSTg/
+    script_id: PUB;f89d14b835e24205b98efeaddce11571
+    kind: indicator
+    popularity: 5571
+    pop_unit: tv_likes
+    read: pine
+    bar: 任意
+    indicators: EMA50、EMA200；回看 5 根
+    trend_def: [ma_alignment]
+    trend_text: EMA50 > EMA200 为上行
+    entry: 收盘上穿 EMA50、EMA50 > EMA200、5 根前收盘在 EMA50 之上（即先在上方、回落到下方、再收回）→ 买；下方对称 → 卖
+    exit: 指标，无
+    filters: 无
+    claimed: 无
+    risks: 指标；无出场
+    category: pullback
+    family: ma_pullback
+    symmetric: yes
+    situation: [channel_pullback]
+  - id: tv_coral_pullback
+    platform: TradingView
+    name: Coral Trend Pullback Strategy (TradeIQ)
+    author: kevinmck100
+    url: https://www.tradingview.com/script/kc6Itas8/
+    script_id: PUB;c2ecd4e3258d4b53a60357c56905c628
+    kind: strategy
+    popularity: 1195
+    pop_unit: tv_likes
+    read: pine
+    bar: 任意（来自 TradeIQ 视频）
+    indicators: Coral Trend（平滑均线）；可选 ADX/DI(14) 中线 20
+    trend_def: [ma_slope, adx]
+    trend_text: Coral 线上升（bfr > bfr[1]）为多
+    entry: Coral 上行；上穿后至少 1 根整根在线上；之后收盘跌回线下（回调）且回调期间 Coral 未翻色；再收盘上穿 Coral → 多；可选 +DI > −DI、ADX > 20 且上升
+    exit: 近 N 根摆动低点止损，止盈 = R:R × 止损
+    filters: ADX/DI 或 ASH+HawkEye 量能确认
+    claimed: 无
+    risks: 条件链长；视频来源的回测未公开
+    category: pullback
+    family: ma_pullback
+    symmetric: yes
+    situation: [channel_pullback]
+  - id: tv_macd_pullback_sniper
+    platform: TradingView
+    name: MACD Pullback Sniper | Trend + ADX Filtered Strategy
+    author: blitz_locked
+    url: https://www.tradingview.com/script/V87nRt9v/
+    script_id: PUB;aeae32205bbc4e4eb1e472b3bbe4e57d
+    kind: strategy
+    popularity: 481
+    pop_unit: tv_likes
+    read: pine
+    bar: 任意
+    indicators: MACD(12,26,9)、EMA200、ADX(14) > 20、ATR(14)
+    trend_def: [price_vs_ma, adx]
+    trend_text: 收盘在 EMA200 之上为多
+    entry: MACD 线上穿信号线、收盘 > EMA200、（可选）MACD 线 < 0（回调后的再启动）、ADX > 20 → 多；空头对称
+    exit: 2×ATR 止损、2R 止盈、反向交叉平仓
+    filters: ADX、零轴
+    claimed: 无
+    risks: 热度低；代码含 0.05% 佣金与 2 tick 滑点，较诚实
+    category: pullback
+    family: macd_pullback
+    symmetric: yes
+    situation: [channel_pullback]
+  - id: tv_rsi2_chrismoody
+    platform: TradingView
+    name: CM RSI-2 Strategy（Upper 9398 赞 / Lower 24636 赞）
+    author: ChrisMoody
+    url: https://www.tradingview.com/script/xOm7jSPf/
+    script_id: PUB;567 / PUB;568
+    kind: indicator
+    popularity: 24636
+    pop_unit: tv_likes
+    read: pine
+    bar: 原文日线
+    indicators: RSI(2)（Wilder），SMA5、SMA200；阈值 10 / 90
+    trend_def: [price_vs_ma]
+    trend_text: 收盘在 SMA200 之上为多头环境
+    entry: 收盘 > SMA200、收盘 < SMA5、RSI(2) < 10 → 多；收盘 < SMA200、> SMA5、RSI(2) > 90 → 空
+    exit: 入场后 1–4 根内收盘回到 SMA5 另一侧（high 触及 SMA5）
+    filters: 无
+    claimed: 无
+    risks: 着色指标，不是回测；日线规则
+    category: pullback
+    family: oscillator_pullback
+    symmetric: yes
+    situation: [channel_pullback]
+  - id: tv_macd_sma200_chartart
+    platform: TradingView
+    name: MACD + SMA 200 Strategy
+    author: ChartArt
+    url: https://www.tradingview.com/script/yMCa3XZD/
+    script_id: PUB;2004
+    kind: strategy
+    popularity: 31810
+    pop_unit: tv_likes
+    read: pine
+    bar: 任意
+    indicators: MACD 用 SMA(12,26)、信号 SMA(9)；SMA200
+    trend_def: [price_vs_ma, momentum]
+    trend_text: 26 根前的收盘在 SMA200 之上为多；SMA26 < SMA200 时撤多单
+    entry: 柱上穿 0、MACD > 0、SMA12 > SMA26、close[26] > SMA200 → 在当根 low 挂停止单做多；空头对称（high 挂停止单）
+    exit: 反向信号；日内最大亏损 50%
+    filters: SMA26 vs SMA200
+    claimed: 无
+    risks: MACD 用 SMA 而非 EMA；停止单挂在 low 上相当于立即成交
+    category: confluence
+    family: macd_cross_filter
+    symmetric: yes
+    situation: [ignition]
+  - id: tv_bb_rsi_chartart
+    platform: TradingView
+    name: Bollinger + RSI, Double Strategy v1.1
+    author: ChartArt
+    url: https://www.tradingview.com/script/uCV8I4xA/
+    script_id: PUB;2187
+    kind: strategy
+    popularity: 49048
+    pop_unit: tv_likes
+    read: pine
+    bar: 任意
+    indicators: RSI(6) 穿 50；BOLL(200, 2)
+    trend_def: [none]
+    trend_text: 不判断趋势（着色里用中轨斜率，但不进入下单条件）
+    entry: RSI(6) 上穿 50 且收盘上穿 BOLL 下轨 → 在下轨挂停止单做多；RSI 下穿 50 且收盘下穿上轨 → 做空
+    exit: 反向信号
+    filters: 无
+    claimed: 无
+    risks: 均值回归；同一根上两个交叉同时成立很少，信号稀少
+    category: mean_reversion
+    family: band_revert
+    symmetric: yes
+    situation: [none]
+  - id: tv_ema_slope_cross_chartart
+    platform: TradingView
+    name: EMA Slope + EMA Cross Strategy
+    author: ChartArt
+    url: https://www.tradingview.com/script/XLGBqrZq/
+    script_id: PUB;Q0lcEZMRjZVFYo8xtBufLFoJYuj9jXcL
+    kind: strategy
+    popularity: 7751
+    pop_unit: tv_likes
+    read: pine
+    bar: 任意
+    indicators: EMA2、EMA4、EMA20
+    trend_def: [ma_slope]
+    trend_text: 名为趋势，但源码 long = 收盘下穿 EMA20 或（价与 EMA2 下行、下穿 EMA2 且 EMA4 上行）
+    entry: 收盘下穿 EMA20 做多 / 上穿做空（与名称相反，实为逆势）
+    exit: 反手
+    filters: 无
+    claimed: 无
+    risks: 名称与代码不符的例子：热门 ≠ 规则如名
+    category: mean_reversion
+    family: ma_revert
+    symmetric: yes
+    situation: [none]
+  - id: tv_squeeze_lazybear
+    platform: TradingView
+    name: Squeeze Momentum Indicator [LazyBear]
+    author: LazyBear
+    url: https://www.tradingview.com/script/nqQ1DT5a/
+    script_id: PUB;175
+    kind: indicator
+    popularity: 117512
+    pop_unit: tv_likes
+    read: pine
+    bar: 任意
+    indicators: BOLL(20,2)、KC(SMA20 ± 1.5×SMA(TR,20))、动量 = linreg(close − avg(avg(HH20,LL20), SMA20), 20)
+    trend_def: [momentum]
+    trend_text: 动量柱符号与变化（亮绿 / 暗绿 / 亮红 / 暗红）
+    entry: 指标；常见用法：挤压（BOLL 在 KC 内）释放时顺动量方向入场
+    exit: 无
+    filters: 挤压状态
+    claimed: 无
+    risks: 源码 BOLL 偏差用的是 multKC（1.5）而不是 mult（2.0），即实际 BOLL 是 1.5σ——热门指标里的实现错误
+    category: vol_filter
+    family: squeeze_release
+    symmetric: yes
+    situation: [ignition, range_avoid]
+  - id: tv_squeeze_strategy_freeman
+    platform: TradingView
+    name: Strategy based on Squeeze Momentum Indicator [LazyBear]
+    author: 03.freeman
+    url: https://www.tradingview.com/script/qp9BoNyS/
+    script_id: PUB;JkA3CtO6b2poNMOM5bSdkexjhsBUlPfN
+    kind: strategy
+    popularity: 3416
+    pop_unit: tv_likes
+    read: pine
+    bar: 任意
+    indicators: BOLL(14, 2.0)、KC(16, 1.5)、LazyBear 动量
+    trend_def: [momentum]
+    trend_text: 动量柱为亮绿（>0 且上升）/ 亮红（<0 且下降）
+    entry: 由非「已释放」变为「已释放」（BOLL 跑出 KC）的那根，动量亮绿做多 / 亮红做空
+    exit: 动量转暗（多头柱下降）即平
+    filters: 可选动量绝对值下限
+    claimed: 无
+    risks: calc_on_every_tick=true，实时与历史行为不同（回测重绘风险）
+    category: vol_filter
+    family: squeeze_release
+    symmetric: yes
+    situation: [ignition, range_avoid]
+  - id: tv_intraday_ts_marcovalente
+    platform: TradingView
+    name: Intraday TS ,BB + Buy/Sell + Squeeze Mom. + adx-dmi
+    author: MarcoValente
+    url: https://www.tradingview.com/script/opkkK4oM/
+    script_id: PUB;2443
+    kind: indicator
+    popularity: 5566
+    pop_unit: tv_likes
+    read: pine
+    bar: 日内（作者：5 分钟及以上）
+    indicators: BOLL、开盘区间、LazyBear 挤压、DMI/ADX（≥ 29 为趋势，≤ 20 为无趋势）
+    trend_def: [adx, channel]
+    trend_text: +DI ≥ −DI 且 ADX ≥ 29 → 上行；ADX ≤ 20 → 无趋势
+    entry: 价格在 BOLL 上轨之上时在区间高点 +0.001 挂突破买单；下方对称
+    exit: 两档目标 = 入场到对侧轨距离的 1 倍 / 2 倍
+    filters: 挤压状态、ADX 分档
+    claimed: 无
+    risks: 指标（画线），无成交假设
+    category: vol_filter
+    family: squeeze_release
+    symmetric: yes
+    situation: [ignition, range_avoid]
+  - id: tv_adx_dmi_millerrh
+    platform: TradingView
+    name: ADX | DMI Trend
+    author: millerrh
+    url: https://www.tradingview.com/script/4aQD9gqq/
+    script_id: PUB;pK4BaOcWN9muQNsVCiJV0yKe6jqNEssR
+    kind: strategy
+    popularity: 761
+    pop_unit: tv_likes
+    read: pine
+    bar: 任意
+    indicators: DMI(14)、ADX 平滑 14、关键水平 23；EMA200；成交量 > 2×SMA(vol,20)；ATR(14)×2 跟踪、SAR
+    trend_def: [adx, price_vs_ma]
+    trend_text: ADX 近 3 根上升且 > 23；+DI > −DI；收盘 ≥ EMA200
+    entry: 以上全部 + 成交量放大 → 多；空头对称
+    exit: ADX 较上一根下降、ATR 跟踪或 SAR 被触及
+    filters: 成交量、EMA200
+    claimed: 无
+    risks: 出场条件「ADX 下降一根」非常敏感
+    category: confluence
+    family: adx_di
+    symmetric: yes
+    situation: [ignition, range_avoid]
+
+  # ---------------- GitHub：freqtrade-strategies（5588 star） ----------------
+  - id: ft_trendrider
+    platform: GitHub/freqtrade-strategies
+    name: TrendRiderStrategy
+    author: freqtrade 社区
+    url: https://github.com/freqtrade/freqtrade-strategies/blob/main/user_data/strategies/TrendRiderStrategy.py
+    popularity: 5588
+    pop_unit: gh_stars_repo
+    read: python
+    bar: 1 小时；4 小时与日线确认
+    indicators: EMA(多档)、EMA50、EMA200；RSI；ADX(14)、DI；MACD(12,26,9)；BOLL(20,2) 宽度；OBV；ATR(14)
+    trend_def: [ma_alignment, price_vs_ma, adx, htf]
+    trend_text: 收盘 > EMA200 且 EMA50 > EMA200（is_bull），4 小时同样 is_bull，日线 EMA200
+    entry: 多种入场标签：回踩慢 EMA（low ≤ EMA×1.02、收盘 > EMA、阳线）、EMA50 反弹、RSI 回调区间 + ADX > 阈值、RSI 回升穿越、快慢 EMA 金叉 + ADX > 18 等
+    exit: RSI 超买、快慢 EMA 死叉；6% 止损（可选 ATR）
+    filters: BTC 市场情绪（加密专用）
+    claimed: 无
+    risks: 超参数（hyperopt）多；只做多
+    category: pullback
+    family: ma_pullback
+    symmetric: mirror
+    mirror: 收盘 < EMA200 且 EMA50 < EMA200；high ≥ EMA×0.98、收盘 < EMA、阴线 → 做空
+    situation: [channel_pullback]
+  - id: ft_adxmomentum
+    platform: GitHub/freqtrade-strategies
+    name: ADXMomentum（berlinguyinca）
+    author: berlinguyinca
+    url: https://github.com/freqtrade/freqtrade-strategies/blob/main/user_data/strategies/berlinguyinca/ADXMomentum.py
+    popularity: 5588
+    pop_unit: gh_stars_repo
+    read: python
+    bar: 1 小时
+    indicators: ADX(14)、+DI(25)、−DI(25)、MOM(14)
+    trend_def: [adx, momentum]
+    trend_text: ADX > 25 且 +DI > 25 且 +DI > −DI
+    entry: ADX > 25、MOM > 0、+DI > 25、+DI > −DI → 多（源码出场条件即空头镜像）
+    exit: ADX > 25、MOM < 0、−DI > 25、−DI > +DI；25% 止损
+    filters: 无
+    claimed: 无
+    risks: 只做多，出场即镜像
+    category: confluence
+    family: adx_di
+    symmetric: mirror
+    mirror: ADX > 25、MOM < 0、−DI > 25、−DI > +DI → 做空
+    situation: [ignition, range_avoid]
+  - id: ft_hlhb
+    platform: GitHub/freqtrade-strategies
+    name: hlhb
+    author: freqtrade 社区
+    url: https://github.com/freqtrade/freqtrade-strategies/blob/main/user_data/strategies/hlhb.py
+    popularity: 5588
+    pop_unit: gh_stars_repo
+    read: python
+    bar: 4 小时
+    indicators: RSI(10, hl2) 穿 50；EMA5 / EMA10 交叉；ADX > 25
+    trend_def: [adx, momentum, ma_alignment]
+    trend_text: EMA5 上穿 EMA10 且 RSI 上穿 50 且 ADX > 25
+    entry: 三者同根成立 → 多
+    exit: 三者反向同根成立；32% 止损
+    filters: ADX
+    claimed: 无
+    risks: 三个交叉要求同一根，信号稀少；只做多
+    category: confluence
+    family: ma_cross_filter
+    symmetric: mirror
+    mirror: RSI 下穿 50、EMA5 下穿 EMA10、ADX > 25 → 做空
+    situation: [ignition]
+  - id: ft_volatility_system
+    platform: GitHub/freqtrade-strategies
+    name: VolatilitySystem（futures）
+    author: freqtrade 社区
+    url: https://github.com/freqtrade/freqtrade-strategies/blob/main/user_data/strategies/futures/VolatilitySystem.py
+    popularity: 5588
+    pop_unit: gh_stars_repo
+    read: python
+    bar: 1 小时，指标在 3 小时重采样上算
+    indicators: ATR(14)×2；收盘变化
+    trend_def: [momentum]
+    trend_text: 单根收盘变化超过 2×ATR 视为趋势启动
+    entry: 收盘变化 > 前一根 2×ATR → 多；< −2×ATR → 空
+    exit: 反向信号
+    filters: 无
+    claimed: 无
+    risks: 重采样合并时若用未完成的 3 小时 K 会有前视（源码用 resampled_merge，未逐行核实）
+    category: breakout
+    family: range_expansion
+    symmetric: yes
+    situation: [ignition]
+  - id: ft_trend_following
+    platform: GitHub/freqtrade-strategies
+    name: TrendFollowingStrategy（futures）
+    author: freqtrade 社区
+    url: https://github.com/freqtrade/freqtrade-strategies/blob/main/user_data/strategies/futures/TrendFollowingStrategy.py
+    popularity: 5588
+    pop_unit: gh_stars_repo
+    read: python
+    bar: 5 分钟
+    indicators: EMA20；OBV
+    trend_def: [price_vs_ma]
+    trend_text: 收盘在 EMA20 之上
+    entry: 收盘上穿 EMA20 且 OBV 上升 → 多；下穿且 OBV 下降 → 空
+    exit: 反向
+    filters: OBV
+    claimed: 无
+    risks: 26.5% 止损（超参数）
+    category: breakout
+    family: ma_cross
+    symmetric: yes
+    situation: [ignition]
+  - id: ft_fadxsma
+    platform: GitHub/freqtrade-strategies
+    name: FAdxSmaStrategy（futures）
+    author: freqtrade 社区
+    url: https://github.com/freqtrade/freqtrade-strategies/blob/main/user_data/strategies/futures/FAdxSmaStrategy.py
+    popularity: 5588
+    pop_unit: gh_stars_repo
+    read: python
+    bar: 1 小时
+    indicators: ADX(n)、短 / 长 SMA（hyperopt 参数）
+    trend_def: [adx, ma_alignment]
+    trend_text: ADX > 阈值 + SMA 交叉方向
+    entry: ADX > 阈值且短 SMA 上穿长 SMA → 多；下穿 → 空
+    exit: ADX < 阈值等；5% 止损 + 跟踪
+    filters: ADX
+    claimed: 无
+    risks: 参数全部 hyperopt
+    category: confluence
+    family: ma_cross_filter
+    symmetric: yes
+    situation: [ignition, range_avoid]
+  - id: ft_bbandrsi
+    platform: GitHub/freqtrade-strategies
+    name: BbandRsi（berlinguyinca）
+    author: berlinguyinca
+    url: https://github.com/freqtrade/freqtrade-strategies/blob/main/user_data/strategies/berlinguyinca/BbandRsi.py
+    popularity: 5588
+    pop_unit: gh_stars_repo
+    read: python
+    bar: 1 小时
+    indicators: RSI(14)；BOLL(20,2)（典型价）
+    trend_def: [none]
+    trend_text: 不判断
+    entry: RSI < 30 且收盘 < 下轨 → 多
+    exit: RSI > 70；ROI 10%；25% 止损
+    filters: 无
+    claimed: 无
+    risks: 只做多的均值回归
+    category: mean_reversion
+    family: band_revert
+    symmetric: mirror
+    mirror: RSI > 70 且收盘 > 上轨 → 做空；RSI < 30 平仓
+    situation: [none]
+  - id: ft_scalp
+    platform: GitHub/freqtrade-strategies
+    name: Scalp（berlinguyinca）
+    author: berlinguyinca
+    url: https://github.com/freqtrade/freqtrade-strategies/blob/main/user_data/strategies/berlinguyinca/Scalp.py
+    popularity: 5588
+    pop_unit: gh_stars_repo
+    read: python
+    bar: 1 分钟
+    indicators: EMA5（high/close/low）；快速随机 STOCHF(5,3)；ADX > 30
+    trend_def: [adx]
+    trend_text: 只用 ADX > 30 判断「有趋势」，不判断方向
+    entry: 开盘 < EMA5(low)、ADX > 30、fastk 与 fastd < 30 且 fastk 上穿 fastd → 多
+    exit: 开盘 ≥ EMA5(high) 或 fastk / fastd 上穿 70；4% 止损
+    filters: ADX
+    claimed: 无
+    risks: ADX 不给方向，强下跌中也会抄底
+    category: pullback
+    family: oscillator_pullback
+    symmetric: mirror
+    mirror: 开盘 > EMA5(high)、ADX > 30、fastk 与 fastd > 70 且 fastk 下穿 fastd → 空
+    situation: [channel_pullback]
+
+  # ---------------- GitHub：其他 ----------------
+  - id: gh_quantdinger_resonance
+    platform: GitHub/QuantDinger
+    name: Indicator Resonance（策略模板）
+    author: QuantDinger 官方模板
+    url: https://github.com/OpenByteInc/QuantDinger/blob/main/backend_api_python/migrations/strategy_v2_templates.sql
+    popularity: 13056
+    pop_unit: gh_stars_repo
+    read: sql
+    bar: 日线（QQQ）
+    indicators: MACD(12,26,9) 柱 > 0；50 < RSI(14) < 75；ADX(14) > 20
+    trend_def: [momentum, adx]
+    trend_text: 三项同时成立即「多头状态」
+    entry: 状态成立且空仓 → 买入 95%
+    exit: 状态不再成立 → 清仓
+    filters: RSI 上限 75 防追高
+    claimed: 无
+    risks: 只做多（direction_mode=long_only）
+    category: confluence
+    family: macd_cross_filter
+    symmetric: mirror
+    mirror: 柱 < 0、25 < RSI < 50、ADX > 20 → 做空状态
+    situation: [ignition, range_avoid]
+  - id: gh_quantdinger_macd_kdj
+    platform: GitHub/QuantDinger
+    name: MACD and KDJ Confirmation（策略模板）
+    author: QuantDinger 官方模板
+    url: https://github.com/OpenByteInc/QuantDinger/blob/main/backend_api_python/migrations/strategy_v2_templates.sql
+    popularity: 13056
+    pop_unit: gh_stars_repo
+    read: sql
+    bar: 4 小时（BTC 永续）
+    indicators: MACD(12,26,9)；KDJ(9,3,3)；超买 85
+    trend_def: [momentum]
+    trend_text: MACD 柱 > 0
+    entry: 柱 > 0 且（柱由 ≤0 转 >0 或 K 上穿 D）且 K < 85 → 多
+    exit: 柱 ≤ 0 或 K 下穿 D；2% 止损、+5% 后 1% 跟踪
+    filters: K < 85
+    claimed: 无
+    risks: 只做多
+    category: confluence
+    family: macd_cross_filter
+    symmetric: mirror
+    mirror: 柱 < 0 且（柱由 ≥0 转 <0 或 K 下穿 D）且 K > 15 → 空
+    situation: [ignition]
+  - id: gh_quantdinger_turtle
+    platform: GitHub/QuantDinger
+    name: Turtle Trading（策略模板）
+    author: QuantDinger 官方模板
+    url: https://github.com/OpenByteInc/QuantDinger/blob/main/backend_api_python/migrations/strategy_v2_templates.sql
+    popularity: 13056
+    pop_unit: gh_stars_repo
+    read: sql
+    bar: 日线（SPY）
+    indicators: Donchian 入场 20、出场 10；ATR(14)×2 止损
+    trend_def: [channel]
+    trend_text: 收盘突破前一根的 20 根上沿
+    entry: 收盘 > 前一根 20 根上沿 → 多
+    exit: 收盘 < 前一根 10 根下沿或 < 入场价 − 2×ATR
+    filters: 无
+    claimed: 无
+    risks: 只做多
+    category: breakout
+    family: channel_breakout
+    symmetric: mirror
+    mirror: 收盘 < 20 根下沿 → 空；收盘 > 10 根上沿或 > 入场 + 2×ATR 平
+    situation: [ignition]
+  - id: gh_quantdinger_three_lines_trend
+    platform: GitHub/QuantDinger
+    name: Bullish Three Averages With Trend Filter（策略模板）
+    author: QuantDinger 官方模板
+    url: https://github.com/OpenByteInc/QuantDinger/blob/main/backend_api_python/migrations/strategy_v2_templates.sql
+    popularity: 13056
+    pop_unit: gh_stars_repo
+    read: sql
+    bar: 日线（A 股）
+    indicators: MA5/10/20；MA60 及其 5 根斜率；实体 ≥ 2%
+    trend_def: [ma_slope, price_vs_ma]
+    trend_text: 收盘 > MA60 且 MA60 高于 5 根前（斜率为正）
+    entry: 开盘 ≤ 三条均线最小值、收盘 ≥ 最大值（一阳穿三线）、实体 ≥ 2%、趋势成立 → 多
+    exit: 收盘 < MA20 或趋势失效
+    filters: 实体大小
+    claimed: 无
+    risks: 只做多
+    category: breakout
+    family: ma_cross
+    symmetric: mirror
+    mirror: 开盘 ≥ 三线最大、收盘 ≤ 最小、实体 ≤ −2%、收盘 < MA60 且 MA60 下行 → 空
+    situation: [ignition]
+  - id: gh_myquant_dual_thrust
+    platform: GitHub/myquant(掘金)
+    name: Dual Thrust
+    author: 掘金量化（myquant/strategy）；实现参考 je-suis-tm/quant-trading
+    url: https://github.com/myquant/strategy/tree/master/Dual-Thrust
+    popularity: 956
+    pop_unit: gh_stars_repo
+    read: python
+    bar: 日内分钟线，区间按前 N 日日线
+    indicators: Range = max(HH − LC, HC − LL)（前 N 日）；上轨 = 开盘 + k1×Range，下轨 = 开盘 − k2×Range
+    trend_def: [opening_range]
+    trend_text: 价格离开以今日开盘为中心的波动区间
+    entry: 突破上轨做多，跌破下轨做空（反向突破则反手）
+    exit: 反手或收盘平仓
+    filters: 无
+    claimed: 无
+    risks: k1、k2 常被优化；info.md 为空，规则取自 quant-trading 源码（11109 star）
+    category: breakout
+    family: opening_range_breakout
+    symmetric: yes
+    situation: [ignition]
+  - id: gh_myquant_hans123
+    platform: GitHub/myquant(掘金)
+    name: Hans123
+    author: 掘金量化
+    url: https://github.com/myquant/strategy/tree/master/Hans123
+    popularity: 956
+    pop_unit: gh_stars_repo
+    read: desc
+    bar: 日内
+    indicators: 开盘后 30 分钟高低点
+    trend_def: [opening_range]
+    trend_text: 开盘 30 分钟区间的突破方向
+    entry: 30 分钟后，突破上轨做多、跌破下轨做空
+    exit: 收盘平仓
+    filters: 文中提到可加包络带、时间、波幅过滤
+    claimed: 无
+    risks: 无
+    category: breakout
+    family: opening_range_breakout
+    symmetric: yes
+    situation: [ignition]
+  - id: gh_myquant_rbreaker
+    platform: GitHub/myquant(掘金)
+    name: R-Breaker
+    author: 掘金量化
+    url: https://github.com/myquant/strategy/tree/master/R-Breaker
+    popularity: 956
+    pop_unit: gh_stars_repo
+    read: desc
+    bar: 1 / 5 分钟
+    indicators: 前日 H/L/C 算 6 个价位
+    trend_def: [channel]
+    trend_text: 突破买入价 / 突破卖出价之外为趋势；观察价之间为反转区
+    entry: 空仓时突破 buy_break 做多 / 跌破 sell_break 做空；持仓时到达观察价后回落穿反转价则反手
+    exit: 反手或收盘
+    filters: 无
+    claimed: 无
+    risks: 突破 + 反转混合
+    category: breakout
+    family: channel_breakout
+    symmetric: yes
+    situation: [ignition]
+  - id: gh_myquant_skypark
+    platform: GitHub/myquant(掘金)
+    name: 空中花园 SkyPark
+    author: 掘金量化
+    url: https://github.com/myquant/strategy/tree/master/SkyPark
+    popularity: 956
+    pop_unit: gh_stars_repo
+    read: desc
+    bar: 日内
+    indicators: 第一根 K 高低点；跳空 ≥ 1%
+    trend_def: [opening_range]
+    trend_text: 高开 / 低开 ≥ 1% 当日，第一根 K 的突破方向
+    entry: 突破第一根 K 高点做多，跌破低点做空
+    exit: 收盘平仓
+    filters: 只在大幅跳空日
+    claimed: 无
+    risks: 无
+    category: breakout
+    family: opening_range_breakout
+    symmetric: yes
+    situation: [ignition]
+  - id: gh_myquant_adx_dmi
+    platform: GitHub/myquant(掘金)
+    name: ADX_DMI_STOCK
+    author: 掘金量化
+    url: https://github.com/myquant/strategy/tree/master/ADX_DMI_STOCK
+    popularity: 956
+    pop_unit: gh_stars_repo
+    read: desc
+    bar: 日线
+    indicators: ADX(14)、DMI；双均线
+    trend_def: [adx, ma_alignment]
+    trend_text: ADX 上升代表趋势转强；+DI 上穿 −DI 为入场
+    entry: 双均线信号 + ADX 上升确认
+    exit: −DI 上穿 +DI
+    filters: ADX 上升，用于避免横盘反复交易
+    claimed: 无
+    risks: 文档只给思路
+    category: confluence
+    family: adx_di
+    symmetric: yes
+    situation: [range_avoid]
+  - id: gh_myquant_boll
+    platform: GitHub/myquant(掘金)
+    name: BOLL_STOCK
+    author: 掘金量化
+    url: https://github.com/myquant/strategy/tree/master/BOLL_STOCK
+    popularity: 956
+    pop_unit: gh_stars_repo
+    read: desc
+    bar: 日线
+    indicators: BOLL 三轨方向
+    trend_def: [channel, ma_slope]
+    trend_text: 上中下三轨同时向上且价 > 中轨
+    entry: 三轨同上且价 > 中轨 → 买
+    exit: 三轨同下或价 < 中轨
+    filters: 无
+    claimed: 无
+    risks: 只做多（A 股）
+    category: confluence
+    family: band_slope
+    symmetric: mirror
+    mirror: 三轨同下且价 < 中轨 → 空
+    situation: [channel_pullback]
+  - id: gh_myquant_macd
+    platform: GitHub/myquant(掘金)
+    name: MACD-STOCK
+    author: 掘金量化
+    url: https://github.com/myquant/strategy/tree/master/MACD-STOCK
+    popularity: 956
+    pop_unit: gh_stars_repo
+    read: desc
+    bar: 日线
+    indicators: MACD（DIF、DEA）
+    trend_def: [momentum]
+    trend_text: DIF、DEA 同在零轴一侧
+    entry: DIF、DEA 均 > 0 且 DIF 上穿 DEA → 买；均 < 0 且下穿 → 卖
+    exit: 反向
+    filters: 零轴
+    claimed: 无
+    risks: 无
+    category: confluence
+    family: macd_cross_filter
+    symmetric: yes
+    situation: [ignition]
+  - id: gh_alpaca_scalping
+    platform: GitHub/alpacahq
+    name: example-scalping
+    author: Alpaca
+    url: https://github.com/alpacahq/example-scalping
+    popularity: 852
+    pop_unit: gh_stars_repo
+    read: python
+    bar: 1 分钟
+    indicators: 20 分钟 SMA
+    trend_def: [price_vs_ma]
+    trend_text: 上一根收盘在 SMA20 下、当前上穿
+    entry: 1 分钟收盘上穿 20 分钟均线 → 限价买入，2 分钟未成交撤单
+    exit: 限价止盈卖出 / 收盘前清仓
+    filters: 无
+    claimed: 无（作者明说是演示）
+    risks: 只做多；示例
+    category: breakout
+    family: ma_cross
+    symmetric: mirror
+    mirror: 1 分钟收盘下穿 20 分钟均线 → 做空
+    situation: [ignition]
+
+  # ---------------- QuantConnect / 论文 ----------------
+  - id: qc_orb_stocks_in_play
+    platform: QuantConnect
+    name: Opening Range Breakout for Stocks in Play
+    author: QuantConnect（复现 Zarattini, Barbon, Aziz 2024）
+    url: https://www.quantconnect.com/research/18444/opening-range-breakout-for-stocks-in-play/
+    popularity: null
+    pop_unit: none
+    read: desc
+    bar: 5 分钟开盘区间
+    indicators: 前 5 分钟高低点；开盘 5 分钟成交量 / 前 14 日同窗口均量（in play）；ATR
+    trend_def: [opening_range]
+    trend_text: 第一根 5 分钟 K 收阳 → 只做上破，收阴 → 只做下破
+    entry: 阳线后以停止单在区间高点做多（阴线后在低点做空），只做最「in play」的 20 只
+    exit: ATR 止损或收盘平仓
+    filters: 股价 > 5、ATR > 0.5、相对成交量排名
+    claimed: 2016 年 Sharpe 2.396（SPY 0.836）；25 组参数中 17 组 Sharpe 高于基准
+    risks: 只回测了 2016 一年；多标的选股，单标的 MU 不适用选股部分
+    category: breakout
+    family: opening_range_breakout
+    symmetric: yes
+    situation: [ignition]
+  - id: paper_orb_qqq
+    platform: 论文/SSRN
+    name: Can Day Trading Really Be Profitable?（QQQ 5 分钟 ORB）
+    author: Zarattini, Aziz（SSRN 4416622）
+    url: https://www.mql5.com/en/blogs/post/776235
+    popularity: null
+    pop_unit: none
+    read: secondary
+    bar: 5 分钟
+    indicators: 第一根 5 分钟 K
+    trend_def: [opening_range]
+    trend_text: 第一根 5 分钟 K 的方向
+    entry: 第一根收阳在第二根开盘做多，收阴做空（十字星不做）
+    exit: 第一根 K 另一端止损，10R 目标或收盘
+    filters: 无
+    claimed: 命中率 24%、+0.13R/笔、4 倍杠杆年化 33%（QQQ）
+    risks: 原文只计佣金不计点差与滑点、无样本外；MQL5 博客在 5 个指数 CFD 2015-01～2026-06 复现：毛利复现（NQ +0.131R），扣成本后 5 个市场无一显著、4 个为负
+    category: breakout
+    family: opening_range_breakout
+    symmetric: yes
+    situation: [ignition]
+  - id: paper_noise_area
+    platform: 论文/SSRN
+    name: Beat the Market（SPY 噪声区日内动量）
+    author: Zarattini, Aziz, Barbon（SSRN 4824172）
+    url: https://www.cxoadvisory.com/?p=45565
+    popularity: null
+    pop_unit: none
+    read: secondary
+    bar: 1 分钟数据，HH:00 / HH:30 判定
+    indicators: 噪声区（前 14 日同一分钟平均离开盘幅度）、VWAP
+    trend_def: [channel]
+    trend_text: 收盘在噪声区外且在 VWAP 同侧
+    entry: 收盘 > 上边界且 > VWAP → 多；< 下边界且 < VWAP → 空
+    exit: 当前边界或 VWAP 作跟踪止损；收盘平仓
+    filters: 波动率定仓
+    claimed: 原文 2007-05～2024-04 显著为正
+    risks: 本仓库 R-045 已按原文复现：SPY 主口径成本 −5.35%、QQQ +32.76%，随机方向 93.3 分位，预测不成立（SPY_INTRADAY_MOMENTUM.md）
+    category: breakout
+    family: channel_breakout
+    symmetric: yes
+    situation: [ignition]
+  - id: paper_connors_rsi2
+    platform: 书籍/StockCharts
+    name: Connors RSI(2)（Short Term Trading Strategies That Work, 2008）
+    author: Larry Connors, Cesar Alvarez
+    url: https://chartschool.stockcharts.com/table-of-contents/trading-strategies-and-models/trading-strategies/rsi-2
+    popularity: null
+    pop_unit: none
+    read: desc
+    bar: 日线
+    indicators: RSI(2)；SMA200；SMA5
+    trend_def: [price_vs_ma]
+    trend_text: 价在 SMA200 之上只做多，之下只做空
+    entry: RSI(2) < 10（Connors 测试 0–10，< 5 更好）做多；> 90（> 95 更好）做空；收盘前或次日开盘下单
+    exit: 多头收盘上穿 SMA5，空头下穿 SMA5；Connors 不主张止损
+    filters: SMA200
+    claimed: 书中为 SPX 等指数日线历史检验；Backtrex（第三方）SPX 2016-10～2026-10 日线 73 笔、胜率 71.2%、+18.1%（买入持有 +255.4%）、最大回撤 21.5%
+    risks: 原规则是日线；ProRealCode 论坛贴称 1 分钟、15 分钟版本结果很差（二手、无方法）
+    category: pullback
+    family: oscillator_pullback
+    symmetric: yes
+    situation: [channel_pullback]
+  - id: paper_nsga2
+    platform: 论文/arXiv
+    name: Optimal Technical Indicator-based Trading Strategies Using NSGA-II
+    author: Prasad, Madhav, Lal, Ravi（arXiv 2111.13364）
+    url: https://arxiv.org/abs/2111.13364
+    popularity: null
+    pop_unit: none
+    read: desc
+    bar: 日线
+    indicators: 多个技术指标的组合（由 NSGA-II 搜索）
+    trend_def: [momentum]
+    trend_text: 由算法选出的指标组合决定，无固定定义
+    entry: 算法搜索出的买卖规则组合
+    exit: 同上
+    filters: 目标函数 = 最大化 Sharpe、最小化最大回撤
+    claimed: 滚动 2 年训练 / 1 年测试；作者称在无大幅经济波动的平稳期明显更好，含交易成本
+    risks: 多目标搜索在大量组合中选最优，样本内过拟合与多重检验风险最高；作者自己承认在剧烈波动期失效
+    category: confluence
+    family: optimized_combo
+    symmetric: yes
+    situation: [none]
+
+  # ---------------- StockSharp 样例（Keltner 均值回归对照） ----------------
+  - id: ss_keltner_reversion
+    platform: GitHub/StockSharp
+    name: Keltner Reversion（样例 0031）
+    author: StockSharp
+    url: https://doc.stocksharp.com/en/api-examples/0031_Keltner_Reversion
+    popularity: 10972
+    pop_unit: gh_stars_repo
+    read: python
+    bar: 5 分钟
+    indicators: KC = EMA20 ± 2.0×ATR(14)；RSI(14) 30/70；止损 2×ATR（入场时冻结）
+    trend_def: [none]
+    trend_text: 不判断趋势
+    entry: 收盘在下轨之外且 RSI < 30 → 多；在上轨之外且 RSI > 70 → 空
+    exit: 回到通道内或止损
+    filters: RSI
+    claimed: 页面自述年化约 130%（无方法、无成本、无样本外）
+    risks: 厂商样例；自述收益不可信
+    category: mean_reversion
+    family: band_revert
+    symmetric: yes
+    situation: [range_avoid]
+  - id: ss_keltner_davey
+    platform: GitHub/StockSharp
+    name: Keltner Channel by Kevin Davey（样例 0953）
+    author: StockSharp（Kevin Davey 规则）
+    url: https://doc.stocksharp.com/en/api-examples/0953_Keltner_Channel_by_Kevin_Davey
+    popularity: 10972
+    pop_unit: gh_stars_repo
+    read: secondary
+    bar: 未写明
+    indicators: KC = EMA10 ± 1.6×ATR
+    trend_def: [none]
+    trend_text: 不判断趋势
+    entry: 收盘跌破下轨做多，升破上轨做空
+    exit: 未取得
+    filters: 无
+    claimed: 无
+    risks: 页面正文未成功抽取，规则来自搜索摘要
+    category: mean_reversion
+    family: band_revert
+    symmetric: yes
+    situation: [range_avoid]
+
+  # ---------------- MQL5（厂商描述） ----------------
+  - id: mql5_trendinggoldea
+    platform: MQL5 Market
+    name: TrendingGoldea
+    author: 厂商
+    url: https://www.mql5.com/en/market/product/188049
+    popularity: null
+    pop_unit: none
+    read: secondary
+    bar: XAUUSD M15，H1 过滤
+    indicators: EMA20 / EMA50；ADX(14)；H1 EMA；ATR
+    trend_def: [ma_alignment, adx, htf]
+    trend_text: EMA20 vs EMA50 方向、ADX 确认有趋势、H1 EMA 同向
+    entry: 价格回踩触及快 EMA 后顺势恢复时入场（不追价）
+    exit: ATR 止损 / 目标 / 跟踪；部分止盈；日亏损上限
+    filters: 只在伦敦、纽约时段
+    claimed: 厂商称多年 M15 回测与模拟盘前测，统计在图集里
+    risks: 厂商自述，未独立核实；规则细节来自搜索摘要
+    category: pullback
+    family: ma_pullback
+    symmetric: yes
+    situation: [channel_pullback, range_avoid]
+  - id: mql5_trend_pullback_scalper
+    platform: MQL5 Market
+    name: Trend Pullback Scalper
+    author: 厂商
+    url: https://www.mql5.com/en/market/product/188612
+    popularity: null
+    pop_unit: none
+    read: secondary
+    bar: 外汇，MT5
+    indicators: 快 / 慢 EMA、入场 EMA、ADX；K 线形态确认
+    trend_def: [ma_alignment, adx]
+    trend_text: 快慢 EMA 定方向，ADX 定强度
+    entry: 回调到入场 EMA 附近后出现合格 K 线信号再入场
+    exit: 止损止盈；可选保本、跟踪、部分平仓
+    filters: 点差、日亏损、每日笔数上限
+    claimed: 无
+    risks: 厂商自述
+    category: pullback
+    family: ma_pullback
+    symmetric: yes
+    situation: [channel_pullback, range_avoid]
+  - id: mql5_donchian_portfolio
+    platform: MQL5 Market
+    name: Donchian Portfolio Visual
+    author: 厂商
+    url: https://www.mql5.com/en/market/product/184188
+    popularity: null
+    pop_unit: none
+    read: secondary
+    bar: H4，多品种
+    indicators: Donchian；EMA200；ADX；ATR
+    trend_def: [channel, price_vs_ma, adx]
+    trend_text: Donchian 突破 + EMA200 方向 + ADX
+    entry: 通道突破且 EMA200、ADX 同意
+    exit: 2.0 ATR 止盈、1.5 ATR 止损或较短出场通道反向突破
+    filters: 无网格、无马丁
+    claimed: 无
+    risks: 厂商自述
+    category: breakout
+    family: channel_breakout
+    symmetric: yes
+    situation: [ignition, range_avoid]
+  - id: mql5_article_3146
+    platform: MQL5 Articles
+    name: Donchian 突破 + 确认指标（文章 3146）
+    author: MQL5 文章作者
+    url: https://www.mql5.com/en/articles/3146
+    popularity: null
+    pop_unit: none
+    read: secondary
+    bar: 未取得
+    indicators: Donchian；三个确认指标之一为 ADX
+    trend_def: [channel, adx]
+    trend_text: 突破须至少一个趋势指标确认，避免假突破
+    entry: Donchian 突破 + 确认
+    exit: 未取得
+    filters: ADX 等
+    claimed: 未取得
+    risks: 二手摘要
+    category: vol_filter
+    family: breakout_confirm
+    symmetric: yes
+    situation: [ignition, range_avoid]

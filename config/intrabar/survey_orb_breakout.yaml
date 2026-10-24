@@ -1,0 +1,50 @@
+# 公开策略调研（STRATEGY_SURVEY.md）提炼的候选规则——未运行、未调参，不是研究结论。
+# 趋势突破里最常见的一族（opening_range_breakout）：开盘区间的方向 + 突破区间边界。
+# 参数取 Zarattini & Aziz（SSRN 4416622）/ QuantConnect 复现的 5 分钟区间：第一段 5 分钟收阳只做上破，收阴只做下破。
+# 掘金 Hans123 用 30 分钟、SkyPark 用第一根 K + 跳空过滤，记为同族变体（不另测）。
+# 区间用逐秒隐含价（intrabar S）在 09:30:00–09:35:00 的高低点与首末值计算，不用未来数据。
+
+name: survey_orb_breakout
+family: opening_range_breakout
+category: breakout
+sources: [paper_orb_qqq, qc_orb_stocks_in_play, tv_orb_chrismoody, tv_orb_zzzcrypto, tv_torb_zeiierman,
+          gh_myquant_hans123, gh_myquant_skypark, gh_myquant_dual_thrust]
+oos_pick: true                     # 第三条 R-049 必测：最常见的趋势突破规则
+engine_ready: false
+owner_situation: ignition
+
+underlying: MU
+convention: C
+bar_minutes: 2
+days: {from: "2025-01-02", to: "2026-05-31"}
+oos_windows:
+  - {from: "2025-01-02", to: "2026-05-31"}
+  - {from: "2026-09-01", to: "2026-10-21"}
+session: {first_entry: "09:35", last_entry: "15:40", flat: "15:50"}
+max_entries_per_day: 1             # 原策略每天最多一次（引擎需支持）
+
+direction: both
+
+features_needed:
+  - name: or_break
+    definition: >-
+      开盘区间 = 当日 RTH 前 minutes 分钟（09:30:00 起）逐秒价格的最高 H、最低 L；
+      d = +1：(S_t / H − 1) × 1e4；d = −1：(L / S_t − 1) × 1e4（bp，正 = 已按方向突破）。区间结束前为 NaN。
+    params: [minutes]
+  - name: or_dir
+    definition: 区间最后一秒价格 / 区间第一秒价格 − 1（bp），directional=true 时乘 d。
+    params: [minutes]
+
+entry:
+  all:
+    - {feature: or_dir, minutes: 5, op: ">", value: 0, directional: true}    # 第一段 5 分钟朝方向收
+    - {feature: or_break, minutes: 5, op: ">", value: 0, directional: true}  # 当前价越过区间同向边界
+
+native_exit: []                    # 原文：区间另一端止损、10R 目标或收盘
+
+contract: {dte_max: 7, otm_steps: 1, no_0dte_after: "10:15"}
+executions: [owner, taker]
+order: {mode: taker, lag_s: 2}
+fill: {queue_fill_prob: 0.9}
+qty: 1
+exit: {tp: 0.10, sl: 0.15, max_hold_min: 30, order: {mode: taker, lag_s: 2}}

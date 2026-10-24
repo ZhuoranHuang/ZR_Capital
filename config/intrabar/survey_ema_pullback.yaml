@@ -1,0 +1,58 @@
+# 公开策略调研（STRATEGY_SURVEY.md）提炼的候选规则——未运行、未调参，不是研究结论。
+# 顺势回调里最常见的一族（ma_pullback）：均线排列定方向 → 价格回到均线另一侧 → 再收回均线。
+# 骨架取 hanabil「Double EMA Pullback」源码（EMA50 / EMA200、回看 5 根），ADX(14) > 20 过滤取
+# TrendRider / Coral Pullback / MACD Pullback Sniper / TrendingGoldea / Trend Pullback Scalper 共同使用的「ADX 确认有趋势」。
+# 原参数直接搬到已完成的 2 分钟 K（口径 C），不调参。
+
+name: survey_ema_pullback
+family: ma_pullback
+category: pullback
+sources: [tv_double_ema_pullback, tv_coral_pullback, ft_trendrider, mql5_trendinggoldea, mql5_trend_pullback_scalper]
+oos_pick: true                     # 第三条 R-049 必测：最常见的顺势回调规则
+engine_ready: false
+owner_situation: channel_pullback
+
+underlying: MU
+convention: C
+bar_minutes: 2
+days: {from: "2025-01-02", to: "2026-05-31"}
+oos_windows:
+  - {from: "2025-01-02", to: "2026-05-31"}
+  - {from: "2026-09-01", to: "2026-10-21"}
+session: {first_entry: "09:32", last_entry: "15:40", flat: "15:50"}
+
+direction: both
+
+features_needed:
+  - name: ma_align
+    definition: (MA_fast / MA_slow − 1) × 1e4（bp），两条均线都在已完成 2 分钟 K 收盘上算；directional=true 时乘 d。
+    params: [ma, fast, slow]
+  - name: ma_cross
+    definition: >-
+      最近一根已完成 K i 收盘按方向穿越均线：d·(C_i − MA_i) > 0 且 d·(C_{i−1} − MA_{i−1}) ≤ 0 → 1，否则 0
+      （只在 K i 收盘后的那根 K 期间为 1；均线同 ma_dist）。
+    params: [ma, period]
+  - name: ma_side_lag
+    definition: d·(C_{i−lag} − MA_{i−lag}) 的符号（> 0 → 1，否则 0），i = 最近一根已完成 K。
+    params: [ma, period, lag]
+  - name: adx
+    definition: >-
+      Wilder ADX(n)（+DM/−DM、TR 用 RMA α = 1/n，DX = |+DI − −DI| / (+DI + −DI) × 100，ADX = RMA(DX, n)），
+      已完成 2 分钟 K（含盘前盘后，口径 C）。不带方向。
+    params: [period]
+
+entry:
+  all:
+    - {feature: ma_align, ma: ema, fast: 50, slow: 200, op: ">", value: 0, directional: true}  # 趋势：EMA50 在 EMA200 趋势侧
+    - {feature: ma_side_lag, ma: ema, period: 50, lag: 5, op: "==", value: 1, directional: true} # 5 根前收盘在 EMA50 趋势侧
+    - {feature: ma_cross, ma: ema, period: 50, op: "==", value: 1, directional: true}           # 回调后收盘按方向收回 EMA50
+    - {feature: adx, period: 14, op: ">", value: 20, directional: false}                        # 有趋势
+
+native_exit: []                    # 原脚本是指标、无离场；各同类策略多用摆动高低点止损 + 固定 R:R
+
+contract: {dte_max: 7, otm_steps: 1, no_0dte_after: "10:15"}
+executions: [owner, taker]
+order: {mode: taker, lag_s: 2}
+fill: {queue_fill_prob: 0.9}
+qty: 1
+exit: {tp: 0.10, sl: 0.15, max_hold_min: 30, order: {mode: taker, lag_s: 2}}

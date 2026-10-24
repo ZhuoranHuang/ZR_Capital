@@ -1,0 +1,61 @@
+# 公开策略调研（STRATEGY_SURVEY.md）提炼的候选规则——未运行、未调参，不是研究结论。
+# Connors RSI(2) 的盘中改写，同时是负责人截图策略 2「RSI 超卖反弹趋势策略（只做多）」的多空对称版。
+# 原规则（日线）：收盘 > SMA200 时 RSI(2) < 10（或 < 5）且收盘 < SMA5 买入，收盘上穿 SMA5 卖出；空头镜像。
+# 改写：原参数直接搬到已完成的 2 分钟 K（口径 C），不按分钟线重新换算、不调参（规则 11：全部是待测参数）。
+# 来源见 sources；新特征定义见 features_needed（引擎尚未实现，engine_ready: false）。
+
+name: survey_rsi2_pullback
+family: oscillator_pullback
+category: pullback
+sources: [paper_connors_rsi2, tv_rsi2_chrismoody]
+oos_pick: true                     # 第三条 R-049 必测：盘中 RSI(2) 改写
+engine_ready: false
+owner_situation: channel_pullback
+
+underlying: MU
+convention: C
+bar_minutes: 2
+days: {from: "2025-01-02", to: "2026-05-31"}
+oos_windows:                       # D-033：不得含 2026-06-01～2026-08-31
+  - {from: "2025-01-02", to: "2026-05-31"}
+  - {from: "2026-09-01", to: "2026-10-21"}
+session: {first_entry: "09:32", last_entry: "15:40", flat: "15:50"}
+
+direction: both                    # 每个方向分别评估；条件全部方向化，趋势过滤决定实际方向
+
+features_needed:
+  - name: ma_dist
+    definition: >-
+      (P / MA − 1) × 1e4（bp）。MA 在已完成 2 分钟 K 收盘上计算（sma = 简单均线，ema = span=n、adjust=False 的标准 EMA，
+      首值做种）；P = 最近一根已完成 K 的收盘（price: bar_close）或当前秒价格（price: live）。directional=true 时乘方向 d。
+    params: [ma, period, price]
+  - name: rsi
+    definition: >-
+      Wilder RSI(n)（与 Pine ta.rsi 相同：涨跌幅分别做 RMA，α = 1/n），在已完成 2 分钟 K 收盘上计算，只用收盘时刻 ≤ t 的 K。
+      directional=true 时 d = −1 用 100 − RSI，所以「≤ 10」对空头即 RSI ≥ 90。
+    params: [period]
+
+entry:
+  all:
+    - {feature: ma_dist, ma: sma, period: 200, price: bar_close, op: ">", value: 0, directional: true}  # 趋势：收盘在 SMA200 趋势侧
+    - {feature: ma_dist, ma: sma, period: 5, price: bar_close, op: "<", value: 0, directional: true}    # 回调：收盘在 SMA5 逆向侧
+    - {feature: rsi, period: 2, op: "<=", value: 10, directional: true}                                 # RSI(2) ≤ 10 / ≥ 90
+
+native_exit:                       # 原策略自己的离场（R-049 统一用负责人离场习惯，此处只作记录 / 敏感性）
+  - {feature: ma_dist, ma: sma, period: 5, price: bar_close, op: ">", value: 0, directional: true}
+
+contract:
+  dte_max: 7                       # 取 dte ≤ 7 中最近的到期日 = 最近可用到期日
+  otm_steps: 1
+  no_0dte_after: "10:15"           # D-001；R-049 另报去掉此行的敏感性
+
+executions: [owner, taker]         # (i) R-041 负责人挂单策略；(ii) 吃单对照（模式由 R-049 实现）
+order: {mode: taker, lag_s: 2}
+fill: {queue_fill_prob: 0.9}
+qty: 1
+
+exit:                              # 负责人离场习惯：mid +10% 全卖 / −15% 全卖 / 30 分钟上限，一次性
+  tp: 0.10
+  sl: 0.15
+  max_hold_min: 30
+  order: {mode: taker, lag_s: 2}

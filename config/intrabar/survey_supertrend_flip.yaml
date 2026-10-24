@@ -1,0 +1,49 @@
+# 公开策略调研（STRATEGY_SURVEY.md）提炼的候选规则——未运行、未调参，不是研究结论。
+# ATR 跟踪线翻转（atr_trail_flip）：KivancOzbilgic SuperTrend STRATEGY（25540 赞）源码，ATR(10)、乘数 3、源 hl2、Wilder ATR。
+# 同族：UT Bot（60831 赞）、AlphaTrend、QuantDinger SuperTrend 模板。入场 = 最近一根已完成 2 分钟 K 上趋势翻向 d。
+
+name: survey_supertrend_flip
+family: atr_trail_flip
+category: breakout
+sources: [tv_supertrend_kivanc, tv_utbot_quantnomad, tv_alphatrend]
+oos_pick: false
+engine_ready: false
+owner_situation: ignition
+
+underlying: MU
+convention: C
+bar_minutes: 2
+days: {from: "2025-01-02", to: "2026-05-31"}
+oos_windows:
+  - {from: "2025-01-02", to: "2026-05-31"}
+  - {from: "2026-09-01", to: "2026-10-21"}
+session: {first_entry: "09:32", last_entry: "15:40", flat: "15:50"}
+
+direction: both
+
+features_needed:
+  - name: supertrend
+    definition: >-
+      Kivanc SuperTrend（Pine 源码逐行）：up = hl2 − m×ATR，若上一根收盘 > 上一根 up 则 up = max(up, up[1])；
+      dn = hl2 + m×ATR，若上一根收盘 < dn[1] 则 dn = min(dn, dn[1])；trend 初值 1，trend = −1 且收盘 > dn[1] → 1，
+      trend = 1 且收盘 < up[1] → −1。ATR = Wilder ATR(atr_period)。在已完成 2 分钟 K 上算。
+      输出 d·trend（1 = 与方向一致）。
+    params: [atr_period, mult]
+  - name: supertrend_age
+    definition: 最近一根已完成 K 距 trend 最近一次翻转的根数（翻转那根 = 0）。不带方向。
+    params: [atr_period, mult]
+
+entry:
+  all:
+    - {feature: supertrend, atr_period: 10, mult: 3.0, op: "==", value: 1, directional: true}
+    - {feature: supertrend_age, atr_period: 10, mult: 3.0, op: "==", value: 0, directional: false}  # 刚翻转
+
+native_exit:                       # 原策略：反向翻转即反手
+  - {feature: supertrend, atr_period: 10, mult: 3.0, op: "==", value: -1, directional: true}
+
+contract: {dte_max: 7, otm_steps: 1, no_0dte_after: "10:15"}
+executions: [owner, taker]
+order: {mode: taker, lag_s: 2}
+fill: {queue_fill_prob: 0.9}
+qty: 1
+exit: {tp: 0.10, sl: 0.15, max_hold_min: 30, order: {mode: taker, lag_s: 2}}

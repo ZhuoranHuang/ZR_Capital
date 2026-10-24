@@ -1,0 +1,49 @@
+# 公开策略调研（STRATEGY_SURVEY.md）提炼的候选规则——未运行、未调参，不是研究结论。
+# 均值回归对照（不是趋势规则）：负责人截图策略 3「Keltner 通道触边回归」的公开同类。
+# 规则取 StockSharp Keltner Reversion 样例：KC = EMA20 ± 2.0 × ATR(14)，收盘在通道外且 RSI(14) 确认 → 反向入场，回到通道内离场。
+# 方向 d 指入场方向：d = +1 = 价格在下轨之外买入看涨（押回归），d = −1 = 上轨之外买入看跌。
+# 用途：与趋势类规则在同一引擎下对照（趋势 vs 回归），oos_pick = false。
+
+name: survey_keltner_revert
+family: band_revert
+category: mean_reversion
+sources: [ss_keltner_reversion, ss_keltner_davey, tv_bb_rsi_chartart, ft_bbandrsi]
+oos_pick: false
+engine_ready: false
+owner_situation: none
+
+underlying: MU
+convention: C
+bar_minutes: 2
+days: {from: "2025-01-02", to: "2026-05-31"}
+oos_windows:
+  - {from: "2025-01-02", to: "2026-05-31"}
+  - {from: "2026-09-01", to: "2026-10-21"}
+session: {first_entry: "09:32", last_entry: "15:40", flat: "15:50"}
+
+direction: both
+
+features_needed:
+  - name: kc_pos
+    definition: >-
+      KC 中轨 M = EMA(close, ema_len)，半宽 W = atr_mult × Wilder ATR(atr_len)，已完成 2 分钟 K；
+      kc_pos = (C_i − M_i) / W_i（−1 = 下轨，+1 = 上轨）。directional=true 时乘 d。
+    params: [ema_len, atr_len, atr_mult]
+  - name: rsi
+    definition: 同 survey_rsi2_pullback.yaml（Wilder，d = −1 用 100 − RSI）。
+    params: [period]
+
+entry:
+  all:
+    - {feature: kc_pos, ema_len: 20, atr_len: 14, atr_mult: 2.0, op: "<", value: -1, directional: true}  # 收盘在逆向轨之外
+    - {feature: rsi, period: 14, op: "<", value: 30, directional: true}                                 # RSI(14) < 30 / > 70
+
+native_exit:                       # 回到通道内
+  - {feature: kc_pos, ema_len: 20, atr_len: 14, atr_mult: 2.0, op: ">=", value: -1, directional: true}
+
+contract: {dte_max: 7, otm_steps: 1, no_0dte_after: "10:15"}
+executions: [owner, taker]
+order: {mode: taker, lag_s: 2}
+fill: {queue_fill_prob: 0.9}
+qty: 1
+exit: {tp: 0.10, sl: 0.15, max_hold_min: 30, order: {mode: taker, lag_s: 2}}
