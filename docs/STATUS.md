@@ -23,6 +23,8 @@
 
 ## 进行中
 
+- **规则回测最小流水线（feat/rule-runner，2026-10-25）**：`zr/sim/stock.py`（正股模式，复用引擎 Account / Trade / DayResult，`plan_exit` 为唯一出场实现）、`scripts/run_rule.py`（规则文件 → trades.csv + summary.md，stock / option 两种模式，期权模式出场时刻由正股 `plan_exit` 给出、交给引擎 at 出场）、`docs/RULE_INTERFACE.md`、示例 `rules/example_boll_macd.py`（参数未检验）。`zr/sim/engine.py` 未改。任务书在第 3 节「无前视检查」处截断，之后的内容未收到。
+
 - **R-054 指数正股层（feat/r054-index-stock-layer，2026-10-25）**：三条调研规则在 QQQ / SPY（各 703 个交易日，剔除 D-033 窗口）口径 C 的 72 格中 **可进入期权层 0 格**；q ≤ 0.10 的 11 格超额都低于 COST_REPORT 门槛，且其中 9 格的超额主要来自随机基线为负（回调类规则的 ±30 分钟基线偏差）。5 分钟格无一显著；D-027 下 RSI(2) 规则 0 触发（RTH 按日重置凑不满 SMA200）。见 `docs/research/R054_INDEX_STOCK_LAYER.md`。
 
 - **数据补齐（data/backfill-all，2026-10-25 起；同日改为全天运行，优先级 p1 → p3a → p4 → p5 → p2 → p3b，每完成一项发 macOS 通知，进度与预计完成时间写 $ZR_DATA_ROOT/reports/BACKFILL_PROGRESS.md 与 DATA_INVENTORY_BACKFILL.md）**：`zr/data/backfill_all.py` + `scripts/backfill_night.sh` + 后台循环 `scripts/backfill_loop.sh`（nohup，每 30 分钟调用一次 runner；runner 只在新加坡时间 22:00–08:00 运行，单实例锁，断点续传，06:00 后先做每日增量；全部完成后发 macOS 通知；**重启后需重新启动循环**）。**launchd 不可用**：launchd 启动的 /bin/bash 没有外接盘权限（Operation not permitted），已卸载；`com.zr.sync-from-vps` 同样因此自 2026-10-22 起失败——需负责人在「系统设置 → 隐私与安全性」给 /bin/bash 授予「可移除的宗卷」或「完全磁盘访问权限」。优先级 p1 MU 期权逐笔 2026-04-29～10-21 → p2 MU 2025-01～2026-04-28 → p3a QQQ 秒级正股价 / p3b QQQ 期权逐笔 → p4 SPY 1 分钟 → p5 长桥日线（VPS 只读）。进度 `$ZR_DATA_ROOT/logs/backfill_progress.log`，总表 `$ZR_DATA_ROOT/reports/DATA_INVENTORY_BACKFILL.md`。拉取期间不跑研究任务。
