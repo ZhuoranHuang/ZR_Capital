@@ -280,16 +280,21 @@ def test_t10_flat_with_bad_quotes():
     # (c) flat 后 10 分钟才有报价
     with pytest.raises(ValueError):
         _t10_run(every_second("10:20:00", "10:21:00", lambda s: (1.00, 1.05)))
-    # (d) flat 时报价 bid=0 / ask=0.05 → 按 0 成交，pnl = −(入场成本 + 费用)
+    # (d) flat 时报价 bid=0 / ask=0.05 → 按 0 成交，pnl = −(入场成本 + 买入费)
+    #     bid=0 视为到期作废、不下单，故不计卖出费；与 live/core、v4_limit 一致（D-036）
     rd = _t10_run([(ts("10:10:00"), 0.0, 0.05)])
     td = rd.trades[0]
     assert td.exit_px == pytest.approx(0.0, abs=1e-9)
-    expect_fees = fees_total(td.qty, "Buy", td.entry_px) + fees_total(td.qty, "Sell", 0.0)
-    assert td.fees_usd == pytest.approx(expect_fees, abs=1e-9)
-    assert td.pnl_usd == pytest.approx((0 - td.entry_px) * 100 * td.qty - td.fees_usd, abs=1e-9)
-    # (e) flat 时刻唯一报价为 0 / 0 → 成交价 0，flat_wide 不加，flat_zero += 1
+    assert td.qty == 4
+    assert td.entry_px == pytest.approx(1.05, abs=1e-9)
+    assert td.fees_usd == pytest.approx(fees_total(4, "Buy", 1.05), abs=1e-9)  # = 3.93
+    assert td.pnl_usd == pytest.approx(-(1.05 * 100 * 4) - td.fees_usd, abs=1e-9)  # = −423.93
+    # (e) flat 时刻唯一报价为 0 / 0 → 成交价 0，同样只收买入费，flat_wide 不加，flat_zero += 1
+    #     bid=0 视为到期作废、不下单，故不计卖出费；与 live/core、v4_limit 一致（D-036）
     re_ = _t10_run([(ts("10:10:00"), 0.0, 0.0)])
-    assert re_.trades[0].exit_px == pytest.approx(0.0, abs=1e-9)
+    te = re_.trades[0]
+    assert te.exit_px == pytest.approx(0.0, abs=1e-9)
+    assert te.fees_usd == pytest.approx(fees_total(te.qty, "Buy", te.entry_px), abs=1e-9)
     assert re_.counters["flat_wide"] == 0
     assert re_.counters["flat_zero"] == 1
     for r in (ra, rb, rd, re_):

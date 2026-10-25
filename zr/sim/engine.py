@@ -297,9 +297,14 @@ def simulate_day(
                 counters["flat_wide"] += 1
             if exit_px == 0:
                 counters["flat_zero"] += 1
-        fees = float(option_order_fees(qty, "Buy", entry_px)["total"]) + float(
-            option_order_fees(qty, "Sell", exit_px)["total"]
+        # 清仓成交价为 0：视为到期作废、不产生卖出订单，卖出费记 0
+        # （D-036，与 live/core、v4_limit 一致）
+        sell_fee = (
+            0.0
+            if reason == "flat" and exit_px == 0
+            else float(option_order_fees(qty, "Sell", exit_px)["total"])
         )
+        fees = float(option_order_fees(qty, "Buy", entry_px)["total"]) + sell_fee
         pnl = (exit_px - entry_px) * account.multiplier * qty - fees
         trades.append(
             Trade(
