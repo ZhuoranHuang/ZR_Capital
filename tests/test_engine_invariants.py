@@ -391,3 +391,128 @@ def test_t14_nonpositive_stop_frac():
     s5 = Account(equity_usd=2000, max_risk_pct=0.05, sizing_basis="stop")
     assert size_position(s5, 0.92, 0.0) == 0
     assert size_position(s5, 0.92, -0.30) == 0
+
+
+# ---------------- T15 指定时刻出场 at ----------------
+
+
+def _q1s(fn, start="10:00:00", end="10:12:00"):
+    return quotes(every_second(start, end, fn))
+
+
+S1012 = {"first_entry": "10:00", "last_entry": "10:09", "flat": "10:10"}
+
+
+def _run(q, sig, policy, acct=None, session=S1012):
+    r = simulate_day(
+        q, sig, acct or Account(equity_usd=10000, sizing_basis="premium"), session, policy
+    )
+    _inv(r, len(sig))
+    return r
+
+
+def test_t15_at_exit():
+    base = (0.90, 1.00)
+    pol = SimPolicy(lag_s=2, min_coverage=0.0)
+    # (a) at = 10:04:00 → 出场 = first_ge(10:04:02)，reason == "signal"
+    ra = _run(
+        _q1s(lambda s: base),
+        [(ts("10:01:00"), 1, SYM, {"kind": "at", "ts_ns": ts("10:04:00"), "sl": None})],
+        pol,
+    )
+    assert ra.trades[0].reason == "signal"
+    assert ra.trades[0].exit_ts_ns == ts("10:04:02")
+    # (b) at = 10:08:00，10:03:00 起 mid 跌至 0.70 → 指定时刻之前触发 sl
+    rb = _run(
+        _q1s(lambda s: (0.67, 0.73) if s >= 180 else base),
+        [(ts("10:01:00"), 1, SYM, {"kind": "at", "ts_ns": ts("10:08:00"), "sl": 0.30})],
+        pol,
+    )
+    assert rb.trades[0].reason == "sl"
+    # (c) at > flat（10:11:00）→ 清仓，reason == "flat"
+    rc = _run(
+        _q1s(lambda s: base),
+        [(ts("10:01:00"), 1, SYM, {"kind": "at", "ts_ns": ts("10:11:00"), "sl": None})],
+        pol,
+    )
+    assert rc.trades[0].reason == "flat"
+    # (d) at <= entry：at = 10:00:30，入场 10:01:02 → 不允许负持仓时长
+    rd = _run(
+        _q1s(lambda s: base),
+        [(ts("10:01:00"), 1, SYM, {"kind": "at", "ts_ns": ts("10:00:30"), "sl": None})],
+        pol,
+    )
+    td = rd.trades[0]
+    assert td.entry_ts_ns <= td.exit_ts_ns
+    assert td.reason == "signal"
+
+
+# ---------------- T16 出场延迟（lag_s = 2，报价每秒一条） ----------------
+
+
+def test_t16_exit_lag_by_kind():
+    base = (0.90, 1.00)
+    pol = SimPolicy(lag_s=2, min_coverage=0.0)
+    # sl 在 10:05:00 触发 → first_gt(10:05:02) = 10:05:03
+    r1 = _run(
+        _q1s(lambda s: (0.67, 0.73) if s >= 300 else base),
+        [(ts("10:01:00"), 1, SYM, {"kind": "bracket", "tp": 0.50, "sl": 0.30, "max_hold_min": 30})],
+        pol,
+    )
+    assert r1.trades[0].reason == "sl"
+    assert r1.trades[0].exit_ts_ns == ts("10:05:03")
+    # time 到期 10:04:00（信号 10:00:58 + lag 2 → 入场 10:01:00，持有 3 分钟）→ first_ge(10:04:02)
+    r2 = _run(_q1s(lambda s: base), [(ts("10:00:58"), 1, SYM, {"kind": "time", "minutes": 3})], pol)
+    assert r2.trades[0].entry_ts_ns == ts("10:01:00")
+    assert r2.trades[0].exit_ts_ns == ts("10:04:02")
+    # at = 10:04:00 → first_ge(10:04:02)
+    r3 = _run(
+        _q1s(lambda s: base),
+        [(ts("10:00:58"), 1, SYM, {"kind": "at", "ts_ns": ts("10:04:00"), "sl": None})],
+        pol,
+    )
+    assert r3.trades[0].exit_ts_ns == ts("10:04:02")
+
+
+# ---------------- T17 日亏损上限 ----------------
+
+
+def test_t17_daily_loss():
+    # 高价段 0.90 / 1.00（入场 ask 1.00）；
+    # 10:02:00–10:02:59 与 10:04:00–10:04:59 为低价段 0.40 / 0.45（出场 bid 0.40）
+    def f(s):
+        return (0.40, 0.45) if (120 <= s < 180 or 240 <= s < 300) else (0.90, 1.00)
+
+    acct = Account(equity_usd=2000, max_risk_pct=0.12, max_premium_pct=0.30, sizing_basis="premium")
+    sig = [
+        (ts("10:01:00"), 1, SYM, {"kind": "time", "minutes": 1}),
+        (ts("10:03:00"), 1, SYM, {"kind": "time", "minutes": 1}),
+        (ts("10:05:30"), 1, SYM, {"kind": "time", "minutes": 1}),
+    ]
+    r = _run(_q1s(f), sig, SimPolicy(lag_s=0, min_coverage=0.0, cooldown_s=0), acct)
+    assert len(r.trades) == 2
+    for t in r.trades:
+        assert t.qty == 2
+        assert t.entry_px == pytest.approx(1.00, abs=1e-9)
+        assert t.exit_px == pytest.approx(0.40, abs=1e-9)
+        assert t.fees_usd == pytest.approx(5.14, abs=1e-9)
+        assert t.pnl_usd == pytest.approx(-125.14, abs=1e-9)
+    assert r.equity_end - r.equity_start == pytest.approx(-250.28, abs=1e-9)
+    assert r.skipped["daily_loss"] == 1
+
+
+# ---------------- T18 每日开仓次数上限 ----------------
+
+
+def test_t18_max_entries():
+    sig = [
+        (ts("10:01:00"), 1, SYM, {"kind": "time", "minutes": 1}),
+        (ts("10:03:00"), 1, SYM, {"kind": "time", "minutes": 1}),
+    ]
+    r = _run(
+        _q1s(lambda s: (0.90, 1.00)),
+        sig,
+        SimPolicy(lag_s=0, min_coverage=0.0, cooldown_s=0, max_entries_per_day=1),
+    )
+    assert len(r.trades) == 1
+    assert r.skipped["max_entries"] == 1
