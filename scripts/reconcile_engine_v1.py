@@ -16,7 +16,9 @@ session 09:30 / 15:59 / 16:05。
 验收：A 组（单次卖出）逐笔 |pnl_new − base_d013| ≤ 0.01、组合计差 ≤ 1.00、符号一致；B 组（多次卖出）对反事实
 pnl_expected = (第一笔卖出价 − 买入价) × 100 × 张数 − fees(张数, Buy, 买入价) − fees(张数, Sell,
 第一笔卖出价)（旧吃价差重放的成交价，option_order_fees）逐笔 ≤ 0.01；差额闭合：Σtaker_pnl −
-Σbase_d013 与 Σ[sim_v3.sell_fee − option_order_fees(Sell)] 之差 ≤ 0.01。
+gap = Σ(taker_pnl − base_d013)，fees_gap = Σ[option_order_fees(qty_sell_used, "Sell", sell_px) −
+sim_v3.sell_fee(qty_sell_used, sell_px)]（D-013 减旧，负责人 2026-10-25 批准的符号约定），
+|gap − fees_gap| ≤ 0.01；并打印 48 笔合计相对旧基准的分解（卖出费用修正 + B 组一次全平），±0.01 自洽。
 运行：PYTHONPATH=. .venv/bin/python scripts/reconcile_engine_v1.py
 """
 
@@ -95,7 +97,7 @@ def main() -> int:
             n = min(held, float(r.filled)) if k < len(s) - 1 else held
             if n > 0:
                 cash += float(r.px) * 100 * n - _fees(int(n), "Sell", float(r.px))
-                gap_fees += float(sell_fee(n, float(r.px))) - _fees(int(n), "Sell", float(r.px))
+                gap_fees += _fees(int(n), "Sell", float(r.px)) - float(sell_fee(n, float(r.px)))
                 held -= n
                 qty_sell_used += int(n)
         base_d013 = cash
@@ -151,8 +153,14 @@ def main() -> int:
     a_tot = abs(a["pnl_new"].sum() - a["base_d013"].sum())
     a_sign = bool((np.sign(a["pnl_new"]) == np.sign(a["base_d013"])).all())
     b_each = bool((bb["diff(对照)"].abs() <= 0.01).all())
-    gap = float(d["taker_pnl(旧费率)"].sum() - d["base_d013"].sum())
+    gap = float((d["taker_pnl(旧费率)"] - d["base_d013"]).sum())
     close_ok = abs(gap - gap_fees) <= 0.01
+    # 分解：新引擎 48 笔合计 − 旧基准 = 卖出费用修正（Σbase_d013 − Σtaker_pnl）+ B 组一次全平
+    # （ΣB pnl_new − ΣB base_d013）
+    total_new = float(d["pnl_new"].sum())
+    fee_effect = float(d["base_d013"].sum() - d["taker_pnl(旧费率)"].sum())
+    b_effect = float(bb["pnl_new"].sum() - bb["base_d013"].sum())
+    decomp_ok = abs((fee_effect + b_effect) - (total_new - BASELINE)) <= 0.01
     pd.set_option("display.width", 300)
     print(d.drop(columns=["diff(对照)", "_px_ok"]).round(2).to_string(index=False))
     print(
@@ -169,11 +177,22 @@ def main() -> int:
         "，"
         f"差 {bb['pnl_new'].sum() - bb['expected(B)'].sum():,.2f}"
     )
+    print(f"gap = Σ(taker_pnl − base_d013) = {gap:,.4f}")
+    print(f"fees_gap = Σ[D-013 卖出费 − 旧 sell_fee] = {gap_fees:,.4f}")
     print(
-        f"差额闭合：gap = Σtaker_pnl − Σbase_d013 = {gap:,.2f}；fees_gap = {gap_fees:,.2f}；"
-        f"|gap − fees_gap| = {abs(gap - gap_fees):.4f} {'通过' if close_ok else '不通过'}"
+        f"gap − fees_gap = {gap - gap_fees:,.4f}（|·| ≤ 0.01：{'通过' if close_ok else '不通过'}）"
     )
-    ok = a_each and a_tot <= 1.00 and a_sign and b_each and close_ok
+    print(
+        f"分解：新引擎 48 笔合计 ΣA {a['pnl_new'].sum():,.2f} + ΣB {bb['pnl_new'].sum():,.2f} = "
+        f"{total_new:,.2f}；相对旧基准 {BASELINE:,.2f} 差 {total_new - BASELINE:+,.2f}"
+    )
+    print(f"  卖出费用修正（旧 → D-013）{fee_effect:+,.2f}（fees_gap 闭合检查）")
+    print(f"  B 组一次全平 vs 多次卖出 {b_effect:+,.2f}（B 组反事实逐笔）")
+    print(
+        f"  合计 {fee_effect + b_effect:+,.2f}；= Σpnl_new − 旧基准 {total_new - BASELINE:+,.2f}"
+        f"（±0.01 自洽：{'通过' if decomp_ok else '不通过'}）"
+    )
+    ok = a_each and a_tot <= 1.00 and a_sign and b_each and close_ok and decomp_ok
     print(
         f"验收：A 逐笔 {'通过' if a_each else '不通过'}；A 合计差 {a_tot:.2f} "
         f"{'通过' if a_tot <= 1.00 else '不通过'}；A 符号 {'通过' if a_sign else '不通过'}；"
