@@ -541,3 +541,7 @@ uv run python -m zr.research.outcomes --symbol MU.US
 uv run python -m zr.research.dataset_v2 --symbol MU.US
 uv run python -m zr.research.method_v2_round1 --symbol MU.US
 ```
+
+## 补充（2026-10-25）
+
+`zr/research/run.py` 的期权盈亏是近似模型：权利金按「正股价格 × 比例 × delta」估算，不来自真实期权报价；费用部分为 D-013。该近似仅用于 W2 的方法演示，其结论已被后续 V4 / R-049 的真实报价检验取代，不应单独引用。
