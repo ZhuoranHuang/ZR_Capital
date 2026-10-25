@@ -47,21 +47,45 @@ def hm(s: str) -> int:
 
 
 # ---------------- 费用（D-013，向量化；tests 对照 option_order_fees 逐值相等） ----------------
+# 2026-10-25 fix/fees-unify（D-035）：此前 _BUY 只支持 1、2 张，sell_fee 的基础费在 n >= 2 时固定为
+# 2 张的值（n >= 3 少算）；改为对任意张数逐项复刻 zr.costs.fees.option_order_fees。
 
-_BUY = {n: float(option_order_fees(n, "Buy", 1.0)["total"]) for n in (1, 2)}
-_SELL_BASE = {
-    n: float(option_order_fees(n, "Sell", 0.0)["total"])
-    - max(0.01, 0.0)  # 权利金 0 时 SEC 取最低 0.01，下面加回按价计算的 SEC
-    for n in (1, 2)
-}
+
+class _BuyFees(dict):
+    """买入费用 {张数: 金额}（与权利金无关），任意张数按需从 option_order_fees 计算。"""
+
+    def __missing__(self, n: int) -> float:
+        v = float(option_order_fees(int(n), "Buy", 1.0)["total"])
+        self[n] = v
+        return v
+
+
+_BUY = _BuyFees()
+
+
+def _r2(x: np.ndarray) -> np.ndarray:  # 四舍五入到分（不用 np.round：它是银行家舍入）
+    return np.floor(x * 100 + 0.5 + 1e-9) / 100
+
+
+def _ceil2(x: np.ndarray) -> np.ndarray:  # 向上取整到分
+    return np.ceil(x * 100 - 1e-9) / 100
 
 
 def sell_fee(n: np.ndarray, prem: np.ndarray) -> np.ndarray:
+    """卖出单费用（向量化），逐项复刻 option_order_fees(n, "Sell", prem)。"""
     n = np.asarray(n, float)
-    v = 0.00206 * np.asarray(prem, float) * n
-    sec = np.maximum(np.floor(v * 100 + 0.5 + 1e-9) / 100, 0.01)
-    base = np.where(n >= 2, _SELL_BASE[2], _SELL_BASE[1])
-    return np.where(n > 0, base + sec, 0.0)
+    prem = np.asarray(prem, float)
+    f = (
+        np.maximum(_r2(0.45 * n), 1.49)  # OptionsCommission
+        + np.maximum(_r2(0.30 * n), 0.30)  # OptionsPlatformFee
+        + _r2(0.18 * n)  # OptionsExchangeFee
+        + _ceil2(0.02295 * n)  # OptionsRegulatoryFee
+        + np.maximum(_r2(0.0003 * n), 0.01)  # CATFee
+        + _r2(0.025 * n)  # OptionsClearingFee
+        + np.maximum(_r2(0.0000206 * prem * 100 * n), 0.01)  # OptionsSFCFee（仅卖出）
+        + np.maximum(_r2(0.00329 * n), 0.01)  # OptionsTradingActivityFee（仅卖出）
+    )
+    return np.where(n > 0, f, 0.0)
 
 
 # ---------------- 期权日数据 ----------------

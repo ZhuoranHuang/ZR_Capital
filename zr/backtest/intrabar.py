@@ -42,7 +42,6 @@ from zr.data.calendar import session_close
 from zr.data.thetadata import ET, ThetaClient, lb_symbol, parse_contract
 from zr.features.regime import indicators
 from zr.research import v4_decisive as v4d
-from zr.research.sim_v3 import sell_fee
 
 log = logging.getLogger("zr.backtest.intrabar")
 NS = 1_000_000_000
@@ -404,13 +403,10 @@ def place(
 
 
 def fees(n: float, px: float, side: str) -> float:
+    """D-013（option_order_fees），买卖两侧（2026-10-25 起卖出不再走 sim_v3.sell_fee，D-035）。"""
     if n <= 0:
         return 0.0
-    return (
-        float(option_order_fees(int(n), "Buy", px)["total"])
-        if side == "Buy"
-        else float(sell_fee(int(n), px))
-    )
+    return float(option_order_fees(int(n), "Buy" if side == "Buy" else "Sell", px)["total"])
 
 
 # ---------------- 主循环 ----------------

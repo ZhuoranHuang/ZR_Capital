@@ -28,6 +28,7 @@ import pandas as pd
 from joblib import Parallel, delayed
 
 from zr.config import get_settings
+from zr.costs.fees import stock_order_fees
 from zr.data.calendar import session_close
 from zr.features.bars import ET, load_bars
 from zr.features.indicators import adx, atr, ema, kdj, sma, true_range, wilder_rsi
@@ -57,16 +58,11 @@ SPLIT = {  # MACD 复合：样本内（优化）/ 样本外（冻结测试）
 # ---- 费用（D-013 正股，按订单；与 zr/costs/fees.stock_order_fees 一致，见测试） ----
 
 
-def _r2(x):
-    return np.floor(np.asarray(x, float) * 100 + 0.5 + 1e-9) / 100
-
-
 def stock_fee(shares: float, side: str, px: float) -> float:
-    s, n = float(shares), float(shares) * float(px)
-    f = _r2(min(max(0.005 * s, 1.0), 0.0099 * n)) + _r2(min(0.003 * s, 0.07 * n))
-    if side == "Sell":
-        f += max(_r2(0.0000206 * n), 0.01) + min(max(_r2(0.000195 * s), 0.01), 9.79)
-    return float(f)
+    """已统一（D-035）：转调 zr.costs.fees.stock_order_fees（D-013）。"""
+    if shares <= 0:
+        return 0.0
+    return float(stock_order_fees(int(shares), side, px)["total"])
 
 
 # ---------------- 数据 ----------------
