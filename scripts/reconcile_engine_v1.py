@@ -1,3 +1,4 @@
+# ruff: noqa: E501  （对账报告的中文输出行较长）
 """新旧引擎对账（引擎 v1.1 收尾任务书第 4 项）：MU 48 段，吃价差口径。
 
 基准 = −37,386.94 USD（ka_episodes.parquet 的 taker_pnl 合计，docs/research/INTRABAR_KNOWN_ANSWER.md
@@ -10,10 +11,12 @@ zr.sim.engine.size_position 返回该张数，不改引擎）。报价只读已�
 （owner_rules_oos.CachedOptionData，不拉新数据），转成 DataFrame[ts_ns, symbol, bid, ask]。
 参数：max_entry_wait_s=3600、max_spread_pct=1.0、min_coverage=0.0、cooldown_s=0、日内风控关闭、
 session 09:30 / 15:59 / 16:05。
-验收：A 组（单次卖出）逐笔 |pnl_new − taker_pnl| ≤ 0.01、组合计差 ≤ 1.00；B 组（多次卖出）对反事实
+基准 base_d013（负责人 2026-10-25 改）：与 taker 同样的成交价与张数，双边费用按 D-013
+（option_order_fees）重算，复刻旧 pnl() 的持仓上限（每笔卖出 min(持仓, filled)，最后一笔卖完剩余）。
+验收：A 组（单次卖出）逐笔 |pnl_new − base_d013| ≤ 0.01、组合计差 ≤ 1.00、符号一致；B 组（多次卖出）对反事实
 pnl_expected = (第一笔卖出价 − 买入价) × 100 × 张数 − fees(张数, Buy, 买入价) − fees(张数, Sell,
-第一笔卖出价)（旧吃价差重放的成交价，option_order_fees）逐笔 ≤ 0.01；48 笔 sign(pnl_new) 与
-sign(taker_pnl) 全部一致。
+第一笔卖出价)（旧吃价差重放的成交价，option_order_fees）逐笔 ≤ 0.01；差额闭合：Σtaker_pnl −
+Σbase_d013 与 Σ[sim_v3.sell_fee − option_order_fees(Sell)] 之差 ≤ 0.01。
 运行：PYTHONPATH=. .venv/bin/python scripts/reconcile_engine_v1.py
 """
 
@@ -30,6 +33,7 @@ from zr.config import get_settings
 from zr.costs.fees import option_order_fees
 from zr.research import intrabar_known_answer as ka
 from zr.research import owner_rules_oos as o
+from zr.research.sim_v3 import sell_fee
 
 BASELINE = -37386.94
 
@@ -72,11 +76,29 @@ def main() -> int:
     session = {"first_entry": "09:30", "last_entry": "15:59", "flat": "16:05"}
     base = ep.set_index("episode")["taker_pnl"]
     rows = []
+    gap_fees = 0.0
     for e, g in tk.groupby("episode"):
         b = g[g["side"] == 1].sort_values("t_ns")
         s = g[g["side"] == -1].sort_values("t_ns")
         sym, day = str(b["symbol"].iloc[0]), b["day"].iloc[0]
-        qty = int(round(b["qty"].sum()))
+        qty_buy = int(round(b["filled"].sum()))
+        buy_px = float(b["px"].iloc[0])
+        # base_d013：与旧 pnl() 同样的价格、张数与持仓上限（每笔卖出 min(持仓, filled)，最后一笔卖完剩余），
+        # 费用全部用 D-013（option_order_fees）
+        held, cash = float(qty_buy), 0.0
+        cash -= sum(
+            float(r.px) * 100 * float(r.filled) + _fees(int(r.filled), "Buy", float(r.px))
+            for r in b.itertuples()
+        )
+        qty_sell_used = 0
+        for k, r in enumerate(s.itertuples()):
+            n = min(held, float(r.filled)) if k < len(s) - 1 else held
+            if n > 0:
+                cash += float(r.px) * 100 * n - _fees(int(n), "Sell", float(r.px))
+                gap_fees += float(sell_fee(n, float(r.px))) - _fees(int(n), "Sell", float(r.px))
+                held -= n
+                qty_sell_used += int(n)
+        base_d013 = cash
         bk = od.book(
             sym,
             day,
@@ -84,7 +106,9 @@ def main() -> int:
             pd.Timestamp(int(s["t_ns"].iloc[-1]), tz="UTC") + pd.Timedelta(minutes=2),
         )
         q = pd.DataFrame({"ts_ns": bk.q_ns, "symbol": sym, "bid": bk.bid, "ask": bk.ask})
-        eng.size_position = lambda *a, _q=qty, **k: _q  # 对账专用：张数 = 该 episode 买入张数之和
+        eng.size_position = lambda *a, _q=qty_buy, **k: (
+            _q
+        )  # 对账专用：张数 = 该 episode 买入 filled 之和
         rule = {"kind": "at", "ts_ns": int(s["t_ns"].iloc[0]), "sl": None}
         r = eng.simulate_day(
             q,
@@ -95,54 +119,66 @@ def main() -> int:
         )
         t = r.trades[0]
         grp = "A" if len(s) == 1 else "B"
-        buy_px, sell1 = float(b["px"].iloc[0]), float(s["px"].iloc[0])
-        if grp == "A":
-            ref = float(base.loc[e])
-        else:
-            ref = (
-                (sell1 - buy_px) * 100 * qty - _fees(qty, "Buy", buy_px) - _fees(qty, "Sell", sell1)
-            )
+        sell1 = float(s["px"].iloc[0])
+        expected = (
+            (sell1 - buy_px) * 100 * qty_buy
+            - _fees(qty_buy, "Buy", buy_px)
+            - _fees(qty_buy, "Sell", sell1)
+        )
+        ref = base_d013 if grp == "A" else expected
         rows.append(
             {
                 "episode": int(e),
                 "组别": grp,
-                "张数": qty,
-                "买入价旧": buy_px,
-                "买入价新": t.entry_px,
-                "卖出价旧1": sell1,
-                "卖出价新": t.exit_px,
-                "taker_pnl": float(base.loc[e]),
-                "对照值": ref,
+                "qty_buy": qty_buy,
+                "qty_sell_used": qty_sell_used,
+                "buy_px": buy_px,
+                "sell_px": sell1,
+                "taker_pnl(旧费率)": float(base.loc[e]),
+                "base_d013": base_d013,
+                "expected(B)": expected if grp == "B" else np.nan,
                 "pnl_new": t.pnl_usd,
-                "差": t.pnl_usd - ref,
+                "diff(base)": t.pnl_usd - base_d013,
+                "diff(旧)": t.pnl_usd - float(base.loc[e]),
+                "diff(对照)": t.pnl_usd - ref,
                 "类别": "multi_sell" if grp == "B" else "",
+                "_px_ok": abs(t.entry_px - buy_px) < 1e-9 and abs(t.exit_px - sell1) < 1e-9,
             }
         )
     d = pd.DataFrame(rows)
     a, bb = d[d["组别"] == "A"], d[d["组别"] == "B"]
-    a_each = bool((a["差"].abs() <= 0.01).all())
-    a_tot = abs(a["pnl_new"].sum() - a["taker_pnl"].sum())
-    b_each = bool((bb["差"].abs() <= 0.01).all())
-    sign_ok = bool((np.sign(d["pnl_new"]) == np.sign(d["taker_pnl"])).all())
-    pd.set_option("display.width", 250)
-    print(d.round(4).to_string(index=False))
+    a_each = bool((a["diff(base)"].abs() <= 0.01).all())
+    a_tot = abs(a["pnl_new"].sum() - a["base_d013"].sum())
+    a_sign = bool((np.sign(a["pnl_new"]) == np.sign(a["base_d013"])).all())
+    b_each = bool((bb["diff(对照)"].abs() <= 0.01).all())
+    gap = float(d["taker_pnl(旧费率)"].sum() - d["base_d013"].sum())
+    close_ok = abs(gap - gap_fees) <= 0.01
+    pd.set_option("display.width", 300)
+    print(d.drop(columns=["diff(对照)", "_px_ok"]).round(2).to_string(index=False))
     print(
-        f"A 组 {len(a)} 笔：Σtaker_pnl {a['taker_pnl'].sum():,.2f}，"
-        f"Σpnl_new {a['pnl_new'].sum():,.2f}，"
-        f"差 {a['pnl_new'].sum() - a['taker_pnl'].sum():,.2f}；"
-        f"逐笔 ≤ 0.01 {int((a['差'].abs() <= 0.01).sum())}/{len(a)}"
+        f"成交价逐笔一致（入场 ask、出场 bid 与旧吃价差重放相同）：{int(d['_px_ok'].sum())}/{len(d)}"
     )
     print(
-        f"B 组 {len(bb)} 笔：Σ反事实 {bb['对照值'].sum():,.2f}，"
-        f"Σpnl_new {bb['pnl_new'].sum():,.2f}，"
-        f"差 {bb['差'].sum():,.2f}；Σtaker_pnl {bb['taker_pnl'].sum():,.2f}"
+        f"A 组 {len(a)} 笔：Σbase_d013 {a['base_d013'].sum():,.2f}，Σpnl_new {a['pnl_new'].sum():,.2f}"
+        "，"
+        f"差 {a['pnl_new'].sum() - a['base_d013'].sum():,.2f}；逐笔 ≤ 0.01 "
+        f"{int((a['diff(base)'].abs() <= 0.01).sum())}/{len(a)}；符号一致 {a_sign}"
     )
-    print(f"48 笔 pnl_new 合计 {d['pnl_new'].sum():,.2f}（基准 {BASELINE:,.2f}）")
-    ok = a_each and a_tot <= 1.00 and b_each and sign_ok
+    print(
+        f"B 组 {len(bb)} 笔：Σexpected {bb['expected(B)'].sum():,.2f}，Σpnl_new {bb['pnl_new'].sum():,.2f}"
+        "，"
+        f"差 {bb['pnl_new'].sum() - bb['expected(B)'].sum():,.2f}"
+    )
+    print(
+        f"差额闭合：gap = Σtaker_pnl − Σbase_d013 = {gap:,.2f}；fees_gap = {gap_fees:,.2f}；"
+        f"|gap − fees_gap| = {abs(gap - gap_fees):.4f} {'通过' if close_ok else '不通过'}"
+    )
+    ok = a_each and a_tot <= 1.00 and a_sign and b_each and close_ok
     print(
         f"验收：A 逐笔 {'通过' if a_each else '不通过'}；A 合计差 {a_tot:.2f} "
-        f"{'通过' if a_tot <= 1.00 else '不通过'}；B 反事实 {'通过' if b_each else '不通过'}；"
-        f"符号一致 {'通过' if sign_ok else '不通过'} → {'全部通过' if ok else '未通过'}"
+        f"{'通过' if a_tot <= 1.00 else '不通过'}；A 符号 {'通过' if a_sign else '不通过'}；"
+        f"B 反事实 {'通过' if b_each else '不通过'}；差额闭合 {'通过' if close_ok else '不通过'} → "
+        f"{'全部通过' if ok else '未通过'}"
     )
     return 0 if ok else 1
 
