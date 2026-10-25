@@ -52,3 +52,47 @@ def test_stock_fees():
     assert cheap["TradingActivityFee"] == D("0.01")
     huge = stock_order_fees(100_000, "Sell", 10.0)
     assert huge["TradingActivityFee"] == D("9.79")
+
+
+# ---------------- D-035 费用口径统一：向量化 / 转调实现与 D-013 逐值相等 ----------------
+
+import numpy as np  # noqa: E402
+
+_NS = (1, 2, 3, 5, 10, 20)
+_PREMS = np.round(np.r_[0.0, 0.01, 0.05, 0.1, 0.33, 0.995, np.arange(0.01, 60.0, 0.37), 99.99], 2)
+
+
+def test_vectorized_sell_fee_equals_d013():
+    from zr.research.sim_v3 import sell_fee
+
+    for n in _NS:
+        got = sell_fee(np.full(len(_PREMS), n), _PREMS)
+        exp = np.array([float(option_order_fees(n, "Sell", float(p))["total"]) for p in _PREMS])
+        assert np.abs(got - exp).max() < 1e-9, n
+
+
+def test_buy_table_equals_d013_any_n():
+    from zr.research.sim_v3 import _BUY
+
+    for n in _NS:
+        for p in (0.05, 1.0, 25.0):
+            assert abs(_BUY[n] - float(option_order_fees(n, "Buy", p)["total"])) < 1e-9
+
+
+def test_intrabar_fees_equals_d013():
+    from zr.backtest.intrabar import fees
+
+    for n in (1, 3, 10):
+        for p in (0.0, 1.05, 8.25, 36.55):
+            for side in ("Buy", "Sell"):
+                assert abs(fees(n, p, side) - float(option_order_fees(n, side, p)["total"])) < 1e-9
+
+
+def test_research_stock_fee_equals_d013():
+    from zr.research.popular_confluence import stock_fee
+
+    for shares in (1, 100, 1000, 10000):
+        for p in (0.95, 10.01, 90.0, 800.0):
+            for side in ("Buy", "Sell"):
+                exp = float(stock_order_fees(shares, side, p)["total"])
+                assert abs(stock_fee(shares, side, p) - exp) < 1e-9

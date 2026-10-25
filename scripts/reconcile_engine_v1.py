@@ -35,9 +35,18 @@ from zr.config import get_settings
 from zr.costs.fees import option_order_fees
 from zr.research import intrabar_known_answer as ka
 from zr.research import owner_rules_oos as o
-from zr.research.sim_v3 import sell_fee
 
 BASELINE = -37386.94
+
+
+def sell_fee(n: float, prem: float) -> float:
+    """旧卖出费（2026-10-25 之前的 sim_v3.sell_fee，冻结副本）：基础费在 n >= 2 时固定为 2 张的值。
+    sim_v3.sell_fee 已按 D-035 改为 D-013，对账基准 ka_episodes 仍是旧费率，所以这里保留旧公式。"""
+    base = {k: float(option_order_fees(k, "Sell", 0.0)["total"]) - 0.01 for k in (1, 2)}[
+        2 if n >= 2 else 1
+    ]
+    v = 0.00206 * prem * n
+    return base + max(np.floor(v * 100 + 0.5 + 1e-9) / 100, 0.01)
 
 
 def _fees(n: int, side: str, px: float) -> float:

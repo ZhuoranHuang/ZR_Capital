@@ -31,7 +31,6 @@ from zr.backtest.fill_limit import Book, LimitRule, cross_now, execute
 from zr.config import get_settings
 from zr.costs.fees import option_order_fees
 from zr.research import v4_decisive as v4d
-from zr.research.sim_v3 import sell_fee
 
 log = logging.getLogger("zr.research.v4_limit")
 REPO = Path(__file__).resolve().parents[2]
@@ -68,7 +67,8 @@ def _buy_fee(n: int, px: float) -> float:
 
 
 def _sell_fee(n: int, px: float) -> float:
-    return float(sell_fee(n, px)) if px > 0 else 0.0
+    # D-013（D-035 统一）；权利金 <= 0 时不卖出、不计费（保留原规则，见 D-035 歧义）
+    return float(option_order_fees(n, "Sell", px)["total"]) if px > 0 else 0.0
 
 
 def simulate_limit(
