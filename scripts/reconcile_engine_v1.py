@@ -127,12 +127,14 @@ def main() -> int:
     pd.set_option("display.width", 250)
     print(d.round(4).to_string(index=False))
     print(
-        f"A 组 {len(a)} 笔：Σtaker_pnl {a['taker_pnl'].sum():,.2f}，Σpnl_new {a['pnl_new'].sum():,.2f}，"
+        f"A 组 {len(a)} 笔：Σtaker_pnl {a['taker_pnl'].sum():,.2f}，"
+        f"Σpnl_new {a['pnl_new'].sum():,.2f}，"
         f"差 {a['pnl_new'].sum() - a['taker_pnl'].sum():,.2f}；"
         f"逐笔 ≤ 0.01 {int((a['差'].abs() <= 0.01).sum())}/{len(a)}"
     )
     print(
-        f"B 组 {len(bb)} 笔：Σ反事实 {bb['对照值'].sum():,.2f}，Σpnl_new {bb['pnl_new'].sum():,.2f}，"
+        f"B 组 {len(bb)} 笔：Σ反事实 {bb['对照值'].sum():,.2f}，"
+        f"Σpnl_new {bb['pnl_new'].sum():,.2f}，"
         f"差 {bb['差'].sum():,.2f}；Σtaker_pnl {bb['taker_pnl'].sum():,.2f}"
     )
     print(f"48 笔 pnl_new 合计 {d['pnl_new'].sum():,.2f}（基准 {BASELINE:,.2f}）")
