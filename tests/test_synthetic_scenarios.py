@@ -65,7 +65,9 @@ def mirror(df: pd.DataFrame) -> pd.DataFrame:
 
 def run(df: pd.DataFrame):
     x = indicators(df, CFG, daily_reset=False, warmup="nan")
-    reg = regimes(df, x, CFG, V4["period"])
+    # 场景按「RANGE 窗口 = 场景长度」设计（单日、约百根）；D-037 后首日默认用名义值 480，
+    # 这里显式指定
+    reg = regimes(df, x, CFG, V4["period"], bars_per_day=len(df))
     sig = v4d.hypothesis_signals(df, x, reg, CFG, V4)
     exits = v4d.exit_arrays(df, x, CFG)
     guards = v4d.guard_mask(df, reg, V4, {DAY})

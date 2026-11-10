@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from zr.features.bars import resample_bars
-from zr.features.regime import bars_per_day, indicators, regimes
+from zr.features.regime import indicators, range_windows, regimes
 from zr.research import v4_decisive as v4d
 from zr.strategy.incremental import NS_MIN, Bar, BarBuilder, IncrementalEngine
 
@@ -32,7 +32,9 @@ def test_incremental_matches_batch_bar_by_bar():
     sig = v4d.hypothesis_signals(b, x, reg, cfg, v4)
     ex = v4d.exit_arrays(b, x, cfg)
     tok, okl, oks = v4d.guard_mask(b, reg, v4, {day})
-    eng = IncrementalEngine(cfg, v4, max(1, round(bars_per_day(b))), {day})
+    # 首日名义窗口（D-037），与 zr/live/core.py 的固定窗口一致
+    w = int(range_windows(b, 2, cfg["regime"]["range"])[0])
+    eng = IncrementalEngine(cfg, v4, w, {day})
     recs = [
         eng.on_bar(Bar(int(t), o, h, lo, c, v))
         for t, o, h, lo, c, v in zip(

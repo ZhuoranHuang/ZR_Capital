@@ -242,9 +242,7 @@ def synthetic_cases() -> list[Case]:
         Case("structure.bars_since", ("structure.bars_since",), lambda d: st.bars_since(cs(d).diff() > 0)),
         Case("pullback.depth_features + directional", ("pullback.depth_features", "pullback.directional"), depth_dir),
         Case("regime.indicators / regimes / state_features / range_score", ("regime.indicators", "regime.regimes", "regime.state_features", "regime.range_score"), regime_all,
-             "1 分钟 K 当作周期 P = 1。未通过原因：range_score 的滚动窗口 = window_days × bars_per_day(df)，bars_per_day 取输入全样本每日 bar 数的中位数（含 t 之后的行）；"
-             "输入只有 1–2 天时中位数随截断长度变化（如截到 494 行时为 247，全量为 390），窗口随之不同，regimes / state_features 的 RANGE 状态跟着变。"
-             "不一致的截断点全部落在第 2 个交易日内；输入 ≥ 3 天后中位数与全量相同。原函数未改"),
+             "1 分钟 K 当作周期 P = 1。D-037 前未通过（窗口取输入全样本的 bars_per_day，含 t 之后的行）；已改为只用当日之前已完成交易日的根数中位数、首日名义值，见 docs/research/RANGE_SCORE_FIX.md"),
         Case("cross_asset.compute_cross_asset", ("cross_asset.compute_cross_asset",), cross, "参考标的同样截到 t"),
         Case("calendar_features.compute_calendar", ("calendar_features.compute_calendar",), cal, "合成发布时刻；不含到期日（root=None）"),
         Case("bars.resample_bars（按完成时刻映射回分钟行）", ("bars.resample_bars",), resampled),
@@ -327,7 +325,9 @@ NOT_APPLICABLE = {
     "range_calibration.year_scores": "离线标定（按年汇总），不产生分钟特征",
     "regime.load_config": "读取配置",
     "regime.bar_close_minute": "K 线收盘分钟的时间工具",
-    "regime.bars_per_day": "每日 K 线根数（标定窗口用的常数）",
+    "regime.bars_per_day": "整段输入的每日 K 线根数中位数（全样本统计，文档注明不得用于逐行特征）",
+    "regime.nominal_bars_per_day": "名义每日根数（时段 ÷ 周期，只看第一根 K）",
+    "regime.range_windows": "每行窗口根数（在 range_score 检验内覆盖）",
 }
 
 

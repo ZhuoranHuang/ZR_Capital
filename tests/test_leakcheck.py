@@ -104,15 +104,9 @@ def test_cut_points_fall_inside_days_and_near_open():
 # ---------------- zr/features 公开函数 ----------------
 
 SYN = lc.synthetic_bars()
-# 已知未通过（只列出，不改原函数；见 docs/research/LEAKCHECK_FEATURES.md）：
-# regime.range_score 的窗口 = window_days × bars_per_day(df)，bars_per_day 是输入全样本的
-# 每日 bar 数中位数，输入不足约 3 天时随输入长度变化 → 截断后窗口不同；
-# regimes / state_features 的 RANGE 状态随之不同。
-KNOWN = {
-    "regime.indicators / regimes / state_features / range_score": {
-        "range_score", "reg_range_score", "reg_state", "sf_rg_state", "sf_rg_duration",
-    },
-}  # fmt: skip
+# 已知未通过（只列出，不改原函数；见 docs/research/LEAKCHECK_FEATURES.md）。
+# regime.range_score 的非因果窗口已按 D-037 修复，当前无已知未通过项。
+KNOWN: dict[str, set[str]] = {}
 
 
 @pytest.mark.parametrize("case", lc.synthetic_cases(), ids=lambda c: c.name)
