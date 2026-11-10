@@ -23,6 +23,8 @@
 
 ## 进行中
 
+- **R-056 MU 趋势变体留出期一次性检验（research/r056-mu-trend-holdout，2026-11-12）**：预登记先提交、留出期只运行一次。结论：**样本不足，不能判定**（86 笔 < 100）；账户 B 每笔 +0.147%（95% −0.147%～+0.441%）、按日 t +0.87、未超过随机对照 (ii) 95 分位（+0.243%）；账户 A 每笔 −0.058%。留出期「最多 5 次」额度已用 1 次。见 `docs/research/R056_MU_TREND_HOLDOUT.md`。
+
 - **夜间择时研究归档（research/night-20261111-archive，2026-11-12，R-055 / L-002）**：代码整理进 `zr/research/timing/`（特征、标签与 L4 出场引擎、可替换事件、随机对照、按日聚类与重抽样统计、等权合成、趋势分支；与夜间输出逐列一致），最小测试 `tests/test_timing.py`；报告与案例图在 `docs/research/night_20261111/`。结论：0 个候选，留出期未打开。L-002（日内排序 / 中心化的前视）写入 CLAUDE.md「前视检查」，AGENTS.md 已同步（未跟踪）。
 
 - **range_score 前视修复（fix/range-score-lookahead，2026-11-11，D-037）**：窗口只用当日之前已完成交易日的根数中位数、首日名义值；range_score / regimes / state_features 在 1、2、5 天输入下通过截断检验，LEAKCHECK_FEATURES.md 未通过 0 项。MU / QQQ 全量历史（C 与 D-027）新旧 0 行不一致（RANGE_SCORE_FIX.md），旧研究不重跑；受影响的只有单日 / 短输入（两个增量引擎对照测试与合成场景测试的设置已改）。
