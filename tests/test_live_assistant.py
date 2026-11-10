@@ -271,7 +271,7 @@ def test_incremental_engine_daily_reset_matches_batch_convention_a():
     import numpy as np
 
     from zr.features.bars import resample_bars
-    from zr.features.regime import bars_per_day, indicators, regimes
+    from zr.features.regime import indicators, range_windows, regimes
     from zr.research import v4_decisive as v4d
     from zr.strategy.incremental import Bar, IncrementalEngine
 
@@ -284,7 +284,9 @@ def test_incremental_engine_daily_reset_matches_batch_convention_a():
     cfg_a = v4d.state_cfg(v4, "A")
     x = indicators(b, cfg_a, daily_reset=True, warmup="nan")
     reg = regimes(b, x, cfg_a, 2)
-    eng = IncrementalEngine(cfg_a, v4, max(1, round(bars_per_day(b))), set(), daily_reset=True)
+    # 首日名义窗口（D-037），与 zr/live/core.py 的固定窗口一致
+    w = int(range_windows(b, 2, cfg_a["regime"]["range"])[0])
+    eng = IncrementalEngine(cfg_a, v4, w, set(), daily_reset=True)
     recs = [
         eng.on_bar(Bar(int(t), o, h, lo, c, v))
         for t, o, h, lo, c, v in zip(

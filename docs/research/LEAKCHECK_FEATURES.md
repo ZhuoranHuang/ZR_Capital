@@ -2,7 +2,7 @@
 
 `python -m zr.research.leakcheck` 生成，不手改。检验函数 `zr.research.leakcheck.assert_no_lookahead_frame`：截到第 k 行重算，前 k 个值必须与全量完全一致（rtol 1e-9，NaN 视为相等）。背景：RESEARCH_LOG 教训 L-001（2026-11 /tmp 特征研究的三处时序错误）。**未通过的函数只列出，未修改原函数。**
 
-zr/features 公开函数 73 个：检验覆盖 50 个，不适用 23 个，未归类 0 个。检验项 29 个，未通过 1 个。
+zr/features 公开函数 75 个：检验覆盖 50 个，不适用 25 个，未归类 0 个。检验项 29 个，未通过 0 个。
 
 ## 检验结果
 
@@ -29,7 +29,7 @@ zr/features 公开函数 73 个：检验覆盖 50 个，不适用 23 个，未�
 | structure.tf5_regime | 合成 1 分钟 K，25 个交易日，均匀 10 个 + 开盘附近 50 个截断点 | 1 | 通过 |  |  |
 | structure.bars_since | 合成 1 分钟 K，25 个交易日，均匀 10 个 + 开盘附近 50 个截断点 | 1 | 通过 |  |  |
 | pullback.depth_features + directional | 合成 1 分钟 K，25 个交易日，均匀 10 个 + 开盘附近 50 个截断点 | 6 | 通过 |  |  |
-| regime.indicators / regimes / state_features / range_score | 合成 1 分钟 K，25 个交易日，均匀 10 个 + 开盘附近 50 个截断点 | 30 | **未通过（5 列）** | `range_score`（391, 392, 395, 405, 421, 494）；`reg_range_score`（391, 392, 395, 405, 421, 494）；`reg_state`（391, 392, 395, 405, 421, 494）；`sf_rg_duration`（391, 392, 395, 405, 421, 494）；`sf_rg_state`（391, 392, 395, 405, 421, 494） |  |
+| regime.indicators / regimes / state_features / range_score | 合成 1 分钟 K，25 个交易日，均匀 10 个 + 开盘附近 50 个截断点 | 30 | 通过 |  |  |
 | cross_asset.compute_cross_asset | 合成 1 分钟 K，25 个交易日，均匀 10 个 + 开盘附近 50 个截断点 | 7 | 通过 |  |  |
 | calendar_features.compute_calendar | 合成 1 分钟 K，25 个交易日，均匀 10 个 + 开盘附近 50 个截断点 | 4 | 通过 |  |  |
 | bars.resample_bars（按完成时刻映射回分钟行） | 合成 1 分钟 K，25 个交易日，均匀 10 个 + 开盘附近 50 个截断点 | 5 | 通过 |  |  |
@@ -63,8 +63,10 @@ zr/features 公开函数 73 个：检验覆盖 50 个，不适用 23 个，未�
 | range_calibration.main | 离线标定脚本入口（年度打分，不产生分钟特征） |
 | range_calibration.year_scores | 离线标定（按年汇总），不产生分钟特征 |
 | regime.bar_close_minute | K 线收盘分钟的时间工具 |
-| regime.bars_per_day | 每日 K 线根数（标定窗口用的常数） |
+| regime.bars_per_day | 整段输入的每日 K 线根数中位数（全样本统计，文档注明不得用于逐行特征） |
 | regime.load_config | 读取配置 |
+| regime.nominal_bars_per_day | 名义每日根数（时段 ÷ 周期，只看第一根 K） |
+| regime.range_windows | 每行窗口根数（在 range_score 检验内覆盖） |
 
 ## 边界
 

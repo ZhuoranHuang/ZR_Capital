@@ -10,8 +10,9 @@
   （bw[t] ≥ bw_shrink_tol × bw[t−N]）。
 - RANGE（D-026 打分制，取代三条件同时满足——AND 版覆盖率只有 4%，过严）：带宽、|中轨斜率|
   （÷ 中轨）、|MACD 柱|（÷ 收盘）各自在近 window_days 个交易日的百分位秩（0–1，越低越「不活跃」），
-  按 weights 加权求和，分数 ≤ score_threshold 即 RANGE。窗口的 bar 数由数据的实际 bar/日折算
-  （不写死 390，兼容含盘前盘后的连续 K 线）。阈值固定为一个常数，在 2024 年数据上标定后用于全部年份
+  按 weights 加权求和，分数 ≤ score_threshold 即 RANGE。窗口的 bar 数 = window_days × 每日
+  根数，每日根数只用当日之前已完成交易日的实际根数中位数（首日用时段与周期决定的名义值，
+  D-037）。阈值固定为一个常数，在 2024 年数据上标定后用于全部年份
   （不逐年重新标定），不构成前视。
 - OTHER：其余。
 """
@@ -103,24 +104,62 @@ def indicators(
 
 
 def bars_per_day(df: pd.DataFrame) -> float:
-    """数据里每个交易日的实际 bar 数（中位数），供「近 N 个交易日」窗口折算成 bar 数用。
-
-    不写死 390（RTH 分钟数）：盘前盘后连续 K 线每日 bar 数更多，用这个函数让窗口口径自动适配。
-    """
+    """数据里每个交易日的实际 bar 数（中位数）。**用到整段输入（含 t 之后的行），不得用于逐行
+    特征**；逐行窗口用 range_windows（只用当日之前已完成交易日，L-001 / D-037）。"""
     day = np.asarray(df.index.tz_convert(ET).date)
     return float(pd.Series(day).value_counts().median())
 
 
-def range_score(x: pd.DataFrame, df: pd.DataFrame, rg: dict, period: int) -> pd.Series:
-    """RANGE 打分（D-026）：三项百分位秩的加权和，越低越「不活跃」。只用 ≤t 的滚动窗口。"""
-    w = max(1, round(rg["window_days"] * bars_per_day(df)))  # bars_per_day 已按周期 P 计数（D-031）
-    pr = lambda s: s.rolling(w, min_periods=max(20, w // 4)).rank(pct=True)  # noqa: E731
+RTH_MIN, EXT_MIN = 390, 960  # 常规时段 09:30–16:00；含盘前盘后 04:00–20:00
+
+
+def nominal_bars_per_day(index: pd.DatetimeIndex, period: int) -> int:
+    """名义每日 K 线根数 = 时段分钟数 ÷ 周期。时段口径由输入第一根 K 判定（早于 09:30 或不早于 16:00
+    → 含盘前盘后），任何截断都包含第一根，因此不依赖未来数据。"""
+    if len(index) == 0:
+        return RTH_MIN // period
+    t = index[:1].tz_convert(ET)
+    m = int(t.hour[0]) * 60 + int(t.minute[0])
+    ext = m < 570 or m >= 960
+    return (EXT_MIN if ext else RTH_MIN) // period
+
+
+def range_windows(
+    df: pd.DataFrame, period: int, rg: dict, bars_per_day: float | None = None
+) -> np.ndarray:
+    """每行的 RANGE 打分窗口（根）= window_days × 每日根数。每日根数：显式给定则用之；否则按日递推，
+    取当日之前全部已完成交易日实际根数的中位数，首个交易日用名义值（nominal_bars_per_day）。"""
+    n = len(df)
+    if bars_per_day is not None:
+        return np.full(n, max(1, round(rg["window_days"] * bars_per_day)), dtype=int)
+    day = np.asarray(df.index.tz_convert(ET).date)
+    if n == 0:
+        return np.zeros(0, dtype=int)
+    starts = np.flatnonzero(np.r_[True, day[1:] != day[:-1]])
+    counts = np.diff(np.r_[starts, n])
+    nominal = nominal_bars_per_day(df.index, period)
+    w = np.empty(n, dtype=int)
+    for j, (s0, c) in enumerate(zip(starts, counts, strict=True)):
+        bpd = nominal if j == 0 else float(np.median(counts[:j]))
+        w[s0 : s0 + c] = max(1, round(rg["window_days"] * bpd))
+    return w
+
+
+def range_score(
+    x: pd.DataFrame, df: pd.DataFrame, rg: dict, period: int, bars_per_day: float | None = None
+) -> pd.Series:
+    """RANGE 打分（D-026）：三项百分位秩的加权和，越低越「不活跃」。只用 ≤t 的滚动窗口；窗口根数按
+    range_windows（D-031 已按周期 P 计数；D-037 只用当日之前已完成交易日）。"""
+    w_row = range_windows(df, period, rg, bars_per_day)
     wt = rg["weights"]
-    return (
-        wt["bw"] * pr(x["bw"])
-        + wt["slope"] * pr(x["slope"].abs())
-        + wt["hist"] * pr((x["hist"] / df["close"]).abs())
-    )
+    bw, sl, hi = x["bw"], x["slope"].abs(), (x["hist"] / df["close"]).abs()
+    out = pd.Series(np.nan, index=x.index, dtype=float)
+    for w in np.unique(w_row):
+        pr = lambda s, w=int(w): s.rolling(w, min_periods=max(20, w // 4)).rank(pct=True)  # noqa: E731
+        sc = wt["bw"] * pr(bw) + wt["slope"] * pr(sl) + wt["hist"] * pr(hi)
+        m = w_row == w
+        out.iloc[m] = sc.to_numpy()[m]
+    return out
 
 
 def _channel(x: pd.DataFrame, close: np.ndarray, n: int, m: int, frac: float, tol: float):
@@ -139,7 +178,9 @@ def _channel(x: pd.DataFrame, close: np.ndarray, n: int, m: int, frac: float, to
     return up, dn
 
 
-def regimes(df: pd.DataFrame, x: pd.DataFrame, cfg: dict, period: int) -> pd.DataFrame:
+def regimes(
+    df: pd.DataFrame, x: pd.DataFrame, cfg: dict, period: int, bars_per_day: float | None = None
+) -> pd.DataFrame:
     """返回 state / dir（默认通道参数）以及每个 (N, M) 的通道方向 chan_N_M ∈ {+1, −1, 0}。"""
     rc = cfg["regime"]
     ig, ch, rg = rc["ignition"], rc["channel"], rc["range"]
@@ -166,7 +207,7 @@ def regimes(df: pd.DataFrame, x: pd.DataFrame, cfg: dict, period: int) -> pd.Dat
         for cm in ch["side_m"]:
             up, dn = _channel(x, close, cn, cm, ch["side_frac"], ch["bw_shrink_tol"])
             out[f"chan_{cn}_{cm}"] = np.where(up, 1, np.where(dn, -1, 0))
-    score = range_score(x, df, rg, period)
+    score = range_score(x, df, rg, period, bars_per_day)
     out["range_score"] = score
     rng = (score <= rg["score_threshold"]).to_numpy()
     dn_, dm_ = ch["default"]
