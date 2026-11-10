@@ -23,6 +23,8 @@
 
 ## 进行中
 
+- **夜间择时研究归档（research/night-20261111-archive，2026-11-12，R-055 / L-002）**：代码整理进 `zr/research/timing/`（特征、标签与 L4 出场引擎、可替换事件、随机对照、按日聚类与重抽样统计、等权合成、趋势分支；与夜间输出逐列一致），最小测试 `tests/test_timing.py`；报告与案例图在 `docs/research/night_20261111/`。结论：0 个候选，留出期未打开。L-002（日内排序 / 中心化的前视）写入 CLAUDE.md「前视检查」，AGENTS.md 已同步（未跟踪）。
+
 - **range_score 前视修复（fix/range-score-lookahead，2026-11-11，D-037）**：窗口只用当日之前已完成交易日的根数中位数、首日名义值；range_score / regimes / state_features 在 1、2、5 天输入下通过截断检验，LEAKCHECK_FEATURES.md 未通过 0 项。MU / QQQ 全量历史（C 与 D-027）新旧 0 行不一致（RANGE_SCORE_FIX.md），旧研究不重跑；受影响的只有单日 / 短输入（两个增量引擎对照测试与合成场景测试的设置已改）。
 
 - **前视教训与检查加固（docs/lookahead-lessons，2026-11-11）**：RESEARCH_LOG 新增 L-001（/tmp 特征研究三处时序错误，未进仓库、未预登记，数字为负责人提供、未在仓库复现）；CLAUDE.md 新增「前视检查」；`zr/research/leakcheck.py`（`assert_no_lookahead_frame`）对 zr/features 73 个公开函数逐一归类（检验 50、不适用 23），29 个检验项中 **1 个未通过：regime.range_score**（窗口依赖输入全样本的 bars_per_day，输入不足 3 天时非因果；连带 regimes / state_features 的 RANGE 状态），原函数未改，见 docs/research/LEAKCHECK_FEATURES.md。
