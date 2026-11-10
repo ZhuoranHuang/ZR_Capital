@@ -23,6 +23,8 @@
 
 ## 进行中
 
+- **前视教训与检查加固（docs/lookahead-lessons，2026-11-11）**：RESEARCH_LOG 新增 L-001（/tmp 特征研究三处时序错误，未进仓库、未预登记，数字为负责人提供、未在仓库复现）；CLAUDE.md 新增「前视检查」；`zr/research/leakcheck.py`（`assert_no_lookahead_frame`）对 zr/features 73 个公开函数逐一归类（检验 50、不适用 23），29 个检验项中 **1 个未通过：regime.range_score**（窗口依赖输入全样本的 bars_per_day，输入不足 3 天时非因果；连带 regimes / state_features 的 RANGE 状态），原函数未改，见 docs/research/LEAKCHECK_FEATURES.md。
+
 - **规则回测最小流水线（feat/rule-runner，2026-10-25）**：`zr/sim/stock.py`（正股模式，复用引擎 Account / Trade / DayResult，`plan_exit` 为唯一出场实现）、`scripts/run_rule.py`（规则文件 → trades.csv + summary.md，stock / option 两种模式，期权模式出场时刻由正股 `plan_exit` 给出、交给引擎 at 出场）、`docs/RULE_INTERFACE.md`、示例 `rules/example_boll_macd.py`（参数未检验）。`zr/sim/engine.py` 未改。任务书在第 3 节「无前视检查」处截断，之后的内容未收到。
 
 - **R-054 指数正股层（feat/r054-index-stock-layer，2026-10-25）**：三条调研规则在 QQQ / SPY（各 703 个交易日，剔除 D-033 窗口）口径 C 的 72 格中 **可进入期权层 0 格**；q ≤ 0.10 的 11 格超额都低于 COST_REPORT 门槛，且其中 9 格的超额主要来自随机基线为负（回调类规则的 ±30 分钟基线偏差）。5 分钟格无一显著；D-027 下 RSI(2) 规则 0 触发（RTH 按日重置凑不满 SMA200）。见 `docs/research/R054_INDEX_STOCK_LAYER.md`。
