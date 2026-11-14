@@ -19,6 +19,55 @@ from zr.research.timing.stats import fmt_ci, pooled
 PAPER_RELVOL = "原文图 4：RelVol < 100% −0.02R、> 100% +0.08R、> 30 倍（3,000%）+0.38R"
 
 
+def _u(x, nd: int = 1) -> str:
+    """不带正负号的百分比（波动、胜率）。"""
+    return "—" if x is None or not np.isfinite(x) else f"{x * 100:.{nd}f}%"
+
+
+def fmt_be(B: pd.DataFrame) -> pd.DataFrame:
+    def nan(v) -> bool:
+        return v is None or (isinstance(v, float) and np.isnan(v))
+
+    out = B.copy()
+    out["零滑点每笔盈亏（美元）"] = out["零滑点每笔盈亏（美元）"].map(
+        lambda v: "—" if nan(v) else f"{v:+,.2f}"
+    )
+    out["盈亏平衡滑点（美元 / 边）"] = out["盈亏平衡滑点（美元 / 边）"].map(
+        lambda v: "—" if nan(v) else ("> 0.10" if np.isinf(v) else f"{v:.4f}")
+    )
+    out["占 R 中位数"] = out["占 R 中位数"].map(
+        lambda v: "—" if nan(v) or np.isinf(v) else f"{v:.3f}"
+    )
+    if "R 中位数（美元 / 股）" in out:
+        out["R 中位数（美元 / 股）"] = out["R 中位数（美元 / 股）"].map(
+            lambda v: "—" if nan(v) else f"{v:.4f}"
+        )
+    return out
+
+
+def fmt_decomp(D: pd.DataFrame) -> pd.DataFrame:
+    out = D.copy()
+    for c in ("每笔毛收益 R（含滑点）", "每笔净 R"):
+        out[c] = out[c].map(lambda v: f"{v:+.3f}")
+    out["每笔佣金 R"] = out["每笔佣金 R"].map(lambda v: f"{v:.3f}")
+    out["夏普（固定权益）"] = out["夏普（固定权益）"].map(lambda v: f"{v:+.2f}")
+    return out
+
+
+def relvol_summary(tr: pd.DataFrame) -> dict:
+    bt = r_multiples(tr)
+    cut = pd.cut(bt["relvol"], [1, 2, 5, 10, 30, 1e12], right=False)
+    ladder = bt.groupby(cut, observed=True)["r_mult"].mean().to_numpy()
+    return {
+        "lt1": float(bt.loc[bt["relvol"] < 1, "r_mult"].mean()),
+        "ge1": float(bt.loc[bt["relvol"] >= 1, "r_mult"].mean()),
+        "ge30": float(bt.loc[bt["relvol"] >= 30, "r_mult"].mean()),
+        "n30": int((bt["relvol"] >= 30).sum()),
+        "monotone": bool(len(ladder) > 1 and np.all(np.diff(ladder) > 0)),
+        "all": float(bt["r_mult"].mean()),
+    }
+
+
 def criteria(X: dict, P: dict) -> dict:
     o = X["样本外"]
     m = o[mr.MAIN_NAME]
@@ -53,9 +102,9 @@ def mrow(name: str, segname: str, days: list, m: dict) -> dict:
         "样本": f"{segname} {days[0]}～{days[-1]}",
         "总收益": _pct(m["total"], 0),
         "年化": _pct(m["irr"]),
-        "波动": _pct(m["vol"]),
+        "波动": _u(m["vol"]),
         "夏普": f"{m['sharpe']:.2f}",
-        "日胜率": _pct(m["hit_day"]),
+        "日胜率": _u(m["hit_day"]),
         "最大回撤": _pct(m["mdd"]),
         "最差单日": _pct(m["worst"], 2),
         "alpha（年化）": _pct(m["alpha"]),
@@ -73,9 +122,9 @@ def paper_rows() -> list[dict]:
                 "样本": "原文 2016-01-01～2023-12-31",
                 "总收益": _pct(v["total"], 0),
                 "年化": _pct(v["irr"]),
-                "波动": _pct(v["vol"]),
+                "波动": _u(v["vol"]),
                 "夏普": f"{v['sharpe']:.2f}",
-                "日胜率": _pct(v["hit"]),
+                "日胜率": _u(v["hit"]),
                 "最大回撤": _pct(-v["mdd"]),
                 "最差单日": _pct(v["worst"], 2),
                 "alpha（年化）": _pct(v["alpha"]),
@@ -151,7 +200,7 @@ def composition(R: dict) -> dict:
     }
 
 
-def write(R: dict, X: dict, P: dict, B: dict) -> str:
+def write(R: dict, X: dict, P: dict, B: dict, G: dict | None = None) -> str:
     crit = criteria(X, P)
     npass = sum(1 for k, v in crit.items() if not k.startswith("_") and v)
     passed = npass == 6
@@ -159,15 +208,34 @@ def write(R: dict, X: dict, P: dict, B: dict) -> str:
     sd = R["seg_days"]
     ip = X["样本内"][mr.PAPER_SIP]["m"]
     comp = composition(R)
+    op = X["样本外"][mr.PAPER_SIP]["m"]
     first = (
         f"**{'复现成立' if passed else '复现不成立'}**（发表后样本外 {sd['样本外'][0]}～{sd['样本外'][-1]}，{len(sd['样本外'])} 个交易日）：主口径（保守算法、D-013、每边 0.01 美元、10 万美元）日收益均值 {mo['mean'] * 100:+.3f}%（t {mo['t']:+.2f}），"
-        f"夏普 {mo['sharpe']:.2f}，{npass} / 6 项通过标准满足。论文样本内（{sd['样本内'][0]}～{sd['样本内'][-1]}，只覆盖原文 8 年中的约 2 年）原文口径 SIP 前 20 夏普 {ip['sharpe']:.2f}（原文全期 2.81，不可直接比）。"
+        f"夏普 {mo['sharpe']:.2f}，{npass} / 6 项通过标准满足。同一段按原文口径（乐观算法、每股 0.0035 美元、零滑点、2.5 万美元）日收益均值 {op['mean'] * 100:+.3f}%（t {op['t']:+.2f}），夏普 {op['sharpe']:.2f}。"
+        f"论文样本内（{sd['样本内'][0]}～{sd['样本内'][-1]}，只覆盖原文 8 年中的约 {len(sd['样本内']) / 252:.1f} 年）原文口径 SIP 前 20 夏普 {ip['sharpe']:.2f}（原文全期 2.81，不可直接比）。"
     )
+    why = ""
+    if G:
+        d = G["样本外"]["decomp"].set_index(["算法", "每边滑点", "佣金"])["每笔净 R"]
+        e = G["样本外"]["entry"]
+        a0 = d[("乐观", "0.00", "每股 0.0035")]
+        a1 = d[("保守", "0.01", "D-013")]
+        if a0 > 0 and a1 < 0:
+            lead = "原文自己的假设下每笔为正，换成长桥佣金、加上滑点、改用保守算法后转负"
+        elif a0 > 0:
+            lead = "原文自己的假设下每笔为正，换成主口径后仍不为负"
+        else:
+            lead = "原文自己的假设下每笔已不为正"
+        why = (
+            f"{lead}（样本外、SIP 前 20、固定权益，每笔净 R）：原文口径（乐观、零滑点、每股 0.0035）{a0:+.3f}R → 换成长桥 D-013 佣金 {d[('乐观', '0.00', 'D-013')]:+.3f}R → 再加每边 0.01 美元滑点 {d[('乐观', '0.01', 'D-013')]:+.3f}R → 再换保守算法（主口径）{d[('保守', '0.01', 'D-013')]:+.3f}R。"
+            f"保守算法下 {e['entry_bar_stop']:.0%} 的交易在入场当根就被判止损（其中 {e['entry_bar_stop_certain']:.0%} 是入场那根开盘已在区间之外、确定先入场后止损的；其余 {e['entry_bar_stop_ambiguous']:.0%} 同根先后无法用 1 分钟 K 分辨）。"
+        )
     L = [
         "# R-057：Zarattini、Barbon、Aziz（2024）SIP 开盘区间突破的发表后样本外复现（Massive 全市场数据）",
         "",
         first,
         "",
+        *([why, ""] if why else []),
         "`python -m zr.research.sip_massive_write`（数据：`zr.data.massive_archive`、`zr.data.sip_stream`、`zr.research.sip_select`）。预登记 RESEARCH_LOG R-057（运行前提交，含 2026-11-14 的 Massive 修订与补充）。规则与参数全部取自原文，不调参。",
         "",
         "## 数据与标的池",
@@ -226,6 +294,52 @@ def write(R: dict, X: dict, P: dict, B: dict) -> str:
         f"按 RelVol 分桶的每笔平均 R（基础版，样本内，原文口径；{PAPER_RELVOL}，原文为扣佣金后）：",
         "",
         df_to_md(relvol_table(X["样本内"][mr.PAPER_BASE]["p"]["trades"])),
+        "",
+    ]
+    pt = r_multiples(X["样本内"][mr.PAPER_SIP]["p"]["trades"])
+    ps = pooled(pt["r_mult"].to_numpy(), pt["date"].to_numpy())
+    pb = X["样本内"][mr.PAPER_BASE]["m"]
+    rb = relvol_summary(X["样本内"][mr.PAPER_BASE]["p"]["trades"])
+    L += [
+        "**对得上与对不上的**：",
+        "",
+        f"- 对得上：SIP 前 20 的年化波动 {_u(ip['vol'])}（原文 14.8%）、beta {ip['beta']:.2f}（原文 0.00）；每笔平均 {fmt_ci(ps, 3).replace('%', '')} R（原文没有给前 20 的每笔 R）。",
+        f"- RelVol 分桶（基础版、原文口径，每笔平均 R）：< 1 为 {rb['lt1']:+.3f}（原文 −0.02）、≥ 1 为 {rb['ge1']:+.3f}（原文 +0.08）、≥ 30 为 {rb['ge30']:+.3f}（原文 +0.38；本样本只有 {rb['n30']} 笔，区间见上表）。"
+        f"{'< 1 为负、≥ 1 为正，符号与原文一致' if rb['lt1'] < 0 < rb['ge1'] else '< 1 与 ≥ 1 两档的符号与原文不一致'}；"
+        f"{'≥ 30 一档远低于原文' if rb['ge30'] < 0.19 else '≥ 30 一档与原文同量级'}；"
+        f"{'RelVol ≥ 1 的各档随 RelVol 升高而升高' if rb['monotone'] else 'RelVol ≥ 1 的各档没有随 RelVol 单调升高'}。",
+        f"- 对不上：SIP 前 20 夏普 {ip['sharpe']:.2f}（原文 2.81）、年化 {_pct(ip['irr'])}（原文 +41.6%）、日胜率 {_u(ip['hit_day'])}（原文 48.4%）；基础版夏普 {pb['sharpe']:.2f}（原文 0.48）。任务书的排查门槛是「SIP 版夏普 < 1」，{'本样本内低于门槛' if ip['sharpe'] < 1 else '本样本内没有低于门槛，但差距大，仍做了下面的核查'}。",
+        "",
+        "**已做的核查（数据与实现）**：",
+        "",
+    ]
+    r_ = R["r"] / "derived"
+    if (r_ / "independent_check.json").exists():
+        ck = json.loads((r_ / "independent_check.json").read_text(encoding="utf-8"))
+        ok = sum(
+            1
+            for v in ck.values()
+            if v["top20_same_order"]
+            and v["eligible_agree"] == 1.0
+            and v["dir_agree"] == 1.0
+            and (v["relvol_max_abs_diff"] or 0) < 1e-9
+        )
+        L.append(
+            f"- 选股层：随机 {len(ck)} 个交易日（{min(ck)}～{max(ck)}），直接从归档的原始日文件 / 分钟文件用另写的逐行实现重算合格、开盘区间、RelVol、方向与前 20 名，{ok} / {len(ck)} 天与流水线完全一致（`zr.research.sip_massive_check`）。"
+        )
+    if (r_ / "independent_trades_check.json").exists():
+        ck = json.loads((r_ / "independent_trades_check.json").read_text(encoding="utf-8"))
+        L.append(
+            "- 执行层：随机抽样的成交用另写的逐根循环重算入场价与出场价，"
+            + "；".join(
+                f"{k} 设定 {v['checked']} 笔中不一致 {v['mismatch']} 笔" for k, v in ck.items()
+            )
+            + "。"
+        )
+    L += [
+        "- 数据层：日聚合与长桥日线同口径、分钟 K 时间戳对齐、不复权、退市股在（`docs/research/R057_MASSIVE_DATA.md`）；选股与合格特征通过截断测试（`tests/test_sip_select.py`）。",
+        "- 规则层：逐条对照原文 2.1 节与第 4 节（开盘 > 5 美元、前 14 日均量 ≥ 100 万股、ATR > 0.50、首根方向、区间高 / 低突破入场、止损距成交价 10% ATR、16:00 平仓、每仓止损亏 1%、4 倍上限、每股 0.0035 美元），未发现不一致。原文没有写日内数据粒度、同根处理与基础版的资金分配方式。",
+        "- 没有发现数据或实现错误。**未能解释夏普差距**；可能的原因（均未验证）：(1) 时段不同——原文 8 年合并，没有分年数字，无法知道原文在 2022–2023 的表现；(2) 数据源不同（原文 IQFeed，本文 SIP 聚合）；(3) 原文未写明的实现细节（ATR 是否 Wilder 平滑、同根先后、代码变更与拆股处理）。",
         "",
     ]
     # 全部组合两段并列
@@ -299,37 +413,53 @@ def write(R: dict, X: dict, P: dict, B: dict) -> str:
         df_to_md(pd.DataFrame(rows)),
         "",
     ]
-    # RelVol 分桶（主口径设定的基础版）
-    for sg in mr.SEGMENTS:
-        L += [
-            f"按 RelVol 分桶的每笔平均 R（基础版，{sg}，主口径设定；{PAPER_RELVOL}）：",
-            "",
-            df_to_md(relvol_table(X[sg][mr.MAIN_BASE]["p"]["trades"])),
-            "",
-        ]
+    # RelVol 分桶：样本外用原文口径的基础版（样本内的表在「复现检查」）
+    nb = pd.Series(R["nbase"])
+    nb_med = float(nb.median())
+    mb = {sg: relvol_summary(X[sg][mr.MAIN_BASE]["p"]["trades"])["all"] for sg in mr.SEGMENTS}
+    L += [
+        f"按 RelVol 分桶的每笔平均 R（基础版，样本外，原文口径；{PAPER_RELVOL}，原文为扣佣金后）：",
+        "",
+        df_to_md(relvol_table(X["样本外"][mr.PAPER_BASE]["p"]["trades"])),
+        "",
+        f"基础版在主口径设定下没有可比性，分桶不列：每日候选中位数 {nb_med:,.0f} 只，10 万美元时每仓风险约 {100_000 / nb_med * 0.01:.2f} 美元，D-013 每单有最低收费，"
+        f"有成交的交易每笔平均 样本内 {mb['样本内']:+.2f}R、样本外 {mb['样本外']:+.2f}R，几乎全是佣金（组合层面的数字见「全部组合」表）。",
+        "",
+    ]
     # 盈亏平衡滑点
     L += [
         "## 盈亏平衡滑点（本报告最重要的数）",
         "",
-        "保守算法、D-013、股数固定为主口径实际股数；每边滑点 0～0.10 美元（步长 0.005）重算入场、止损与平仓成交价，线性插值求每笔平均盈亏归零的滑点。0 = 零滑点已不赚钱；inf = 0.10 美元仍为正。",
+        "保守算法、D-013、股数固定为主口径实际股数；每边滑点 0～0.10 美元（步长 0.005）重算入场、止损与平仓成交价，线性插值求每笔平均盈亏归零的滑点。0 = 零滑点已不赚钱；「> 0.10」= 0.10 美元仍为正。",
         "",
     ]
     for sg in mr.SEGMENTS:
-        Bt = B[sg].copy()
-        for c in (
-            "零滑点每笔盈亏（美元）",
-            "盈亏平衡滑点（美元 / 边）",
-            "占 R 中位数",
-            "R 中位数（美元 / 股）",
-        ):
-            Bt[c] = Bt[c].map(
-                lambda v: (
-                    "—"
-                    if v is None or not np.isfinite(v)
-                    else (f"{v:.4f}" if abs(v) < 10 else f"{v:,.0f}")
-                )
-            )
-        L += [f"**{sg}**", "", df_to_md(Bt), ""]
+        L += [f"**{sg}**", "", df_to_md(fmt_be(B[sg])), ""]
+    if G:
+        L += [
+            "## 补充诊断（非预登记，只为解释主口径与原文口径的差距，不用于判定、不用于挑选）",
+            "",
+            "SIP 前 20，固定权益 10 万美元（不复利，避免权益变化改变股数与最低佣金的占比）。每笔毛收益 = 方向 ×（出场价 − 入场价）÷（0.10 × ATR），已含滑点；佣金按同一 R 折算。",
+            "",
+        ]
+        for sg in mr.SEGMENTS:
+            e = G[sg]["entry"]
+            L += [
+                f"**{sg}**：",
+                "",
+                df_to_md(fmt_decomp(G[sg]["decomp"])),
+                "",
+                f"保守算法（每边 0.01）下 {e['n']:,} 笔中 {e['stopped']:.1%} 止损出场（乐观算法 {e['stopped_optimistic']:.1%}）；**入场当根即判止损 {e['entry_bar_stop']:.1%}**，其中入场那根开盘已在区间之外（成交 = 开盘价，当根极值必然在入场之后，确定是止损）{e['entry_bar_stop_certain']:.1%}，同根先后无法分辨 {e['entry_bar_stop_ambiguous']:.1%}。入场时刻中位数为美东第 {e['entry_min_median']:.0f} 分钟（09:35 = 575）。",
+                "",
+                "盈亏平衡滑点（股数固定为固定权益下的股数，全部交易）：",
+                "",
+                df_to_md(fmt_be(G[sg]["be"])),
+                "",
+            ]
+        L += [
+            "同根先后只能用逐笔成交数据分辨；真实结果在保守与乐观之间。当前订阅是否提供逐笔成交的 flat files 未核实。",
+            "",
+        ]
     # 安慰剂
     rows = []
     for sg in mr.SEGMENTS:
@@ -374,7 +504,7 @@ def write(R: dict, X: dict, P: dict, B: dict) -> str:
         "",
         f"- 标的池：Massive reference 时点快照（按周）里的 XNYS / XNAS 普通股，包含后来退市的股票（样本期内出现过的 {comp['pool_symbols']:,} 只中 {comp['pool_symbols_now_inactive']:,} 只现已退市）；周内上市的新股下周才进池、周内类型变化忽略；代码变更视为新标的（需重新累计 14 日）。不含 NYSE American、NYSE Arca、Cboe 主上市的股票（原文为「NYSE 与 Nasdaq」）。",
         f"- 样本：2021-11-15 起（订阅限制）；论文样本内只有约 {len(sd['样本内']) / 252:.1f} 年，复现检查不能与原文全期数字直接比。",
-        "- 合格条件用 Massive 日聚合（与原预登记所用长桥日线同口径）；开盘区间、RelVol、执行用 SIP 1 分钟 K（只含有成交的分钟；零股成交按 SIP 惯例不更新开高低收）。",
+        "- 合格条件用 Massive 日聚合（与原预登记所用长桥日线同口径）；开盘区间、RelVol、执行用 SIP 1 分钟 K（只含有成交的分钟；聚合包含哪些成交条件按 Massive 的规则，未逐条核对）。",
         "- 1 分钟 K 的同根歧义：入场那根内先入场后止损无法分辨，保守 / 乐观两种算法都报；判定以保守为准。",
         "- 做空未计借券费，也未核实能否借到；开盘时段的真实买卖价差未知（只用固定每边滑点）；长桥账户能否做 4 倍日内杠杆未核实。",
         "- 基础版 N = 当日合格且非十字星只数（09:35 已知）；原文基础版的 N 未写明。",
@@ -390,8 +520,16 @@ def main(argv=None) -> int:
     R = mr.run()
     X = mr.experiments(R)
     P = {sg: mr.placebos(R, sg) for sg in mr.SEGMENTS}
-    B = {sg: mr.breakeven(R, X[sg][mr.MAIN_NAME]) for sg in mr.SEGMENTS}
-    print(write(R, X, P, B))
+    B = {sg: mr.breakeven(R, X[sg][mr.MAIN_NAME]["p"]["trades"]) for sg in mr.SEGMENTS}
+    G = {
+        sg: {
+            "decomp": mr.decomposition(R, sg),
+            "entry": mr.entry_bar_stats(R, sg),
+            "be": mr.breakeven_diag(R, sg),
+        }
+        for sg in mr.SEGMENTS
+    }
+    print(write(R, X, P, B, G))
     return 0
 
 

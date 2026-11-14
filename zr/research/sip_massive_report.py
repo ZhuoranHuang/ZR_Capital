@@ -259,9 +259,12 @@ def placebos(R: dict, segname: str, seed: int = 0) -> dict:
     return {"i": (act_i, sims), "ii": (A.sum() / 100_000 / nd, sims2)}
 
 
-def breakeven(R: dict, main: dict) -> pd.DataFrame:
-    """保守、D-013、股数固定为主口径实际股数：每边滑点 0～0.10（步长 0.005）重算成交价，线性插值求每笔平均盈亏归零的滑点。"""
-    tr = main["p"]["trades"]
+def breakeven(
+    R: dict, trades: pd.DataFrame, conservative: bool = True, fee: str = "d013"
+) -> pd.DataFrame:
+    """股数固定为传入的实际股数：每边滑点 0～0.10（步长 0.005）重算成交价，线性插值求每笔平均盈亏归零的滑点。
+    预登记口径 = 主口径的成交（保守、D-013）；conservative=False / fee 另选只用于补充诊断。"""
+    tr = trades
     tr = tr[tr["shares"] > 0][
         ["symbol", "date", "shares", "atr_prev", "entry", "dir", "or_high", "or_low"]
     ].reset_index(drop=True)
@@ -286,14 +289,14 @@ def breakeven(R: dict, main: dict) -> pd.DataFrame:
                     row["or_low"],
                     row["atr_prev"],
                     s_,
-                    True,
+                    conservative,
                 )
                 if res is None:
                     continue
                 e, _, x, *_ = res
                 sh = int(row["shares"])
                 pnl[i, k] = sh * row["dir"] * (x - e) - so.trade_fees(
-                    sh, e, x, int(row["dir"]), "d013"
+                    sh, e, x, int(row["dir"]), fee
                 )
     tr["px_b"] = pd.cut(
         tr["entry"], [0, 10, 20, 50, 100, 1e9], labels=["5–10", "10–20", "20–50", "50–100", ">100"]
@@ -329,6 +332,94 @@ def breakeven(R: dict, main: dict) -> pd.DataFrame:
                     "盈亏平衡滑点（美元 / 边）": s_,
                     "占 R 中位数": s_ / Rm if np.isfinite(s_) and Rm else np.nan,
                     "R 中位数（美元 / 股）": Rm,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+# ---------------- 补充诊断（非预登记，不用于判定） ----------------
+
+
+def decomposition(R: dict, segname: str) -> pd.DataFrame:
+    """SIP 前 20、固定权益 10 万美元（不复利，避免权益变化改变股数）：算法 × 滑点 × 佣金 的每笔 R 拆解。"""
+    days = R["seg_days"][segname]
+    rows = []
+    for algo in ("opt", "cons"):
+        for slip in (0.0, 0.01):
+            T = seg(pick(R["T1"][(algo, slip)], 20), days)
+            for fee in ("per_share", "d013"):
+                p = so.portfolio(T, 100_000, 20, 4.0, fee, compound=False)
+                tr = p["trades"]
+                tr = tr[tr["shares"] > 0]
+                risk = so.STOP_ATR * tr["atr_prev"] * tr["shares"]
+                gross = tr["dir"] * (tr["exit"] - tr["entry"]) * tr["shares"] / risk
+                fees = (
+                    so.fees_vec(
+                        tr["shares"].to_numpy(),
+                        tr["entry"].to_numpy(),
+                        tr["exit"].to_numpy(),
+                        tr["dir"].to_numpy(),
+                        fee,
+                    )
+                    / risk
+                )
+                dly = p["daily"].set_index("date")["pnl"].reindex(days).fillna(0.0) / 100_000
+                sd = dly.std(ddof=1)
+                rows.append(
+                    {
+                        "算法": "乐观" if algo == "opt" else "保守",
+                        "每边滑点": f"{slip:.2f}",
+                        "佣金": "每股 0.0035" if fee == "per_share" else "D-013",
+                        "笔数": len(tr),
+                        "每笔毛收益 R（含滑点）": round(float(gross.mean()), 3),
+                        "每笔佣金 R": round(float(fees.mean()), 3),
+                        "每笔净 R": round(float((gross - fees).mean()), 3),
+                        "日收益均值（固定权益）": f"{dly.mean() * 100:+.3f}%",
+                        "夏普（固定权益）": round(float(dly.mean() / sd * np.sqrt(252)), 2)
+                        if sd > 0
+                        else np.nan,
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def entry_bar_stats(R: dict, segname: str) -> dict:
+    """主口径成交（保守、0.01，前 20）：入场当根即判止损的占比；其中入场那根开盘已在区间之外（成交 = 开盘价，
+    当根的最低 / 最高必然发生在入场之后）的部分是确定的止损，其余是同根先后无法分辨的。"""
+    days = R["seg_days"][segname]
+    T = seg(pick(R["T1"][("cons", 0.01)], 20), days)
+    same = T["stopped"] & (T["entry_min"] == T["exit_min"])
+    px = T["entry"] - T["dir"] * 0.01
+    gap = np.where(T["dir"] > 0, px > T["or_high"] + 1e-9, px < T["or_low"] - 1e-9)
+    Topt = seg(pick(R["T1"][("opt", 0.01)], 20), days)
+    return {
+        "n": len(T),
+        "stopped": float(T["stopped"].mean()),
+        "entry_bar_stop": float(same.mean()),
+        "entry_bar_stop_certain": float((same & gap).mean()),
+        "entry_bar_stop_ambiguous": float((same & ~gap).mean()),
+        "stopped_optimistic": float(Topt["stopped"].mean()),
+        "entry_min_median": float(T["entry_min"].median()),
+    }
+
+
+def breakeven_diag(R: dict, segname: str) -> pd.DataFrame:
+    """乐观算法、固定权益 10 万美元的股数：两套佣金下的盈亏平衡滑点（只取「全部」一行）。"""
+    days = R["seg_days"][segname]
+    rows = []
+    for algo, cons in (("乐观", False), ("保守", True)):
+        for fee, nm in (("per_share", "每股 0.0035"), ("d013", "D-013")):
+            T = seg(pick(R["T1"][("opt" if not cons else "cons", 0.0)], 20), days)
+            tr = so.portfolio(T, 100_000, 20, 4.0, fee, compound=False)["trades"]
+            b = breakeven(R, tr, conservative=cons, fee=fee).iloc[0]
+            rows.append(
+                {
+                    "算法": algo,
+                    "佣金": nm,
+                    "笔数": int(b["笔数"]),
+                    "零滑点每笔盈亏（美元）": b["零滑点每笔盈亏（美元）"],
+                    "盈亏平衡滑点（美元 / 边）": b["盈亏平衡滑点（美元 / 边）"],
+                    "占 R 中位数": b["占 R 中位数"],
                 }
             )
     return pd.DataFrame(rows)
