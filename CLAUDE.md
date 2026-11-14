@@ -96,6 +96,7 @@ uv run pytest -q
 - 分钟文件字段 ticker, volume, open, close, high, low, window_start（UTC 纳秒，K 线开始时刻，整分钟）, transactions；覆盖 04:00–19:59 美东（含盘前盘后）；不复权；只有有成交的分钟才有行；2026 年文件 volume 为浮点（小数股）。单日约 17–28 MB、140–190 万行。
 - 日文件：window_start = 当日美东 00:00；开 = 常规时段首根 1 分钟开盘；收盘 = 官方收盘价（与 15:59 那根收盘常不同）；量 = 全天合并成交量（= 长桥日线量，> 全部分钟量之和）；高低与常规时段 1 分钟极值 90%–99% 相等。
 - reference tickers：`active=false` 含退市股与 `delisted_utc`；`date=YYYY-MM-DD` 返回当日在市的标的（含后来退市的）。splits：`execution_date`、`split_from`、`split_to`。
+- **研究用的历史分钟 K 以 Massive 为准（D-038）**：MU、QQQ、SPY、SMH、AMD 的 SIP 1 分钟 K 在 `$ZR_DATA_ROOT/bars_1m_sip/`（2021-11-15 起，含盘前盘后，`zr/data/sip_bars.py` 的 `load_sip_1m`）；全部原始日文件归档在 Mac 外接盘 `$ZR_DATA_ROOT/massive_raw/`（sha256 清单已核对）。长桥分钟 K 只用于实盘侧与 App 对照。
 
 ## 指标标准口径（与长桥 App 对齐；D-028 取代 D-027 的时段/重置部分，2026-10-22）
 
