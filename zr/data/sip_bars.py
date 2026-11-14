@@ -133,18 +133,39 @@ def inventory(root: Path) -> str:
     return "\n".join(L) + "\n"
 
 
+def write_inventory(root: Path, doc: Path) -> None:
+    """把 inventory() 的输出写进 docs/DATA_INVENTORY.md：已有「## Massive（SIP」小节就整节替换，否则追加到末尾。"""
+    text = doc.read_text(encoding="utf-8")
+    sec = inventory(root)
+    key = "## Massive（SIP"
+    if key in text:
+        i = text.index(key)
+        j = text.find("\n## ", i + 1)
+        text = text[:i] + sec + (text[j + 1 :] if j >= 0 else "")
+    else:
+        text = text.rstrip("\n") + "\n\n" + sec
+    doc.write_text(text, encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
     from zr.config import get_settings
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--consolidate", action="store_true")
     ap.add_argument("--inventory", action="store_true")
+    ap.add_argument(
+        "--write-inventory", action="store_true", help="写入 docs/DATA_INVENTORY.md 的 Massive 小节"
+    )
     a = ap.parse_args(argv)
     root = get_settings().zr_data_root
     if a.consolidate:
         print(consolidate(root))
     if a.inventory:
         print(inventory(root))
+    if a.write_inventory:
+        doc = Path(__file__).resolve().parents[2] / "docs" / "DATA_INVENTORY.md"
+        write_inventory(root, doc)
+        print(doc)
     return 0
 
 
