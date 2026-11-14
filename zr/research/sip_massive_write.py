@@ -250,7 +250,7 @@ def write(R: dict, X: dict, P: dict, B: dict, G: dict | None = None) -> str:
             lead = "原文自己的假设下每笔已不为正"
         why = (
             f"{lead}（样本外、SIP 前 20、固定权益，每笔净 R）：原文口径（乐观、零滑点、每股 0.0035）{a0:+.3f}R → 换成长桥 D-013 佣金 {d[('乐观', '0.00', 'D-013')]:+.3f}R → 再加每边 0.01 美元滑点 {d[('乐观', '0.01', 'D-013')]:+.3f}R → 再换保守算法（主口径）{d[('保守', '0.01', 'D-013')]:+.3f}R。"
-            f"保守算法下 {e['entry_bar_stop']:.0%} 的交易在入场当根就被判止损（其中 {e['entry_bar_stop_certain']:.0%} 是入场那根开盘已在区间之外、确定先入场后止损的；其余 {e['entry_bar_stop_ambiguous']:.0%} 同根先后无法用 1 分钟 K 分辨）。"
+            f"保守算法下 {e['entry_bar_stop']:.0%} 的交易在入场当根就被判止损（其中 {e['entry_bar_stop_certain']:.0%} 可以确定是入场后止损——开盘已在区间之外或当根收盘已越过止损价；其余 {e['entry_bar_stop_ambiguous']:.0%} 同根先后无法用 1 分钟 K 分辨）。"
         )
     L = [
         "# R-057：Zarattini、Barbon、Aziz（2024）SIP 开盘区间突破的发表后样本外复现（Massive 全市场数据）",
@@ -498,7 +498,7 @@ def write(R: dict, X: dict, P: dict, B: dict, G: dict | None = None) -> str:
                 "",
                 df_to_md(fmt_decomp(G[sg]["decomp"])),
                 "",
-                f"保守算法（每边 0.01）下 {e['n']:,} 笔中 {e['stopped']:.1%} 止损出场（乐观算法 {e['stopped_optimistic']:.1%}）；**入场当根即判止损 {e['entry_bar_stop']:.1%}**，其中入场那根开盘已在区间之外（成交 = 开盘价，当根极值必然在入场之后，确定是止损）{e['entry_bar_stop_certain']:.1%}，同根先后无法分辨 {e['entry_bar_stop_ambiguous']:.1%}。入场时刻中位数为美东第 {e['entry_min_median']:.0f} 分钟（09:35 = 575）。",
+                f"保守算法（每边 0.01）下 {e['n']:,} 笔中 {e['stopped']:.1%} 止损出场（乐观算法 {e['stopped_optimistic']:.1%}）；**入场当根即判止损 {e['entry_bar_stop']:.1%}**，拆成三类：(a) 入场那根开盘已在区间之外（成交 = 开盘价，当根极值必然在入场之后）{e['entry_bar_stop_gap']:.1%}；(b) 入场那根收盘已越过止损价（入场后必然触及止损）{e['entry_bar_stop_close_beyond']:.1%}；(c) 当根极值触及止损但收盘仍在止损之内，同根先后无法分辨 {e['entry_bar_stop_ambiguous']:.1%}。(a)(b) 是确定的止损，保守与乐观的差距来自 (c)。入场时刻中位数为美东第 {e['entry_min_median']:.0f} 分钟（09:35 = 575）。",
                 "",
                 "盈亏平衡滑点（股数固定为固定权益下的股数，全部交易）：",
                 "",

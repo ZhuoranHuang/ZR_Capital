@@ -395,20 +395,43 @@ def decomposition(R: dict, segname: str) -> pd.DataFrame:
 
 
 def entry_bar_stats(R: dict, segname: str) -> dict:
-    """主口径成交（保守、0.01，前 20）：入场当根即判止损的占比；其中入场那根开盘已在区间之外（成交 = 开盘价，
-    当根的最低 / 最高必然发生在入场之后）的部分是确定的止损，其余是同根先后无法分辨的。"""
+    """主口径成交（保守、0.01，前 20）：入场当根即判止损的占比，并拆成三类——
+    (a) 入场那根开盘已在区间之外（成交 = 开盘价，当根极值必然在入场之后）：确定是止损；
+    (b) 入场那根收盘已越过止损价（入场时价格在区间边界、收盘在止损另一侧，入场后必然触及止损）：确定是止损；
+    (c) 当根最低（高）价触及止损但收盘仍在止损之内：同根先后无法用 1 分钟 K 分辨。"""
     days = R["seg_days"][segname]
-    T = seg(pick(R["T1"][("cons", 0.01)], 20), days)
-    same = T["stopped"] & (T["entry_min"] == T["exit_min"])
+    T = seg(pick(R["T1"][("cons", 0.01)], 20), days).reset_index(drop=True)
+    same = (T["stopped"] & (T["entry_min"] == T["exit_min"])).to_numpy()
     px = T["entry"] - T["dir"] * 0.01
     gap = np.where(T["dir"] > 0, px > T["or_high"] + 1e-9, px < T["or_low"] - 1e-9)
+    stop = (T["entry"] - T["dir"] * so.STOP_ATR * T["atr_prev"]).to_numpy()
+    load = bars_loader(R["r"])
+    close_j = np.full(len(T), np.nan)
+    for day, g in T[same].groupby("date"):
+        b = load(day)
+        et = b["ts"].dt.tz_convert(so.ET)
+        key = pd.Series(
+            b["close"].to_numpy(),
+            index=pd.MultiIndex.from_arrays([b["symbol"], et.dt.hour * 60 + et.dt.minute]),
+        )
+        key = key[~key.index.duplicated()]
+        close_j[g.index] = key.reindex(
+            pd.MultiIndex.from_arrays([g["symbol"], g["entry_min"]])
+        ).to_numpy()
+    d = T["dir"].to_numpy()
+    beyond = np.where(d > 0, close_j <= stop, close_j >= stop) & same
+    a = same & gap
+    b_ = same & ~gap & beyond
+    c = same & ~gap & ~beyond
     Topt = seg(pick(R["T1"][("opt", 0.01)], 20), days)
     return {
         "n": len(T),
         "stopped": float(T["stopped"].mean()),
         "entry_bar_stop": float(same.mean()),
-        "entry_bar_stop_certain": float((same & gap).mean()),
-        "entry_bar_stop_ambiguous": float((same & ~gap).mean()),
+        "entry_bar_stop_gap": float(a.mean()),
+        "entry_bar_stop_close_beyond": float(b_.mean()),
+        "entry_bar_stop_certain": float((a | b_).mean()),
+        "entry_bar_stop_ambiguous": float(c.mean()),
         "stopped_optimistic": float(Topt["stopped"].mean()),
         "entry_min_median": float(T["entry_min"].median()),
     }
