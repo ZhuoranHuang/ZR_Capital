@@ -47,7 +47,9 @@ def criteria(X: dict, P: dict) -> dict:
     }
 
 
-def case_charts(X: dict, out: Path) -> str:
+def case_charts(
+    X: dict, out: Path, load1=None, key: str = MAIN_KEY, title: str | None = None
+) -> str:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -56,12 +58,12 @@ def case_charts(X: dict, out: Path) -> str:
     plt.rcParams["font.sans-serif"] = ["PingFang SC", "Heiti SC", "Arial Unicode MS", "DejaVu Sans"]
     plt.rcParams["axes.unicode_minus"] = False
     out.mkdir(parents=True, exist_ok=True)
-    tr = X[MAIN_KEY]["p"]["trades"]
+    tr = X[key]["p"]["trades"]
     tr = tr[tr["shares"] > 0].sort_values(["date", "entry_min"])
     sel = pd.concat(
         [tr[tr["pnl"] > 0].tail(10).assign(g="盈利"), tr[tr["pnl"] <= 0].tail(10).assign(g="亏损")]
     )
-    load1 = bars1_loader(sip_root())
+    load1 = load1 or bars1_loader(sip_root())
     cards = []
     for k, r in enumerate(sel.itertuples()):
         b = load1(r.date)
@@ -101,7 +103,7 @@ def case_charts(X: dict, out: Path) -> str:
         "<!doctype html><html lang='zh'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>R-057 案例</title>",
         "<style>:root{--bg:#fff;--fg:#111827;--bd:#e5e7eb}@media (prefers-color-scheme:dark){:root{--bg:#111827;--fg:#f9fafb;--bd:#374151}}body{background:var(--bg);color:var(--fg);font-family:-apple-system,'PingFang SC',sans-serif;margin:16px}"
         ".g{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px}a{color:var(--fg);text-decoration:none;border:1px solid var(--bd);border-radius:6px;padding:6px}img{width:100%}</style></head><body>",
-        "<h1>R-057 主口径：最近 10 笔盈利、10 笔亏损（1 分钟 K）</h1>",
+        f"<h1>{title or 'R-057 主口径：最近 10 笔盈利、10 笔亏损（1 分钟 K）'}</h1>",
     ]
     for g in ("盈利", "亏损"):
         html.append(

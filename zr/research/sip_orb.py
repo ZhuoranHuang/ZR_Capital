@@ -303,9 +303,10 @@ def shares_vec(equity, n, atr, entry, lev) -> np.ndarray:
 
 
 def portfolio(
-    T: pd.DataFrame, equity0: float, n: int | None, lev: float, fee: str, compound: bool = True
+    T: pd.DataFrame, equity0: float, n, lev: float, fee: str, compound: bool = True
 ) -> dict:
-    """逐日：当日所有仓位按当日期初权益定股数（N = n；n 为 None 时 N = 当日笔数），日末权益 = 期初 + Σ 盈亏。
+    """逐日：当日所有仓位按当日期初权益定股数（N = n；n 为 None 时 N = 当日笔数；n 为 dict 时 N = n[日期]，
+    R-057 Massive 版基础版用「当日合格且非十字星只数」，09:35 已知），日末权益 = 期初 + Σ 盈亏。
     T：date / dir / atr / entry / exit（成交价，已含滑点）。compound=False 时每日都用 equity0（安慰剂比较用）。"""
     T = T.sort_values(["date", "rank"] if "rank" in T else ["date"], kind="mergesort").reset_index(
         drop=True
@@ -315,7 +316,7 @@ def portfolio(
     d_all, a_all, e_all, x_all = (T[k].to_numpy() for k in ("dir", "atr", "entry", "exit"))
     for day, ix in T.groupby("date", sort=True).indices.items():
         base = eq if compound else equity0
-        N = n if n is not None else len(ix)
+        N = n[day] if isinstance(n, dict) else (n if n is not None else len(ix))
         sh = shares_vec(base, N, a_all[ix], e_all[ix], lev)
         p = sh * d_all[ix] * (x_all[ix] - e_all[ix]) - fees_vec(
             sh, e_all[ix], x_all[ix], d_all[ix], fee
