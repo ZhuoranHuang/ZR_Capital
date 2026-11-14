@@ -187,6 +187,7 @@ def verify(root: Path, days3: list[dt.date | None], cmp_days: list[dt.date | Non
     res["day_years"] = dyears
 
     def fetch(day: dt.date, prefix: str) -> Path:
+        """下载失败抛 MassiveError（调用方记录）。"""
         p = tmp / f"{prefix.split('/')[-1]}_{day}.csv.gz"
         t0 = time.monotonic()
         n = ff.download(mv.day_key(day, prefix), p)
@@ -203,7 +204,11 @@ def verify(root: Path, days3: list[dt.date | None], cmp_days: list[dt.date | Non
     # 3 个日文件
     res["files"] = {}
     for day in days3:
-        pm, pd_ = fetch(day, mv.MINUTE_PREFIX), fetch(day, mv.DAY_PREFIX)
+        try:
+            pm, pd_ = fetch(day, mv.MINUTE_PREFIX), fetch(day, mv.DAY_PREFIX)
+        except mv.MassiveError as e:
+            res["files"][str(day)] = {"error": str(e)}
+            continue
         t0 = time.monotonic()
         m = read_aggs(pm)
         read_s = time.monotonic() - t0
@@ -216,7 +221,7 @@ def verify(root: Path, days3: list[dt.date | None], cmp_days: list[dt.date | Non
             "window_start_et": sorted({str(x) for x in ts_et(dd["window_start"]).head(3)}),
         }
         r["tickers"] = {}
-        for sym in ("AAPL", "NVDA", "SPY", "MU", "TSLA"):
+        for sym in ("AAPL", "NVDA", "TSLA", "AMZN", "GOOGL", "SPY", "MU"):
             tdm = ticker_day(m, sym)
             drow = dd[dd["ticker"] == sym]
             if len(drow):
@@ -281,11 +286,16 @@ def verify(root: Path, days3: list[dt.date | None], cmp_days: list[dt.date | Non
             min((x.get("delisted_utc") or "9") for x in b) if b else None
         )
         ref[ex]["inactive_with_delisted_utc"] = sum(1 for x in b if x.get("delisted_utc"))
-        t0 = time.monotonic()
-        pit = rest.tickers(type="CS", exchange=ex, date="2017-06-15")
-        ref[ex]["pit_2017_06_15"] = len(pit)
-        ref[ex]["pit_2017_06_15_inactive_now"] = sum(1 for x in pit if not x.get("active"))
-        ref[ex]["pit_seconds"] = round(time.monotonic() - t0, 1)
+        for pdate in ("2017-06-15", "2022-10-20"):
+            t0 = time.monotonic()
+            try:
+                pit = rest.tickers(type="CS", exchange=ex, date=pdate)
+            except mv.MassiveError as e:
+                ref[ex][f"pit_{pdate}_error"] = str(e)
+                continue
+            ref[ex][f"pit_{pdate}"] = len(pit)
+            ref[ex][f"pit_{pdate}_inactive_now"] = sum(1 for x in pit if not x.get("active"))
+            ref[ex][f"pit_{pdate}_seconds"] = round(time.monotonic() - t0, 1)
     ref["rest_calls"] = rest.calls
     res["reference"] = ref
     sp = rest.splits(ticker="NVDA")
@@ -318,7 +328,9 @@ def main(argv: list[str] | None = None) -> int:
 
     p = argparse.ArgumentParser()
     p.add_argument("--phase", choices=["verify"], required=True)
-    p.add_argument("--days3", nargs=3, default=["2017-06-15", "2021-07-19", "latest"])
+    p.add_argument(
+        "--days3", nargs="+", default=["2017-06-15", "2021-11-15", "2024-06-07", "latest"]
+    )
     p.add_argument(
         "--cmp-days",
         nargs="+",
