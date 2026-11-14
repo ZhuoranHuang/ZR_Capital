@@ -35,7 +35,7 @@ from zr.research import sip_orb as so
 log = logging.getLogger("zr.sip_pull")
 ET = "America/New_York"
 DAILY_FROM = dt.date(2023, 8, 1)
-INTRA_FROM = dt.date(2023, 10, 2)
+INTRA_FROM = dt.date(2023, 11, 1)  # 长桥分钟 K 下限（301600 "out of minute candlestick limit begin date:2023-11-01"，2026-11-14 实测）
 TOP_1M = 50
 PRELIM_N = 500
 MIN_FREE_GB = 5.0
@@ -274,16 +274,21 @@ def pull_bars5(cl: Client, st: Store, symbol: str, max_pages: int = 150) -> int:
 
     cursor, parts, pages = None, [], 0
     while pages < max_pages:
-        bars = cl.call(
-            "history_candlesticks_by_offset",
-            so.lb_symbol(symbol),
-            Period.Min_5,
-            AdjustType.NoAdjust,
-            False,
-            1000,
-            cursor,
-            TradeSessions.Intraday,
-        )
+        try:
+            bars = cl.call(
+                "history_candlesticks_by_offset",
+                so.lb_symbol(symbol),
+                Period.Min_5,
+                AdjustType.NoAdjust,
+                False,
+                1000,
+                cursor,
+                TradeSessions.Intraday,
+            )
+        except NotFound:
+            if pages == 0:
+                raise
+            break  # 翻到分钟 K 历史下限（301600）：已拉到的数据照常落盘
         pages += 1
         if not bars:
             break

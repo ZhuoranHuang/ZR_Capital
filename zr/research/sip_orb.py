@@ -7,6 +7,7 @@ VPS 上的拉取脚本（zr/data/sip_pull.py）与 Mac 上的回测共用这些�
 
 from __future__ import annotations
 
+import functools
 import io
 import re
 
@@ -158,3 +159,164 @@ def select(c: pd.DataFrame, n: int) -> pd.DataFrame:
     x = c[c["eligible"].astype(bool) & (c["relvol"] >= 1) & (c["dir"] != 0)]
     x = x.sort_values(["date", "relvol", "symbol"], ascending=[True, False, True], kind="mergesort")
     return x.groupby("date", sort=True).head(n).reset_index(drop=True)
+
+
+# ---------------- 执行（1 分钟或 5 分钟 K） ----------------
+
+STOP_ATR = 0.10
+RISK = 0.01
+PER_SHARE = 0.0035
+
+
+def sim_core(
+    m,
+    o,
+    h,
+    lo,
+    c,
+    d: int,
+    or_high: float,
+    or_low: float,
+    atr: float,
+    slip: float,
+    conservative: bool,
+):
+    """numpy 版执行核心。m = 美东分钟数（09:30 = 570），o/h/lo/c 同长数组（当日常规时段、升序）。
+    返回 (入场价, 止损价, 出场价, 入场下标, 出场下标, 是否止损) 或 None（未触发）。规则见 simulate_trade。"""
+    idx = np.flatnonzero(m >= 575)
+    if not len(idx):
+        return None
+    hit = idx[(h[idx] >= or_high) if d > 0 else (lo[idx] <= or_low)]
+    if not len(hit):
+        return None
+    j = int(hit[0])
+    entry = (max(or_high, o[j]) + slip) if d > 0 else (min(or_low, o[j]) - slip)
+    stop = entry - d * STOP_ATR * atr
+    if conservative and ((d > 0 and lo[j] <= stop) or (d < 0 and h[j] >= stop)):
+        return entry, stop, stop - d * slip, j, j, True
+    rest = (lo[j + 1 :] <= stop) if d > 0 else (h[j + 1 :] >= stop)
+    if rest.any():
+        k = j + 1 + int(rest.argmax())
+        px = min(stop, o[k]) if d > 0 else max(stop, o[k])
+        return entry, stop, px - d * slip, j, k, True
+    return entry, stop, c[-1] - d * slip, j, len(c) - 1, False
+
+
+def simulate_trade(
+    bars: pd.DataFrame,
+    d: int,
+    or_high: float,
+    or_low: float,
+    atr: float,
+    slip: float,
+    conservative: bool,
+):
+    """单只单日：从 09:35 那根起，多头最高价 ≥ 区间高即触发，成交 max(区间高, 开盘) + 滑点；止损 = 成交价 − 0.10 × ATR，
+    触发成交 min(止损, 开盘) − 滑点（入场那根按止损价）；保守 = 入场那根最低价 ≤ 止损即当根止损，乐观 = 从下一根起判；
+    未止损按当日最后一根收盘 − 滑点。空头镜像。返回 dict 或 None（未触发）。"""
+    t = pd.DatetimeIndex(bars["ts"]).tz_convert(ET)
+    m = np.asarray(t.hour * 60 + t.minute)
+    o, h, lo, c = (bars[k].to_numpy(float) for k in ("open", "high", "low", "close"))
+    r = sim_core(m, o, h, lo, c, d, or_high, or_low, atr, slip, conservative)
+    if r is None:
+        return None
+    entry, stop, xpx, j, k, stopped = r
+    return {
+        "entry": float(entry),
+        "stop": float(stop),
+        "exit": float(xpx),
+        "reason": "stop" if stopped else "close",
+        "entry_ts": bars["ts"].iloc[j],
+        "exit_ts": bars["ts"].iloc[k],
+    }
+
+
+def shares(equity: float, n: int, atr: float, entry: float, lev: float) -> int:
+    """股数 = min(floor(权益 ÷ N × 1% ÷ (0.10 × ATR)), floor(lev × 权益 ÷ N ÷ 入场价))。"""
+    if not (atr > 0 and entry > 0 and equity > 0):
+        return 0
+    by_risk = np.floor(equity / n * RISK / (STOP_ATR * atr) + 1e-9)
+    by_cap = np.floor(lev * equity / n / entry + 1e-9)
+    return int(max(0, min(by_risk, by_cap)))
+
+
+def trade_fees(sh: int, entry: float, exit_: float, d: int, fee: str) -> float:
+    """两侧佣金：per_share = 每股 0.0035 美元（不设最低）；d013 = zr.costs.fees.stock_order_fees（做空开仓 Sell、平仓 Buy）。"""
+    if sh <= 0:
+        return 0.0
+    if fee == "per_share":
+        return 2 * PER_SHARE * sh
+    from zr.costs.fees import stock_order_fees
+
+    o_side, c_side = ("Buy", "Sell") if d > 0 else ("Sell", "Buy")
+    return float(
+        stock_order_fees(sh, o_side, entry)["total"] + stock_order_fees(sh, c_side, exit_)["total"]
+    )
+
+
+@functools.lru_cache(maxsize=4_000_000)
+def _d013(sh: int, side: str, px: float) -> float:
+    from zr.costs.fees import stock_order_fees
+
+    return float(stock_order_fees(sh, side, px)["total"])
+
+
+def fees_vec(sh, entry, exit_, d, fee: str) -> np.ndarray:
+    """向量版 trade_fees（D-013 经缓存逐笔调用 stock_order_fees，价格按 6 位小数作缓存键）。"""
+    sh = np.asarray(sh, np.int64)
+    if fee == "per_share":
+        return 2 * PER_SHARE * sh.astype(float)
+    out = np.zeros(len(sh))
+    for k, (s_, e_, x_, d_) in enumerate(
+        zip(sh, np.round(entry, 6), np.round(exit_, 6), d, strict=True)
+    ):
+        if s_ > 0:
+            o_side, c_side = ("Buy", "Sell") if d_ > 0 else ("Sell", "Buy")
+            out[k] = _d013(int(s_), o_side, float(e_)) + _d013(int(s_), c_side, float(x_))
+    return out
+
+
+def shares_vec(equity, n, atr, entry, lev) -> np.ndarray:
+    atr, entry = np.asarray(atr, float), np.asarray(entry, float)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        by_risk = np.floor(equity / n * RISK / (STOP_ATR * atr) + 1e-9)
+        by_cap = np.floor(lev * equity / n / entry + 1e-9)
+    s = np.minimum(by_risk, by_cap)
+    return np.where((atr > 0) & (entry > 0) & np.isfinite(s), np.maximum(s, 0), 0).astype(np.int64)
+
+
+def portfolio(
+    T: pd.DataFrame, equity0: float, n: int | None, lev: float, fee: str, compound: bool = True
+) -> dict:
+    """逐日：当日所有仓位按当日期初权益定股数（N = n；n 为 None 时 N = 当日笔数），日末权益 = 期初 + Σ 盈亏。
+    T：date / dir / atr / entry / exit（成交价，已含滑点）。compound=False 时每日都用 equity0（安慰剂比较用）。"""
+    T = T.sort_values(["date", "rank"] if "rank" in T else ["date"], kind="mergesort").reset_index(
+        drop=True
+    )
+    eq = equity0
+    sh_all, pnl_all, rows = np.zeros(len(T), np.int64), np.zeros(len(T)), []
+    d_all, a_all, e_all, x_all = (T[k].to_numpy() for k in ("dir", "atr", "entry", "exit"))
+    for day, ix in T.groupby("date", sort=True).indices.items():
+        base = eq if compound else equity0
+        N = n if n is not None else len(ix)
+        sh = shares_vec(base, N, a_all[ix], e_all[ix], lev)
+        p = sh * d_all[ix] * (x_all[ix] - e_all[ix]) - fees_vec(
+            sh, e_all[ix], x_all[ix], d_all[ix], fee
+        )
+        sh_all[ix], pnl_all[ix] = sh, p
+        pnl_d = float(p.sum())
+        rows.append(
+            {
+                "date": day,
+                "equity_start": base,
+                "pnl": pnl_d,
+                "ret": pnl_d / base,
+                "n": int((sh > 0).sum()),
+            }
+        )
+        if compound:
+            eq += pnl_d
+    T = T.assign(shares=sh_all, pnl=pnl_all)
+    D = pd.DataFrame(rows)
+    eqs = equity0 + np.cumsum(D["pnl"].to_numpy()) if compound else np.full(len(D), equity0)
+    return {"trades": T, "daily": D, "equity": pd.Series(eqs, index=D["date"])}
