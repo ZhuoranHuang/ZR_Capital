@@ -190,18 +190,24 @@ class FlatFiles:
 
     def download(self, key: str, dest: Path, chunk: int = 1 << 20) -> int:
         """流式下载到 dest（先写 .part 再改名），返回字节数。"""
+        return self.download_hashed(key, dest, chunk)[0]
+
+    def download_hashed(self, key: str, dest: Path, chunk: int = 1 << 20) -> tuple[int, str]:
+        """同 download，同时返回 sha256（十六进制）。"""
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_suffix(dest.suffix + ".part")
         n = 0
+        h = hashlib.sha256()
         with self._open("GET", self._url(key)) as r, open(tmp, "wb") as f:
             while True:
                 b = r.read(chunk)
                 if not b:
                     break
                 f.write(b)
+                h.update(b)
                 n += len(b)
         tmp.replace(dest)
-        return n
+        return n, h.hexdigest()
 
 
 # ---------------- REST ----------------
