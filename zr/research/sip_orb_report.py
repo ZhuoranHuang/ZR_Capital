@@ -159,6 +159,7 @@ def run_sims(groups_by_symbol, rows: pd.DataFrame, configs, both_dirs: bool = Fa
             lst, columns=["row", "flip", "dir", "entry", "exit", "stopped", "entry_min", "exit_min"]
         )
         res[cfg] = df.merge(rows.drop(columns=["dir"]), left_on="row", right_index=True)
+        res[cfg]["atr"] = res[cfg]["atr_prev"]
     return res
 
 
