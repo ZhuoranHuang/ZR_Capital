@@ -192,10 +192,15 @@ def composition(R: dict) -> dict:
     r = R["r"]
     C = R["C"]
     cs = pd.read_parquet(r / "ref" / "cs_tickers.parquet")
-    inactive = set(cs.loc[cs["active"] == False, "ticker"])  # noqa: E712
-    pool_syms = set(C["symbol"])
-    top_syms = set(C.loc[C["rank"] > 0, "symbol"])
-    top20_syms = set(C.loc[(C["rank"] > 0) & (C["rank"] <= 20), "symbol"])
+    active = set(cs.loc[cs["active"] == True, "ticker"])  # noqa: E712
+    inactive = set(cs.loc[cs["active"] == False, "ticker"]) - active  # noqa: E712
+    known = active | inactive
+
+    def split3(syms: set) -> tuple[int, int, int, int]:
+        return len(syms), len(syms & active), len(syms & inactive), len(syms - known)
+
+    t50 = C[C["rank"] > 0]
+    t20 = t50[t50["rank"] <= 20]
     per_day = C.groupby("date").agg(
         pool=("symbol", "size"),
         eligible=("eligible", "sum"),
@@ -207,17 +212,38 @@ def composition(R: dict) -> dict:
         if (r / "derived" / "pool_check.json").exists()
         else {}
     )
+    # 周快照里「只在该周出现、前后两周都不在」的代码（reference 的 type 字段噪声）
+    snaps = sorted((r / "ref" / "pit").glob("*.parquet"))
+    sets = [set(pd.read_parquet(p)["ticker"].dropna()) for p in snaps]
+    dates = [pd.Timestamp(p.stem).date() for p in snaps]
+    oneoff = []
+    for k in range(1, len(snaps) - 1):
+        ex = sets[k] - (sets[k - 1] | sets[k + 1])
+        if len(ex) >= 50:
+            x = C[(C["date"] >= dates[k]) & (C["date"] < dates[k + 1]) & C["symbol"].isin(ex)]
+            oneoff.append(
+                {
+                    "week": str(dates[k]),
+                    "n": len(ex),
+                    "eligible_rows": int(x["eligible"].sum()),
+                    "top50_rows": int((x["rank"] > 0).sum()),
+                    "top20_rows": int(((x["rank"] > 0) & (x["rank"] <= 20)).sum()),
+                }
+            )
     return {
-        "pool_symbols": len(pool_syms),
-        "pool_symbols_now_inactive": len(pool_syms & inactive),
-        "top50_symbols": len(top_syms),
-        "top50_symbols_now_inactive": len(top_syms & inactive),
-        "top20_symbols": len(top20_syms),
-        "top20_symbols_now_inactive": len(top20_syms & inactive),
+        "pool": split3(set(C["symbol"])),
+        "top50": split3(set(t50["symbol"])),
+        "top20": split3(set(t20["symbol"])),
+        "top20_rows": len(t20),
+        "top20_rows_unknown": int((~t20["symbol"].isin(known)).sum()),
         "per_day_median": per_day.median().round(0).to_dict(),
         "days_top20_full": int((per_day["top"] >= 20).sum()),
+        "days_short_after_start": int(
+            ((per_day["top"] < 20) & (per_day.index >= R["start"])).sum()
+        ),
         "days": len(per_day),
         "pool_check": chk,
+        "oneoff": oneoff,
         "splits": int(pd.read_parquet(r / "ref" / "splits.parquet").shape[0]),
     }
 
@@ -264,9 +290,19 @@ def write(R: dict, X: dict, P: dict, B: dict, G: dict | None = None) -> str:
         "",
         "- 数据源：Massive（原 Polygon.io）flat files 美股 SIP 1 分钟聚合与日聚合（不复权），订阅可下载起点 2021-11-15（更早返回 403）。核对见 `docs/research/R057_MASSIVE_DATA.md`。",
         f"- 样本：首个能选股的交易日 {R['start']}（前 14 个交易日为合格与 RelVol 预热）～{R['last']}，{len(R['days'])} 个交易日；样本内 {len(sd['样本内'])} 天，样本外 {len(sd['样本外'])} 天。原文起点 2016-01-01，本样本起点晚 {(R['start'] - mr.PAPER_START).days / 365.25:.1f} 年。",
-        f"- 标的池（每周首个交易日的 reference 时点快照里的 XNYS / XNAS 普通股 ∩ 当日有成交）：样本期内出现过 {comp['pool_symbols']:,} 只，其中 {comp['pool_symbols_now_inactive']:,} 只现已退市（reference active=false）；"
-        f"每日中位数：池内且有开盘区间 {comp['per_day_median'].get('pool', 0):,.0f} 只、合格 {comp['per_day_median'].get('eligible', 0):,.0f} 只、基础版候选 {comp['per_day_median'].get('base', 0):,.0f} 只、RelVol 前 50 实际 {comp['per_day_median'].get('top', 0):,.0f} 只。"
-        f"进入过前 50 的 {comp['top50_symbols']:,} 只（现已退市 {comp['top50_symbols_now_inactive']:,}）；进入过前 20 的 {comp['top20_symbols']:,} 只（现已退市 {comp['top20_symbols_now_inactive']:,}）。前 20 满 20 只的天数 {comp['days_top20_full']} / {comp['days']}。",
+        f"- 标的池（每周首个交易日的 reference 时点快照里的 XNYS / XNAS 普通股 ∩ 当日有成交）：样本期内出现过 {comp['pool'][0]:,} 只——当前仍在市 {comp['pool'][1]:,} 只、已退市 {comp['pool'][2]:,} 只、不在当前普通股代码表 {comp['pool'][3]:,} 只（改过代码，或 reference 当时与现在给的类型不同）。"
+        f"每日中位数：池内且有开盘区间 {comp['per_day_median'].get('pool', 0):,.0f} 只、合格 {comp['per_day_median'].get('eligible', 0):,.0f} 只、基础版候选 {comp['per_day_median'].get('base', 0):,.0f} 只、RelVol 前 50 实际 {comp['per_day_median'].get('top', 0):,.0f} 只；前 20 满 20 只的天数 {comp['days_top20_full']} / {comp['days']}（首个可选股日之后不足 20 只的有 {comp['days_short_after_start']} 天，其余是预热期）。",
+        f"- 进入过前 50 的 {comp['top50'][0]:,} 只（在市 {comp['top50'][1]:,}、已退市 {comp['top50'][2]:,}、不在代码表 {comp['top50'][3]:,}）；进入过前 20 的 {comp['top20'][0]:,} 只（在市 {comp['top20'][1]:,}、已退市 {comp['top20'][2]:,}、不在代码表 {comp['top20'][3]:,}）。前 20 的 {comp['top20_rows']:,} 个标的日中，{comp['top20_rows_unknown']:,} 个（{comp['top20_rows_unknown'] / comp['top20_rows']:.2%}）来自不在当前普通股代码表的代码（其中既有后来改了代码或被并购的普通股，如 SATS、SIX、FB，也有快照当时被标成普通股的 ADR 或基金，如 YMM、HSAI、DXYZ——按代码判断，未逐只核实）。",
+        "- reference 的类型字段有噪声："
+        + (
+            "；".join(
+                f"{o['week']} 那周的快照有 {o['n']} 只「只在该周出现」的代码，它们在该周合格 {o['eligible_rows']} 个标的日、进入前 50 的 {o['top50_rows']} 个、进入前 20 的 {o['top20_rows']} 个"
+                for o in comp["oneoff"]
+            )
+            + "（2022-08-22 那周多为 NYSE 封闭式基金，2025-06-30 那周多为优先股与票据——按代码与名称判断）。合格条件把它们几乎全部挡在外面，对结果的影响见上面的个数。"
+            if comp["oneoff"]
+            else "没有发现「只在某一周出现」的代码数 ≥ 50 的周快照。"
+        ),
         f"- 拆股：拆股接口 2021 年以来 {comp['splits']:,} 条，比例超出 ×1.2 / ÷1.2 的按执行日剔除 15 个交易日。",
         "",
     ]
@@ -389,6 +425,25 @@ def write(R: dict, X: dict, P: dict, B: dict, G: dict | None = None) -> str:
             f"每笔平均 {fmt_ci(sR, 3).replace('%', '')} R（扣费后，R = 0.10 × ATR，按日聚类），每笔占股价 {fmt_ci(sP, 3)}。"
         )
     L.append("")
+    if G:
+        fx = {
+            sg: G[sg]["decomp"]
+            .set_index(["算法", "每边滑点", "佣金"])
+            .loc[("保守", "0.01", "D-013")]
+            for sg in mr.SEGMENTS
+        }
+        ee = {sg: X[sg][mr.MAIN_NAME]["m"]["end_equity"] for sg in mr.SEGMENTS}
+        L += [
+            f"**读这些数字要注意复利机制**：主口径按日复利，权益从 10 万美元跌到样本内期末 {ee['样本内']:,.0f} 美元、样本外期末 {ee['样本外']:,.0f} 美元；权益很低时每仓只有几股，D-013 的每单最低收费占比越来越大，"
+            f"上面的每笔 R、日收益均值与下表靠后的年份都被这一机制放大（样本外 2026 年尤其明显）。不受它影响的固定权益口径（每天都按 10 万美元定仓，不复利）："
+            f"样本内每笔 {fx['样本内']['每笔净 R']:+.3f}R、日收益均值 {fx['样本内']['日收益均值（固定权益）']}；样本外每笔 {fx['样本外']['每笔净 R']:+.3f}R、日收益均值 {fx['样本外']['日收益均值（固定权益）']}（见补充诊断）。通过标准按预登记的复利口径判定"
+            + (
+                "；固定权益口径下日收益均值同样为负。"
+                if str(fx["样本外"]["日收益均值（固定权益）"]).startswith("-")
+                else "；固定权益口径下样本外日收益均值不为负，与复利口径不同。"
+            ),
+            "",
+        ]
     rows = []
     allX = {sg: X[sg][mr.MAIN_NAME] for sg in mr.SEGMENTS}
     trs = pd.concat([r_multiples(allX[sg]["p"]["trades"]) for sg in mr.SEGMENTS], ignore_index=True)
@@ -516,7 +571,7 @@ def write(R: dict, X: dict, P: dict, B: dict, G: dict | None = None) -> str:
     L += [
         "## 边界",
         "",
-        f"- 标的池：Massive reference 时点快照（按周）里的 XNYS / XNAS 普通股，包含后来退市的股票（样本期内出现过的 {comp['pool_symbols']:,} 只中 {comp['pool_symbols_now_inactive']:,} 只现已退市）；周内上市的新股下周才进池、周内类型变化忽略；代码变更视为新标的（需重新累计 14 日）。不含 NYSE American、NYSE Arca、Cboe 主上市的股票（原文为「NYSE 与 Nasdaq」）。",
+        f"- 标的池：Massive reference 时点快照（按周）里的 XNYS / XNAS 普通股，包含后来退市的股票（样本期内出现过的 {comp['pool'][0]:,} 只中 {comp['pool'][2]:,} 只现已退市）；周内上市的新股下周才进池、周内类型变化忽略；代码变更视为新标的（需重新累计 14 日）。不含 NYSE American、NYSE Arca、Cboe 主上市的股票（原文为「NYSE 与 Nasdaq」）。",
         f"- 样本：2021-11-15 起（订阅限制）；论文样本内只有约 {len(sd['样本内']) / 252:.1f} 年，复现检查不能与原文全期数字直接比。",
         "- 合格条件用 Massive 日聚合（与原预登记所用长桥日线同口径）；开盘区间、RelVol、执行用 SIP 1 分钟 K（只含有成交的分钟；聚合包含哪些成交条件按 Massive 的规则，未逐条核对）。",
         "- 1 分钟 K 的同根歧义：入场那根内先入场后止损无法分辨，保守 / 乐观两种算法都报；判定以保守为准。",

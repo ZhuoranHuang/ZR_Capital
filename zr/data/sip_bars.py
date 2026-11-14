@@ -95,9 +95,12 @@ def inventory(root: Path) -> str:
         "",
         "SIP 1 分钟 K（`bars_1m_sip/`，含盘前盘后，不复权，只有有成交的分钟）：",
         "",
-        "| 标的 | 最早 (UTC) | 最晚 (UTC) | 行数 | 常规时段行数 | 按年 |",
-        "|---|---|---|---|---|---|",
+        "| 标的 | 最早 (UTC) | 最晚 (UTC) | 行数 | 常规时段行数 | 交易日 | 常规时段缺根的天数（缺根合计） | 按年 |",
+        "|---|---|---|---|---|---|---|---|",
     ]
+    from zr.data.calendar import session_close
+
+    gaps = []
     for s in SYMS:
         files = sorted((sip_dir(root) / f"underlying={s}").glob("year=*/bars.parquet"))
         if not files:
@@ -107,11 +110,24 @@ def inventory(root: Path) -> str:
             for f in files
         }
         d = pd.concat(parts.values())
+        rth = d[d["session"] == "Intraday"]
+        per = rth.groupby(rth["ts"].dt.tz_convert("America/New_York").dt.date).size()
+        exp = pd.Series(
+            {x: session_close(x).hour * 60 + session_close(x).minute - 570 for x in per.index}
+        )
+        short = (exp - per)[per != exp]
+        if len(short) and len(short) <= 3:
+            gaps.append(f"{s}：" + "、".join(f"{k} 缺 {int(v)} 根" for k, v in short.items()))
         L.append(
-            f"| {s} | {d['ts'].min()} | {d['ts'].max()} | {len(d):,} | {(d['session'] == 'Intraday').sum():,} | "
+            f"| {s} | {d['ts'].min()} | {d['ts'].max()} | {len(d):,} | {len(rth):,} | {per.size:,} | {len(short)}（{int(short.sum())}） | "
             + ", ".join(f"{y}: {len(v):,}" for y, v in parts.items())
             + " |"
         )
+    L += [
+        "",
+        "常规时段应有根数按交易所日程（提前收盘日 13:00）计算；缺根 = 该分钟在源文件里没有行（没有成交，或源数据缺）。"
+        + ("缺根天数 ≤ 3 的标的逐日列出：" + "；".join(gaps) + "。" if gaps else ""),
+    ]
     m = root / "sip" / "massive"
     L += ["", "R-057 逐日产出（`sip/massive/`）：", ""]
     for name, desc in (
