@@ -64,7 +64,7 @@ def or_from_minute(path: Path, tickers: set, day: dt.date) -> dict:
     return out
 
 
-def run(n_days: int, seed: int = 7) -> dict:
+def run(n_days: int, seed: int = 7, extra_days: list | None = None) -> dict:
     from zr.config import get_settings
 
     root = get_settings().zr_data_root
@@ -72,7 +72,10 @@ def run(n_days: int, seed: int = 7) -> dict:
     C = load_C(r)
     days_all = sorted(C["date"].unique())
     rng = np.random.default_rng(seed)
-    pick = sorted(rng.choice(np.array(days_all[30:], dtype=object), size=n_days, replace=False))
+    pick = sorted(
+        set(rng.choice(np.array(days_all[30:], dtype=object), size=n_days, replace=False))
+        | set(extra_days or [])
+    )
     last = pick[-1]
     # 日聚合：逐日递推（Wilder ATR、14 日量、开盘），全部代码
     trade_days = [
@@ -85,10 +88,26 @@ def run(n_days: int, seed: int = 7) -> dict:
     prev_close: dict = {}
     vols: dict = defaultdict(lambda: deque(maxlen=14))
     state_at: dict = {}
+    last_date: dict = {}
+    seg_start: dict = {}
+    seg_at: dict = {}
     pick_set = set(pick)
     for d in trade_days:
         dd = read_aggs(raw_root(root) / mv.day_key(d, mv.DAY_PREFIX))
+        # 断档重置（独立实现）：该代码上一次有日线距今超过 30 个自然日 → 视为新标的，清空历史
+        for t in dd["ticker"]:
+            ld = last_date.get(t)
+            if ld is None:
+                seg_start[t] = d
+            elif (d - ld).days > 30:
+                atr.pop(t, None)
+                n_tr[t] = 0
+                prev_close.pop(t, None)
+                vols[t].clear()
+                seg_start[t] = d
+            last_date[t] = d
         if d in pick_set:  # 当日开盘前已知的状态
+            seg_at[d] = {t: seg_start[t] for t in dd["ticker"]}
             state_at[d] = {
                 t: (
                     atr.get(t) if n_tr[t] >= 14 else None,
@@ -114,21 +133,23 @@ def run(n_days: int, seed: int = 7) -> dict:
         k = trade_days.index(d)
         hist_days = trade_days[max(0, k - 40) : k]
         orv: dict = defaultdict(list)
+        seg0 = seg_at[d]
         for hd in hist_days:
             for t, x in or_from_minute(
                 raw_root(root) / mv.day_key(hd, mv.MINUTE_PREFIX), pool, hd
             ).items():
-                orv[t].append(x["vol"])
+                if hd >= seg0.get(t, hd):  # 只用本段（断档之后）的开盘区间
+                    orv[t].append(x["vol"])
         today = or_from_minute(raw_root(root) / mv.day_key(d, mv.MINUTE_PREFIX), pool, d)
         st = state_at[d]
-        rows = []
+        elig_of = {}
         for t in pool:
             if t not in today:
                 continue
             a, v14 = st.get(t, (None, None))
             op = st["__open__"].get(t)
             blocked = bool(cd.loc[cd["symbol"] == t, "split_block"].iloc[0])
-            elig = (
+            elig_of[t] = (
                 op is not None
                 and op > 5
                 and v14 is not None
@@ -137,6 +158,22 @@ def run(n_days: int, seed: int = 7) -> dict:
                 and a > 0.5
                 and not blocked
             )
+        # 预登记定义是「前 14 个有开盘区间的交易日」：合格但 40 日窗口内不足 14 个的代码，继续向前回看直到凑满（最多 400 个交易日）
+        need = {t for t, e in elig_of.items() if e and len(orv[t]) < 14}
+        extended = sorted(need)
+        back = k - 41
+        while need and back >= max(0, k - 400):
+            hd = trade_days[back]
+            got = or_from_minute(raw_root(root) / mv.day_key(hd, mv.MINUTE_PREFIX), need, hd)
+            for t, x in got.items():
+                if hd >= seg0.get(t, hd):
+                    orv[t].insert(0, x["vol"])
+            need = {
+                t for t in need if len(orv[t]) < 14 and seg0.get(t, hd) < hd
+            }  # 段首之前不再有可用的开盘区间
+            back -= 1
+        rows = []
+        for t, elig in elig_of.items():
             hv = orv[t][-14:]
             rv = today[t]["vol"] / (sum(hv) / 14) if len(hv) == 14 and sum(hv) > 0 else math.nan
             dr = int(np.sign(round(today[t]["close"] - today[t]["open"], 6)))
@@ -160,6 +197,10 @@ def run(n_days: int, seed: int = 7) -> dict:
             "dir_agree": float((m["dir_ind"] == m["dir_pipe"]).mean()),
             "top20_same_order": list(sel["symbol"]) == list(pipe["symbol"]),
             "top20_overlap": len(set(sel["symbol"]) & set(pipe["symbol"])),
+            "extended_lookback": extended,
+            "eligible_relvol_nan_mismatch": int(
+                (m["eligible_pipe"] & (m["relvol_ind"].isna() != m["relvol_pipe"].isna())).sum()
+            ),
         }
     return res
 
@@ -218,6 +259,9 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=10)
     ap.add_argument("--trades", action="store_true", help="只做执行层核对（随机 300 笔）")
+    ap.add_argument(
+        "--extra-days", nargs="*", default=[], help="额外指定核对的交易日（如断档重置生效的日子）"
+    )
     a = ap.parse_args(argv)
     if a.trades:
         res = check_trades()
@@ -225,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
         out.write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
         print(json.dumps(res, ensure_ascii=False))
         return 0
-    res = run(a.days)
+    res = run(a.days, extra_days=[dt.date.fromisoformat(x) for x in a.extra_days])
     out = mroot() / "derived" / "independent_check.json"
     out.write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
     print(json.dumps(res, ensure_ascii=False, indent=1))

@@ -89,9 +89,12 @@ def pool_membership(pit_dir: Path, days: list) -> pd.DataFrame:
     return pd.concat(rows, ignore_index=True)
 
 
-def ticker_features(g: pd.DataFrame, split_dates=None) -> pd.DataFrame:
-    """一个代码的日线（按日期升序）→ 合格标记与开盘区间特征（每行 = 一个交易日；只用当日开盘前已知的信息 + 当日 09:30–09:34）。"""
-    g = g.sort_values("date").reset_index(drop=True)
+LOOKBACK_ROWS = so.LOOKBACK
+GAP_DAYS = 30  # 同一代码相邻两个有日线的交易日相隔超过 30 个自然日 → 视为新标的（代码复用或长期停牌后恢复），历史从断档后重新累计
+
+
+def _segment_features(g: pd.DataFrame, split_dates) -> pd.DataFrame:
+    first = g["date"].iloc[0]
     e = so.daily_eligibility(
         g.rename(
             columns={
@@ -102,15 +105,34 @@ def ticker_features(g: pd.DataFrame, split_dates=None) -> pd.DataFrame:
                 "d_volume": "volume",
             }
         ),
-        split_dates=split_dates if split_dates is not None else [],
+        # 只计本段历史之内的拆股：段首之前的拆股即使在 15 个交易日内，也落在 14 日预热期里，不需要再剔除
+        split_dates=[x for x in (split_dates or []) if x >= first],
     )
     has_or = g["or_bars"].fillna(0) > 0
     o = g.loc[has_or, ["date", "or_open", "or_high", "or_low", "or_close", "or_volume"]].rename(
         columns={"or_volume": "or_vol"}
     )
     o = so.or_stats(o)
-    out = e.merge(o, on="date", how="left")
-    return out
+    return e.merge(o, on="date", how="left")
+
+
+def ticker_features(g: pd.DataFrame, split_dates=None) -> pd.DataFrame:
+    """一个代码的日线（按日期升序）→ 合格标记与开盘区间特征（每行 = 一个交易日；只用当日开盘前已知的信息 + 当日 09:30–09:34）。
+    预登记「代码变更视为新标的（需重新累计 14 日）」：相邻两个有日线的交易日相隔超过 GAP_DAYS 个自然日就切段，
+    ATR、14 日均量、RelVol 与拆股序号都只用本段之内的数据（断档只看当日之前的日期，不引入前视）。"""
+    g = g.sort_values("date").reset_index(drop=True)
+    gap = pd.to_datetime(g["date"]).diff().dt.days
+    seg = (gap > GAP_DAYS).cumsum().to_numpy()
+    if seg[-1] == 0:
+        out = _segment_features(g, split_dates)
+        out["segment"] = 0
+        return out
+    parts = []
+    for k, x in g.groupby(seg, sort=True):
+        f = _segment_features(x.reset_index(drop=True), split_dates)
+        f["segment"] = int(k)
+        parts.append(f)
+    return pd.concat(parts, ignore_index=True)
 
 
 def build(r: Path) -> dict:
@@ -175,10 +197,59 @@ def build(r: Path) -> dict:
     }
 
 
+def gap_sensitivity(r: Path, prefix: str = "candidates_prefix.parquet") -> dict:
+    """断档阈值敏感性：用修正前的选股结果（derived/candidates_prefix.parquet），数「断档后前 14 行」里有多少个标的日
+    曾被判合格 / 进入前 50 / 前 20，阈值取 10、20、30、60、120 个自然日。写 derived/gap_sensitivity.json。"""
+    pit_tickers = set()
+    for p in (r / "ref" / "pit").glob("*.parquet"):
+        pit_tickers |= set(pd.read_parquet(p)["ticker"].dropna())
+    d = load_daily(r, pit_tickers)
+    d = d[d["d_open"].notna()].sort_values(["ticker", "date"])
+    d["gap"] = (
+        pd.to_datetime(d["date"]) - pd.to_datetime(d.groupby("ticker")["date"].shift(1))
+    ).dt.days
+    d["k"] = d.groupby("ticker").cumcount()
+    C = pd.read_parquet(r / "derived" / prefix)
+    C["date"] = pd.to_datetime(C["date"]).dt.date
+    out = {}
+    for G in (10, 20, 30, 60, 120):
+        g = d[d["gap"] > G][["ticker", "k"]].rename(columns={"k": "k0"})
+        m = d[["ticker", "date", "k"]].merge(g, on="ticker")
+        m = m[(m["k"] >= m["k0"]) & (m["k"] < m["k0"] + LOOKBACK_ROWS)].drop_duplicates(
+            ["ticker", "date"]
+        )
+        x = C.merge(
+            m.rename(columns={"ticker": "symbol"})[["symbol", "date"]], on=["symbol", "date"]
+        )
+        t20 = x[(x["rank"] > 0) & (x["rank"] <= 20)]
+        out[str(G)] = {
+            "events": len(g),
+            "tickers": int(g["ticker"].nunique()),
+            "eligible_rows": int(x["eligible"].sum()),
+            "top50_rows": int((x["rank"] > 0).sum()),
+            "top20_rows": len(t20),
+            "top20_symbols": sorted(set(t20["symbol"])),
+        }
+    (r / "derived" / "gap_sensitivity.json").write_text(
+        json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8"
+    )
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", help="默认 $ZR_DATA_ROOT")
+    ap.add_argument(
+        "--gap-sensitivity",
+        action="store_true",
+        help="只算断档阈值敏感性（需要 derived/candidates_prefix.parquet）",
+    )
     a = ap.parse_args(argv)
+    if a.gap_sensitivity:
+        print(
+            json.dumps(gap_sensitivity(mroot(Path(a.root) if a.root else None)), ensure_ascii=False)
+        )
+        return 0
     print(json.dumps(build(mroot(Path(a.root) if a.root else None)), ensure_ascii=False))
     return 0
 

@@ -14,6 +14,7 @@ from zr.ops.markdown import df_to_md
 from zr.research import sip_massive_report as mr
 from zr.research.sip_orb_report import PAPER_TAB, REPO, r_multiples
 from zr.research.sip_orb_write import _pct, case_charts
+from zr.research.sip_select import GAP_DAYS
 from zr.research.timing.stats import fmt_ci, pooled
 
 PAPER_RELVOL = "原文图 4：RelVol < 100% −0.02R、> 100% +0.08R、> 30 倍（3,000%）+0.38R"
@@ -248,7 +249,105 @@ def composition(R: dict) -> dict:
     }
 
 
-def write(R: dict, X: dict, P: dict, B: dict, G: dict | None = None) -> str:
+def fix_section(R: dict, cur: dict) -> list[str]:
+    """首次全量运行之后的实现修正：修正前后的主要数字（修正前的结果在 derived/*_prefix.*）。"""
+    d = R["r"] / "derived"
+    if (
+        not (d / "r057_summary_prefix.json").exists()
+        or not (d / "candidates_prefix.parquet").exists()
+    ):
+        return []
+    prev = json.loads((d / "r057_summary_prefix.json").read_text(encoding="utf-8"))
+    old = pd.read_parquet(d / "candidates_prefix.parquet")
+    old["date"] = pd.to_datetime(old["date"]).dt.date
+    new = R["C"]
+    k = ["date", "symbol"]
+
+    def keys(x: pd.DataFrame, n: int) -> set:
+        return set(map(tuple, x[(x["rank"] > 0) & (x["rank"] <= n)][k].to_numpy()))
+
+    m = old[k + ["eligible"]].merge(new[k + ["eligible"]], on=k, suffixes=("_o", "_n"))
+    lost = int((m["eligible_o"] & ~m["eligible_n"]).sum())
+    gained = m[~m["eligible_o"] & m["eligible_n"]]
+    first = R["start"]
+    gs = (
+        json.loads((d / "gap_sensitivity.json").read_text(encoding="utf-8"))
+        if (d / "gap_sensitivity.json").exists()
+        else {}
+    )
+
+    def row(name: str, f) -> dict:
+        return {"指标": name, "修正前": f(prev), "修正后": f(cur)}
+
+    rows = [
+        row("样本外 主口径 日收益均值", lambda s: f"{s['样本外']['main']['mean'] * 100:+.4f}%"),
+        row("样本外 主口径 t", lambda s: f"{s['样本外']['main']['t']:+.2f}"),
+        row("样本外 主口径 夏普", lambda s: f"{s['样本外']['main']['sharpe']:.2f}"),
+        row(
+            "样本外 原文口径 SIP 前 20 日收益均值",
+            lambda s: f"{s['样本外']['paper_sip']['mean'] * 100:+.4f}%",
+        ),
+        row("样本外 原文口径 SIP 前 20 t", lambda s: f"{s['样本外']['paper_sip']['t']:+.2f}"),
+        row(
+            "样本外 原文口径 SIP 前 20 夏普", lambda s: f"{s['样本外']['paper_sip']['sharpe']:.2f}"
+        ),
+        row(
+            "样本外 原文口径 SIP 前 20 总收益",
+            lambda s: f"{s['样本外']['paper_sip']['total'] * 100:+.1f}%",
+        ),
+        row(
+            "样本内 原文口径 SIP 前 20 夏普", lambda s: f"{s['样本内']['paper_sip']['sharpe']:.2f}"
+        ),
+        row(
+            "样本内 原文口径 SIP 前 20 总收益",
+            lambda s: f"{s['样本内']['paper_sip']['total'] * 100:+.1f}%",
+        ),
+        row("样本内 原文口径 基础版 夏普", lambda s: f"{s['样本内']['paper_base']['sharpe']:.2f}"),
+        row(
+            "样本外 每笔净 R（原文口径，固定权益）",
+            lambda s: f"{s['样本外']['net_R']['乐观|0.00|每股 0.0035']:+.3f}",
+        ),
+        row(
+            "样本外 每笔净 R（主口径，固定权益）",
+            lambda s: f"{s['样本外']['net_R']['保守|0.01|D-013']:+.3f}",
+        ),
+        row("通过标准满足项数", lambda s: f"{s['passed']} / 6"),
+    ]
+    L = [
+        "## 实现修正（首次全量运行之后发现，已修正并重跑）",
+        "",
+        "2026-11-14 首次全量运行之后，独立核对发现两处实现与预登记不符。两处修正都不依据回测结果选择；修正前的选股与结果保存在 `sip/massive/derived/*_prefix.*`，下表并列修正前后的主要数字，本报告其余数字都是修正后的。",
+        "",
+        "1. **代码复用**：同一代码先后属于不同证券时（例如 2022-06 Facebook 改用 META、2025-05 Barrick 改用 B），旧实现把前一只证券的日线与开盘区间历史接在新证券上，新证券在头 14 个交易日内就可能被判合格并进入前 20，违反预登记修订 (2)「代码变更视为新标的（需重新累计 14 日）」。"
+        f"修正：同一代码相邻两个有日线的交易日相隔超过 {GAP_DAYS} 个自然日即视为新标的，ATR、14 日均量、RelVol 与拆股序号都从断档后重新累计（`zr.research.sip_select.GAP_DAYS`）。"
+        + (
+            "阈值敏感性（修正前的选股里，断档后前 14 行中进入前 20 的标的日个数）："
+            + "、".join(f"{g} 天 {v['top20_rows']} 个" for g, v in gs.items())
+            + (
+                "；20～60 天之间受影响的标的日相同。"
+                if all(k in gs for k in ("20", "30", "60"))
+                and gs["20"]["top20_symbols"]
+                == gs["30"]["top20_symbols"]
+                == gs["60"]["top20_symbols"]
+                and gs["20"]["top20_rows"] == gs["30"]["top20_rows"] == gs["60"]["top20_rows"]
+                else "。"
+            )
+            if gs
+            else ""
+        ),
+        f"2. **数据起点之前的拆股**：旧实现把 2021-11-15 之前执行的拆股记在该代码的第一行上，使这些股票在第 15 行被误剔一天。修正：只计本段历史之内的拆股。影响：{int((gained['date'] == first).sum())} 个标的日在 {first} 由不合格变为合格。",
+        "",
+        f"合计影响：合格标的日减少 {lost:,} 个、增加 {len(gained):,} 个（共 {int(new['eligible'].sum()):,} 个）；前 20 换掉 {len(keys(old, 20) - keys(new, 20))} 个标的日（共 {len(keys(new, 20)):,} 个），前 50 换掉 {len(keys(old, 50) - keys(new, 50))} 个。",
+        "",
+        df_to_md(pd.DataFrame(rows)),
+        "",
+    ]
+    return L
+
+
+def write(
+    R: dict, X: dict, P: dict, B: dict, G: dict | None = None, cur: dict | None = None
+) -> str:
     crit = criteria(X, P)
     npass = sum(1 for k, v in crit.items() if not k.startswith("_") and v)
     passed = npass == 6
@@ -381,9 +480,21 @@ def write(R: dict, X: dict, P: dict, B: dict, G: dict | None = None) -> str:
             and v["eligible_agree"] == 1.0
             and v["dir_agree"] == 1.0
             and (v["relvol_max_abs_diff"] or 0) < 1e-9
+            and v.get("eligible_relvol_nan_mismatch", 0) == 0
         )
+        ext = sum(len(v.get("extended_lookback", [])) for v in ck.values())
         L.append(
-            f"- 选股层：随机 {len(ck)} 个交易日（{min(ck)}～{max(ck)}），直接从归档的原始日文件 / 分钟文件用另写的逐行实现重算合格、开盘区间、RelVol、方向与前 20 名，{ok} / {len(ck)} 天与流水线完全一致（`zr.research.sip_massive_check`）。"
+            f"- 选股层：随机 {len(ck)} 个交易日（{min(ck)}～{max(ck)}），直接从归档的原始日文件 / 分钟文件用另写的逐行实现重算合格、开盘区间、RelVol、方向与前 20 名，{ok} / {len(ck)} 天与流水线完全一致（`zr.research.sip_massive_check`；RelVol 相差不超过 1e-9）。"
+            + (
+                f"核对中有 {ext} 个合格代码在近 40 个交易日里有开盘区间的不足 14 天，按预登记定义「前 14 个有开盘区间的交易日」向更早回看后再比"
+                + (
+                    "（例如 2025-04-24 的 CEP，要回溯到 2024-12）。"
+                    if "CEP" in ck.get("2025-04-24", {}).get("extended_lookback", [])
+                    else "。"
+                )
+                if ext
+                else ""
+            )
         )
     if (r_ / "independent_trades_check.json").exists():
         ck = json.loads((r_ / "independent_trades_check.json").read_text(encoding="utf-8"))
@@ -568,6 +679,8 @@ def write(R: dict, X: dict, P: dict, B: dict, G: dict | None = None) -> str:
             df_to_md(placebo_table({sg: G[sg]["placebo_paper"] for sg in mr.SEGMENTS})),
             "",
         ]
+    if cur:
+        L += fix_section(R, cur)
     L += [
         "## 边界",
         "",
@@ -662,11 +775,10 @@ def main(argv=None) -> int:
         }
         for sg in mr.SEGMENTS
     }
-    print(write(R, X, P, B, G))
+    cur = summary(R, X, P, B, G)
+    print(write(R, X, P, B, G, cur))
     sp = R["r"] / "derived" / "r057_summary.json"
-    sp.write_text(
-        json.dumps(summary(R, X, P, B, G), ensure_ascii=False, indent=1), encoding="utf-8"
-    )
+    sp.write_text(json.dumps(cur, ensure_ascii=False, indent=1), encoding="utf-8")
     print(sp)
     return 0
 

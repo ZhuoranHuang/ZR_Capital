@@ -80,3 +80,47 @@ def test_eligibility_matches_wilder_and_thresholds():
     v14 = d["d_volume"].rolling(14).mean().shift(1)
     exp = (d["d_open"] > 5) & (v14 >= 1e6) & (atr > 0.5)
     assert (f["eligible"] == exp.fillna(False)).all()
+
+
+def test_gap_resets_history_ticker_reuse():
+    """代码复用：断档超过 30 个自然日后，新标的的前 14 天不得合格，RelVol 只用断档后的开盘区间。"""
+    a = _daily(n=40, seed=1)
+    b = _daily(n=40, seed=2)
+    b["date"] = pd.bdate_range("2025-06-02", periods=40).date  # 一年多以后同一代码重新出现
+    b[["d_volume", "or_volume"]] = b[["d_volume", "or_volume"]] * 50  # 新公司成交量大得多
+    b["or_bars"] = 5
+    b[["or_open", "or_high", "or_low", "or_close"]] = (
+        b[["or_open", "or_high", "or_low", "or_close"]].ffill().bfill()
+    )
+    b["or_volume"] = b["or_volume"].fillna(b["or_volume"].median())
+    g = pd.concat([a, b], ignore_index=True)
+    f = sel.ticker_features(g, [])
+    new = f[f["date"] >= b["date"].iloc[0]].reset_index(drop=True)
+    assert not new.loc[:13, "eligible"].any()  # 前 14 天没有自己的历史
+    assert new.loc[:13, "relvol"].isna().all()
+    assert (
+        new["segment"].eq(1).all() and f.loc[f["date"] < b["date"].iloc[0], "segment"].eq(0).all()
+    )
+    alone = sel.ticker_features(b, [])  # 单独计算新标的，结果应完全一致
+    cols = ["atr_prev", "vol14_prev", "eligible", "relvol", "dir", "split_block"]
+    pd.testing.assert_frame_equal(new[cols], alone[cols], check_dtype=False)
+    # 截断测试仍通过
+    assert_no_lookahead_frame(lambda x: sel.ticker_features(x, [])[cols], g, cuts=12)
+
+
+def test_short_gap_keeps_history():
+    a = _daily(n=60, seed=3)
+    days = list(a["date"])
+    a["date"] = days[:30] + [
+        d + dt.timedelta(days=21) for d in days[30:]
+    ]  # 21 个自然日的断档：不切段
+    f = sel.ticker_features(a, [])
+    assert f["segment"].eq(0).all() and f["atr_prev"].notna().sum() == 60 - 14
+
+
+def test_split_before_history_does_not_block():
+    d = _daily()
+    f0 = sel.ticker_features(d, [])
+    f1 = sel.ticker_features(d, [d["date"].iloc[0] - dt.timedelta(days=200)])  # 数据起点之前的拆股
+    assert not f1["split_block"].any()
+    pd.testing.assert_series_equal(f0["eligible"], f1["eligible"])
