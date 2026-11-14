@@ -332,11 +332,123 @@ def verify(root: Path, days3: list[dt.date | None], cmp_days: list[dt.date | Non
     return res
 
 
+def rth_daily(m: pd.DataFrame) -> pd.DataFrame:
+    """1 分钟 K → 每只常规时段（09:30–15:59 的 K）开高低收量；不处理提前收盘日（只用于核对）。"""
+    t = ts_et(m["window_start"])
+    mm = t.dt.hour * 60 + t.dt.minute
+    r = m[(mm >= 570) & (mm < 960)].sort_values("window_start")
+    return r.groupby("ticker").agg(
+        o=("open", "first"),
+        h=("high", "max"),
+        l=("low", "min"),
+        c=("close", "last"),
+        v=("volume", "sum"),
+    )
+
+
+def lb_daily(root: Path, day: dt.date) -> pd.DataFrame:
+    """R-057 长桥测试拉取的不复权日线（sip_test/daily，30 只，2023-08 起）。"""
+    files = sorted((root / "sip_test" / "daily").glob("*.parquet"))
+    if not files:
+        return pd.DataFrame()
+    d = pd.concat(pd.read_parquet(f) for f in files)
+    d = d[d["adj"].astype(str).str.contains("no", case=False)]
+    d = d[(pd.to_datetime(d["ts"], utc=True) + pd.Timedelta(hours=12)).dt.date == day]
+    return d.assign(ticker=d["symbol"].str.replace(".US", "", regex=False)).drop_duplicates(
+        "ticker"
+    )
+
+
+def _eq(a: pd.Series, b: pd.Series) -> float:
+    return round(float((np.abs(a - b) < 1e-6).mean()), 4)
+
+
+def probe(root: Path, days: list[dt.date]) -> dict:
+    """日线口径核对：Massive 日聚合 vs 常规时段 1 分钟聚合 vs 长桥日线；长桥 1 分钟 K 是否为 SIP 的成交子集。"""
+    ff = mv.FlatFiles()
+    tmp = root / "sip" / "massive" / "tmp_probe"
+    tmp.mkdir(parents=True, exist_ok=True)
+    res: dict = {"run_utc": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"), "days": {}}
+    for day in days:
+        pd_, pm = tmp / "d.csv.gz", tmp / "m.csv.gz"
+        ff.download(mv.day_key(day, mv.DAY_PREFIX), pd_)
+        ff.download(mv.day_key(day), pm)
+        dd, m = read_aggs(pd_), read_aggs(pm)
+        r = rth_daily(m)
+        allv = m.groupby("ticker")["volume"].sum().rename("va")
+        x = dd.merge(r, left_on="ticker", right_index=True).merge(
+            allv, left_on="ticker", right_index=True
+        )
+        big = x[x["volume"] >= 1e6]
+        out: dict = {
+            "tickers_day_and_rth": len(x),
+            "day_vs_rth1m": {
+                "open": _eq(x["open"], x["o"]),
+                "high": _eq(x["high"], x["h"]),
+                "low": _eq(x["low"], x["l"]),
+                "close": _eq(x["close"], x["c"]),
+            },
+            "vol_ge_1m_n": len(big),
+            "rth1m_over_day_volume_q": [
+                round(float(q), 3) for q in (big["v"] / big["volume"]).quantile([0.05, 0.5, 0.95])
+            ],
+            "all1m_over_day_volume_q": [
+                round(float(q), 3) for q in (big["va"] / big["volume"]).quantile([0.05, 0.5, 0.95])
+            ],
+        }
+        lb = lb_daily(root, day)
+        if len(lb):
+            y = lb.merge(dd, on="ticker", suffixes=("_lb", "_m"))
+            out["lb_daily_vs_day"] = {
+                "n": len(y),
+                **{
+                    c: _eq(y[f"{c}_lb"], y[f"{c}_m"])
+                    for c in ("open", "high", "low", "close", "volume")
+                },
+            }
+        cont = {}
+        for sym in LB_CMP:
+            lbm = lb_bars(root, sym, day)
+            if lbm.empty:
+                continue
+            a_ = (
+                m[m["ticker"] == sym]
+                .assign(ts=lambda q: pd.to_datetime(q["window_start"], unit="ns", utc=True))
+                .set_index("ts")
+            )
+            b_ = (
+                lbm[lbm["volume"] > 0]
+                .assign(ts=lambda q: q["ts"].astype("datetime64[ns, UTC]"))
+                .set_index("ts")
+            )
+            j = a_.join(b_, how="inner", lsuffix="_m", rsuffix="_l")
+            et = pd.DatetimeIndex(j.index).tz_convert(ET)
+            j = j[(et.hour * 60 + et.minute >= 570) & (et.hour * 60 + et.minute < 960)]
+            cont[sym] = {
+                "n": len(j),
+                "sip_high_ge_lb": round(float((j["high_m"] >= j["high_l"] - 1e-9).mean()), 4),
+                "sip_low_le_lb": round(float((j["low_m"] <= j["low_l"] + 1e-9).mean()), 4),
+                "sip_vol_ge_lb": round(float((j["volume_m"] >= j["volume_l"]).mean()), 4),
+                "sip_over_lb_volume_sum": round(
+                    float(j["volume_m"].sum() / max(j["volume_l"].sum(), 1)), 3
+                ),
+            }
+        out["lb_1m_containment_rth"] = cont
+        res["days"][str(day)] = out
+        pd_.unlink()
+        pm.unlink()
+    tmp.rmdir()
+    (root / "sip" / "massive" / "probe.json").write_text(
+        json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8"
+    )
+    return res
+
+
 def main(argv: list[str] | None = None) -> int:
     from zr.config import get_settings
 
     p = argparse.ArgumentParser()
-    p.add_argument("--phase", choices=["verify"], required=True)
+    p.add_argument("--phase", choices=["verify", "probe"], required=True)
     p.add_argument(
         "--days3", nargs="+", default=["2017-06-15", "2021-11-15", "2024-06-07", "latest"]
     )
@@ -356,6 +468,12 @@ def main(argv: list[str] | None = None) -> int:
         (root / "sip" / "massive").mkdir(parents=True, exist_ok=True)
         verify(root, parse(a.days3), parse(a.cmp_days))
         print(root / "sip" / "massive" / "verify.json")
+    elif a.phase == "probe":
+        days = [dt.date.fromisoformat(x) for x in a.cmp_days if x != "latest"] + [
+            dt.date(2026, 10, 15)
+        ]
+        probe(root, days)
+        print(root / "sip" / "massive" / "probe.json")
     return 0
 
 
