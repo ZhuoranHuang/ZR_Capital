@@ -68,6 +68,28 @@ def relvol_summary(tr: pd.DataFrame) -> dict:
     }
 
 
+def placebo_table(PP: dict) -> pd.DataFrame:
+    rows = []
+    for sg in mr.SEGMENTS:
+        for k, nm in (
+            ("i", "(i) 合格 ∩ RelVol ≥ 1 中随机取 20 只"),
+            ("ii", "(ii) 选股不变、随机方向"),
+        ):
+            act, sims = PP[sg][k]
+            rows.append(
+                {
+                    "段": sg,
+                    "安慰剂": nm,
+                    "实际日收益均值": f"{act * 100:+.4f}%",
+                    "安慰剂均值": f"{sims.mean() * 100:+.4f}%",
+                    "95% 分位": f"{np.percentile(sims, 95) * 100:+.4f}%",
+                    "实际所在分位": f"{(sims < act).mean():.1%}",
+                    "超过 95% 分位": "是" if act > np.percentile(sims, 95) else "否",
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def criteria(X: dict, P: dict) -> dict:
     o = X["样本外"]
     m = o[mr.MAIN_NAME]
@@ -435,6 +457,33 @@ def write(R: dict, X: dict, P: dict, B: dict, G: dict | None = None) -> str:
     ]
     for sg in mr.SEGMENTS:
         L += [f"**{sg}**", "", df_to_md(fmt_be(B[sg])), ""]
+    # 安慰剂
+    L += [
+        "## 安慰剂（各 1,000 次，1 分钟执行，保守、D-013、每边 0.01，固定权益 10 万美元的日收益，不复利；判定看样本外）",
+        "",
+        df_to_md(placebo_table(P)),
+        "",
+        "(ii) 的说明：反方向要先反向穿过整个开盘区间才触发，触发笔数少（"
+        + "；".join(
+            f"{sg} 原方向 {P[sg]['n0']:,} 笔、反方向 {P[sg]['n1']:,} 笔" for sg in mr.SEGMENTS
+        )
+        + "），成本为负的口径下交易少本身就亏得少，这个对照并不对称。",
+        "",
+    ]
+    try:
+        cases = case_charts(
+            X["样本外"],
+            REPO / "docs" / "research" / "r057_cases",
+            load1=mr.bars_loader(R["r"]),
+            key=mr.MAIN_NAME,
+            title="R-057 主口径（样本外）：最近 10 笔盈利、10 笔亏损（1 分钟 K）",
+        )
+        L += [
+            f"案例图：`{__import__('pathlib').Path(cases).relative_to(REPO)}`（主口径样本外最近 10 笔盈利、10 笔亏损）。",
+            "",
+        ]
+    except Exception as e:  # noqa: BLE001
+        L += [f"案例图生成失败：{type(e).__name__}: {e}", ""]
     if G:
         L += [
             "## 补充诊断（非预登记，只为解释主口径与原文口径的差距，不用于判定、不用于挑选）",
@@ -459,46 +508,11 @@ def write(R: dict, X: dict, P: dict, B: dict, G: dict | None = None) -> str:
         L += [
             "同根先后只能用逐笔成交数据分辨；真实结果在保守与乐观之间。当前订阅是否提供逐笔成交的 flat files 未核实。",
             "",
-        ]
-    # 安慰剂
-    rows = []
-    for sg in mr.SEGMENTS:
-        for k, nm in (
-            ("i", "(i) 合格 ∩ RelVol ≥ 1 中随机取 20 只"),
-            ("ii", "(ii) 选股不变、随机方向"),
-        ):
-            act, sims = P[sg][k]
-            rows.append(
-                {
-                    "段": sg,
-                    "安慰剂": nm,
-                    "实际日收益均值": f"{act * 100:+.4f}%",
-                    "安慰剂均值": f"{sims.mean() * 100:+.4f}%",
-                    "95% 分位": f"{np.percentile(sims, 95) * 100:+.4f}%",
-                    "实际所在分位": f"{(sims < act).mean():.1%}",
-                    "超过 95% 分位": "是" if act > np.percentile(sims, 95) else "否",
-                }
-            )
-    L += [
-        "## 安慰剂（各 1,000 次，1 分钟执行，保守、D-013、每边 0.01，固定权益 10 万美元的日收益，不复利；判定看样本外）",
-        "",
-        df_to_md(pd.DataFrame(rows)),
-        "",
-    ]
-    try:
-        cases = case_charts(
-            X["样本外"],
-            REPO / "docs" / "research" / "r057_cases",
-            load1=mr.bars_loader(R["r"]),
-            key=mr.MAIN_NAME,
-            title="R-057 主口径（样本外）：最近 10 笔盈利、10 笔亏损（1 分钟 K）",
-        )
-        L += [
-            f"案例图：`{__import__('pathlib').Path(cases).relative_to(REPO)}`（主口径样本外最近 10 笔盈利、10 笔亏损）。",
+            "原文口径下的同样两种安慰剂（乐观、零滑点、每股 0.0035，固定权益 10 万美元；只看在原文假设下选股与方向本身有没有贡献）：",
+            "",
+            df_to_md(placebo_table({sg: G[sg]["placebo_paper"] for sg in mr.SEGMENTS})),
             "",
         ]
-    except Exception as e:  # noqa: BLE001
-        L += [f"案例图生成失败：{type(e).__name__}: {e}", ""]
     L += [
         "## 边界",
         "",
@@ -589,6 +603,7 @@ def main(argv=None) -> int:
             "decomp": mr.decomposition(R, sg),
             "entry": mr.entry_bar_stats(R, sg),
             "be": mr.breakeven_diag(R, sg),
+            "placebo_paper": mr.placebos(R, sg, algo="opt", slip=0.0, fee="per_share"),
         }
         for sg in mr.SEGMENTS
     }

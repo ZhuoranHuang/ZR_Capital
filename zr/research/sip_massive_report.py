@@ -210,15 +210,23 @@ def experiments(R: dict) -> dict:
     }
 
 
-def placebos(R: dict, segname: str, seed: int = 0) -> dict:
-    """固定权益 10 万美元的日收益均值（不复利）。(i) 合格 ∩ RelVol ≥ 1 中每日随机 20 只（1 分钟执行，保守 0.01，D-013）vs SIP 前 20；
-    (ii) SIP 前 20 每只随机方向。"""
+def placebos(
+    R: dict,
+    segname: str,
+    seed: int = 0,
+    algo: str = MAIN[0],
+    slip: float = MAIN[1],
+    fee: str = "d013",
+) -> dict:
+    """固定权益 10 万美元的日收益均值（不复利）。(i) 合格 ∩ RelVol ≥ 1 中每日随机 20 只（1 分钟执行）vs SIP 前 20；
+    (ii) SIP 前 20 每只随机方向。预登记口径 = 保守、每边 0.01、D-013（默认）；其他口径只用于补充诊断。
+    另返回 n0 / n1 = 前 20 中原方向 / 反方向触发的笔数。"""
     days = R["seg_days"][segname]
     nd = len(days)
     rng = np.random.default_rng(seed)
-    TB = seg(R["TB"][("cons", 0.01)], days)
+    TB = seg(R["TB"][(algo, slip)], days)
     pool = TB[TB["relvol"] >= 1]
-    p = so.portfolio(pool.assign(rank=1), 100_000, 20, 4.0, "d013", compound=False)["trades"]
+    p = so.portfolio(pool.assign(rank=1), 100_000, 20, 4.0, fee, compound=False)["trades"]
     pnl_by_day = {d: g["pnl"].to_numpy() for d, g in p.groupby("date")}
     C = R["C"]
     cand = (
@@ -237,17 +245,15 @@ def placebos(R: dict, segname: str, seed: int = 0) -> dict:
         idx = rng.random((N_DRAW, len(full))).argsort(1)[:, :k]
         sims += full[idx].sum(1) / 100_000
     sims /= nd
-    T1 = seg(R["T1"][(MAIN[0], MAIN[1])], days)
+    T1 = seg(R["T1"][(algo, slip)], days)
     t = T1[T1["rank"] <= 20]
     act_i = (
-        so.portfolio(t[t["flip"] == 0], 100_000, 20, 4.0, "d013", compound=False)["daily"][
-            "pnl"
-        ].sum()
+        so.portfolio(t[t["flip"] == 0], 100_000, 20, 4.0, fee, compound=False)["daily"]["pnl"].sum()
         / 100_000
         / nd
     )
     q = so.portfolio(
-        t.assign(rank=t["rank"] * 2 + t["flip"]), 100_000, 20, 4.0, "d013", compound=False
+        t.assign(rank=t["rank"] * 2 + t["flip"]), 100_000, 20, 4.0, fee, compound=False
     )["trades"]
     key = q["symbol"] + "|" + q["date"].astype(str)
     a = q[q["flip"] == 0].set_index(key[q["flip"] == 0])["pnl"]
@@ -256,7 +262,12 @@ def placebos(R: dict, segname: str, seed: int = 0) -> dict:
     A, B = a.reindex(keys).fillna(0).to_numpy(), b.reindex(keys).fillna(0).to_numpy()
     flips = rng.random((N_DRAW, len(keys))) < 0.5
     sims2 = np.where(flips, B[None, :], A[None, :]).sum(1) / 100_000 / nd
-    return {"i": (act_i, sims), "ii": (A.sum() / 100_000 / nd, sims2)}
+    return {
+        "i": (act_i, sims),
+        "ii": (A.sum() / 100_000 / nd, sims2),
+        "n0": int((t["flip"] == 0).sum()),
+        "n1": int((t["flip"] == 1).sum()),
+    }
 
 
 def breakeven(
