@@ -44,3 +44,25 @@ def test_day_key():
 def test_errors_carry_no_secret():
     e = m.MassiveError(403, "x" * 1000, "S3 GET /flatfiles/k")
     assert len(str(e)) < 400
+
+
+def test_compare_lb_mixed_units_and_shift():
+    import numpy as np
+    import pandas as pd
+
+    from zr.data.sip_massive import compare_lb
+
+    ts = pd.date_range("2024-04-15 13:30", periods=30, freq="1min", tz="UTC")
+    rng = np.random.default_rng(0)
+    c = 100 + rng.normal(0, 0.1, 30).cumsum()
+    m = pd.DataFrame(
+        {"ts": ts, "open": c, "high": c + 0.05, "low": c - 0.05, "close": c, "volume": 100}
+    )
+    lb = m.copy()
+    lb["ts"] = lb["ts"].astype("datetime64[us, UTC]")
+    lb.loc[3, "volume"] = 0  # 长桥占位 K 不参与比对
+    lb.loc[5, "close"] += 0.01
+    r = compare_lb(m, lb)
+    assert r["joined"] == 29 and r["only_massive"] == 1
+    assert r["close_equal_rate_shift+0"] > 0.95 and r["close_equal_rate_shift+1"] < 0.2
+    assert r["rth"]["close"]["equal_rate"] == 28 / 29

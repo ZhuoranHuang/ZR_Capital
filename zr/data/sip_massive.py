@@ -84,7 +84,8 @@ def ticker_day(df: pd.DataFrame, sym: str) -> dict:
 
 def compare_lb(m: pd.DataFrame, lb: pd.DataFrame) -> dict:
     """Massive 1 分钟 vs 长桥 1 分钟（长桥只取有成交的 K；占位 K 量为 0 不比）。偏移 −1/0/+1 分钟的收盘一致率用来核对时间戳对齐。"""
-    m = m.set_index("ts")
+    m = m.assign(ts=pd.to_datetime(m["ts"], utc=True).astype("datetime64[ns, UTC]")).set_index("ts")
+    lb = lb.assign(ts=pd.to_datetime(lb["ts"], utc=True).astype("datetime64[ns, UTC]"))
     lbv = lb[lb["volume"] > 0].set_index("ts")
     out: dict = {"massive_bars": len(m), "lb_traded_bars": len(lbv)}
     for k in (-1, 0, 1):
@@ -103,7 +104,7 @@ def compare_lb(m: pd.DataFrame, lb: pd.DataFrame) -> dict:
     )
     if not len(j):
         return out
-    et = j.index.tz_convert(ET)
+    et = pd.DatetimeIndex(j.index).tz_convert(ET)
     rth = (et.hour * 60 + et.minute >= 570) & (et.hour * 60 + et.minute < 960)
     for seg, mask in (("rth", rth), ("ext", ~rth)):
         s = j[mask]
@@ -168,6 +169,10 @@ def verify(root: Path, days3: list[dt.date | None], cmp_days: list[dt.date | Non
     tmp = root / "sip" / "massive" / "tmp_verify"
     tmp.mkdir(parents=True, exist_ok=True)
     res: dict = {"run_utc": dt.datetime.now(dt.UTC).isoformat(timespec="seconds")}
+    out = root / "sip" / "massive" / "verify.json"
+
+    def save() -> None:  # 每段完成即落盘，中途出错不丢已得结果
+        out.write_text(json.dumps(res, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
 
     # 可得范围
     _, years = ff.list(mv.MINUTE_PREFIX + "/", "/")
@@ -235,6 +240,7 @@ def verify(root: Path, days3: list[dt.date | None], cmp_days: list[dt.date | Non
         pm.unlink()
         pd_.unlink()
 
+    save()
     # 退市股抽查
     res["delisted"] = {}
     for sym, day in (("TWTR", dt.date(2022, 10, 20)), ("SIVB", dt.date(2023, 3, 8))):
@@ -275,6 +281,7 @@ def verify(root: Path, days3: list[dt.date | None], cmp_days: list[dt.date | Non
         pm.unlink()
         pd_.unlink()
 
+    save()
     # reference 规模与时点快照
     ref: dict = {}
     for ex in ("XNYS", "XNAS"):
@@ -303,6 +310,7 @@ def verify(root: Path, days3: list[dt.date | None], cmp_days: list[dt.date | Non
         {k: x.get(k) for k in ("ticker", "execution_date", "split_from", "split_to")} for x in sp
     ]
 
+    save()
     # 与长桥逐根比对
     res["lb_compare"] = {}
     for day in cmp_days:
@@ -320,6 +328,7 @@ def verify(root: Path, days3: list[dt.date | None], cmp_days: list[dt.date | Non
             )
         pm.unlink()
     tmp.rmdir()
+    save()
     return res
 
 
@@ -344,11 +353,9 @@ def main(argv: list[str] | None = None) -> int:
         def parse(xs: list[str]) -> list[dt.date | None]:
             return [None if x == "latest" else dt.date.fromisoformat(x) for x in xs]
 
-        res = verify(root, parse(a.days3), parse(a.cmp_days))
-        out = root / "sip" / "massive" / "verify.json"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(res, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
-        print(out)
+        (root / "sip" / "massive").mkdir(parents=True, exist_ok=True)
+        verify(root, parse(a.days3), parse(a.cmp_days))
+        print(root / "sip" / "massive" / "verify.json")
     return 0
 
 
