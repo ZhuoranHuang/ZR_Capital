@@ -121,3 +121,19 @@ def test_outcomes_match_simulate_trade():
                 assert np.isclose(got.entry.iloc[0], ref["entry"]) and np.isclose(
                     got.exit.iloc[0], ref["exit"]
                 )
+
+
+def test_consolidate_and_load(tmp_path):
+    from zr.data import sip_bars
+
+    m = _minute(day="2024-04-15", tickers=("MU", "SPY"))
+    m2 = _minute(day="2024-04-16", tickers=("MU",), seed=5)
+    for day, x in (("2024-04-15", m), ("2024-04-16", m2)):
+        p = tmp_path / "sip" / "massive" / "extra1m" / "2024" / f"{day}.parquet"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        ss.extra_bars(x, 960).to_parquet(p, index=False)
+    out = sip_bars.consolidate(tmp_path)
+    assert set(out) == {"MU 2024", "SPY 2024"}
+    d = sip_bars.load_sip_1m(tmp_path, "MU")
+    assert (d.session == "Intraday").all() and d.ts.is_monotonic_increasing
+    assert len(sip_bars.load_sip_1m(tmp_path, "MU", rth_only=False)) == out["MU 2024"]
