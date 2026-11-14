@@ -142,6 +142,25 @@ def lb_bars(root: Path, sym: str, day: dt.date) -> pd.DataFrame:
     return d[["ts", "open", "high", "low", "close", "volume"]]
 
 
+def all_day_keys(ff: mv.FlatFiles, prefix: str) -> list[str]:
+    objs, _ = ff.list(prefix + "/")
+    return sorted(o["key"] for o in objs if o["key"].endswith(".csv.gz"))
+
+
+def first_accessible(ff: mv.FlatFiles, keys: list[str]) -> str | None:
+    """订阅档位可下载的最早文件（HEAD 二分；假设可下载区间是连续的尾段）。"""
+    if not keys or not ff.exists(keys[-1]):
+        return None
+    lo, hi = 0, len(keys) - 1
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if ff.exists(keys[mid]):
+            hi = mid
+        else:
+            lo = mid + 1
+    return keys[lo]
+
+
 def verify(root: Path, days3: list[dt.date | None], cmp_days: list[dt.date | None]) -> dict:
     """days3 / cmp_days 里的 None 表示最新可得日。"""
     ff = mv.FlatFiles()
@@ -161,6 +180,9 @@ def verify(root: Path, days3: list[dt.date | None], cmp_days: list[dt.date | Non
     _, months = ff.list(last_year, "/")
     objs, _ = ff.list(sorted(months)[-1])
     res["minute_last_files"] = sorted(o["key"] for o in objs)[-3:]
+    keys = all_day_keys(ff, mv.MINUTE_PREFIX)
+    res["minute_files_listed"] = len(keys)
+    res["minute_first_accessible"] = first_accessible(ff, keys)
     _, dyears = ff.list(mv.DAY_PREFIX + "/", "/")
     res["day_years"] = dyears
 
