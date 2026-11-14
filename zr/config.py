@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     # 旧字段名，LONGPORT_LIVE_ACCESS_TOKEN 的兼容别名；见 longport_client.make_config 的改名提示
     longport_access_token: SecretStr | None = None
 
+    # Massive（原 Polygon.io）：REST 密钥与 flat files（S3）密钥，只在 VPS 的 .env（R-057）
+    massive_api_key: SecretStr | None = None
+    massive_s3_access_key: SecretStr | None = None
+    massive_s3_secret_key: SecretStr | None = None
+
     zr_data_root: Path = Path("./data_store")
     # 实盘总开关；实盘下单还需命令行 --live，见 CLAUDE.md
     zr_live: bool = False
