@@ -96,6 +96,8 @@ uv run pytest -q
 - 分钟文件字段 ticker, volume, open, close, high, low, window_start（UTC 纳秒，K 线开始时刻，整分钟）, transactions；覆盖 04:00–19:59 美东（含盘前盘后）；不复权；只有有成交的分钟才有行；2026 年文件 volume 为浮点（小数股）。单日约 17–28 MB、140–190 万行。
 - 日文件：window_start = 当日美东 00:00；开 = 常规时段首根 1 分钟开盘；收盘 = 官方收盘价（与 15:59 那根收盘常不同）；量 = 全天合并成交量（= 长桥日线量，> 全部分钟量之和）；高低与常规时段 1 分钟极值 90%–99% 相等。
 - reference tickers：`active=false` 含退市股与 `delisted_utc`；`date=YYYY-MM-DD` 返回当日在市的标的（含后来退市的）。splits：`execution_date`、`split_from`、`split_to`。
+- reference 的 `type` 字段有噪声：个别周的时点快照会把非普通股标成 CS（2022-08-22 约 390 只 NYSE 封闭式基金，2025-06-30 58 只优先股 / 票据）；当前代码表每个代码只有一条记录，**代码复用**（同一代码先后属于不同证券，如 META、B）要靠日线断档识别（R-057 用「相隔超过 30 个自然日视为新标的」）。
+- 源文件偶有缺分钟：SPY 2023-06-05 09:52–09:55 没有行（同日 QQQ、MU、AMD 完整）。归档 2,508 个文件 26.64 GB 在 VPS 上用时 2 小时 11 分钟；向 Mac 的 rsync 会拖慢下载，下载时先停同步。
 - **研究用的历史分钟 K 以 Massive 为准（D-038）**：MU、QQQ、SPY、SMH、AMD 的 SIP 1 分钟 K 在 `$ZR_DATA_ROOT/bars_1m_sip/`（2021-11-15 起，含盘前盘后，`zr/data/sip_bars.py` 的 `load_sip_1m`）；全部原始日文件归档在 Mac 外接盘 `$ZR_DATA_ROOT/massive_raw/`（sha256 清单已核对）。长桥分钟 K 只用于实盘侧与 App 对照。
 
 ## 指标标准口径（与长桥 App 对齐；D-028 取代 D-027 的时段/重置部分，2026-10-22）
