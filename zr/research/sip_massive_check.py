@@ -164,10 +164,67 @@ def run(n_days: int, seed: int = 7) -> dict:
     return res
 
 
+def sim_independent(
+    bars: pd.DataFrame, d: int, orh: float, orl: float, atr: float, slip: float, conservative: bool
+):
+    """逐根循环重写的执行规则（不调用 sip_orb.sim_core）：09:35 起首根触及区间边界即入场，成交 = 边界与开盘价中较不利者 ± 滑点；
+    止损 = 入场 ∓ 0.10 × ATR；保守 = 入场那根的低（高）点触及止损即按止损价出场；之后触及按止损与开盘价中较不利者出场；否则按末根收盘。"""
+    rows = list(bars.itertuples(index=False))
+    for i, b in enumerate(rows):
+        if b.m < 575:
+            continue
+        hit = b.high >= orh if d > 0 else b.low <= orl
+        if not hit:
+            continue
+        entry = (max(orh, b.open) + slip) if d > 0 else (min(orl, b.open) - slip)
+        stop = entry - 0.10 * atr if d > 0 else entry + 0.10 * atr
+        if conservative and ((d > 0 and b.low <= stop) or (d < 0 and b.high >= stop)):
+            return entry, (stop - slip) if d > 0 else (stop + slip)
+        for b2 in rows[i + 1 :]:
+            if d > 0 and b2.low <= stop:
+                return entry, min(stop, b2.open) - slip
+            if d < 0 and b2.high >= stop:
+                return entry, max(stop, b2.open) + slip
+        last = rows[-1].close
+        return entry, (last - slip) if d > 0 else (last + slip)
+    return None
+
+
+def check_trades(n: int = 300, seed: int = 11) -> dict:
+    from zr.research.sip_massive_report import bars_loader, run
+
+    R = run()
+    load = bars_loader(R["r"])
+    out = {}
+    for cfg in (("cons", 0.01), ("opt", 0.0)):
+        T = R["T1"][cfg]
+        T = T[T["flip"] == 0].sample(n=min(n, len(T)), random_state=seed).sort_values("date")
+        bad = 0
+        for r in T.itertuples():
+            b = load(r.date)
+            x = b[b["symbol"] == r.symbol].sort_values("ts")
+            et = x["ts"].dt.tz_convert("America/New_York")
+            x = x.assign(m=et.dt.hour * 60 + et.dt.minute)
+            res = sim_independent(
+                x, int(r.dir), r.or_high, r.or_low, r.atr_prev, cfg[1], cfg[0] == "cons"
+            )
+            if res is None or abs(res[0] - r.entry) > 1e-9 or abs(res[1] - r.exit) > 1e-9:
+                bad += 1
+        out[f"{cfg[0]} {cfg[1]}"] = {"checked": len(T), "mismatch": bad}
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=10)
+    ap.add_argument("--trades", action="store_true", help="只做执行层核对（随机 300 笔）")
     a = ap.parse_args(argv)
+    if a.trades:
+        res = check_trades()
+        out = mroot() / "derived" / "independent_trades_check.json"
+        out.write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(json.dumps(res, ensure_ascii=False))
+        return 0
     res = run(a.days)
     out = mroot() / "derived" / "independent_check.json"
     out.write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
