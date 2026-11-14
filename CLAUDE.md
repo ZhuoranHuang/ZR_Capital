@@ -66,6 +66,11 @@ uv run pytest -q
 - 1 分钟 K 无成交的分钟是 O=H=L=C=前收、量 0 的占位 K；合成 2 分钟 K 时不计入开高低（`resample_bars` 已处理）。长桥会事后修订 bar，回填以新值为准。
 - 逐笔推送 `trade_type` 为空的常规成交才计开高低收，零股（`I`）等只计量（2 天比对得出，未验证）。
 
+2026-11-14 R-057 实测补充（VPS）：
+- 历史 K 线有可查询标的数上限：第 101 只起 `301607 history candlestick symbol count out of limit, requested:100/limit:100`，已查过的标的仍可查；重置周期未验证。批量拉新标的前先估算额度。
+- 分钟 K（1 / 5 分钟）下限 2023-11-01：`history_candlesticks_by_date` 报 `301600 out of minute candlestick limit begin date:2023-11-01`，`by_offset` 翻页到此为止（2026-10 时为 2023-10-02，疑似滚动窗口，未验证）。
+- 日线时间戳为当日 05:00 UTC（naive）；`TradeSessions.Intraday` 只返回常规时段；`forward=True` + 美东 09:30 可取当日 390 根 1 分钟 K。
+
 ## ThetaData 已核实事实（Theta Terminal v3，2026-10-22 实测）
 
 - REST `http://127.0.0.1:25503/v3`；响应为 `{"response":[{"contract":{...},"data":[...]}]}` 嵌套，`zr/data/thetadata.py` 已展平。
