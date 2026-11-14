@@ -70,6 +70,7 @@ uv run pytest -q
 - 历史 K 线有可查询标的数上限：第 101 只起 `301607 history candlestick symbol count out of limit, requested:100/limit:100`，已查过的标的仍可查；重置周期未验证。批量拉新标的前先估算额度。
 - 分钟 K（1 / 5 分钟）下限 2023-11-01：`history_candlesticks_by_date` 报 `301600 out of minute candlestick limit begin date:2023-11-01`，`by_offset` 翻页到此为止（2026-10 时为 2023-10-02，疑似滚动窗口，未验证）。
 - 日线时间戳为当日 05:00 UTC（naive）；`TradeSessions.Intraday` 只返回常规时段；`forward=True` + 美东 09:30 可取当日 390 根 1 分钟 K。
+- 长桥 1 分钟 K 不是 SIP 全量：2023-11～2026-04 每根都在 SIP（Massive）范围内、量只有 SIP 的 1/2～1/8；2026-05 起口径改变（同一次回填，量约为 SIP 的 1/1.3～1/1.9，3%–17% 的分钟高低点超出 SIP）。长桥日线量 = SIP 日量。长桥分钟量与 SIP 分钟量不可混用（`docs/research/R057_MASSIVE_DATA.md`）。
 
 ## ThetaData 已核实事实（Theta Terminal v3，2026-10-22 实测）
 
@@ -86,6 +87,15 @@ uv run pytest -q
 - 单到期日 `strike=*` 1 分钟 quote ≈ 22 MB / 5 s；SPY 一天（DTE≤5）≈ 31 s、1.9 MB parquet。
 - 本机 LightGBM 缺 `libomp`（无 Homebrew），`zr/research/meta_model.py` 自动回退 sklearn HistGradientBoosting。
 - 终端连上游用 gRPC，只认 HTTP CONNECT 代理；SOCKS 会导致 `MDDS upstream unavailable`。默认直连，`run_theta_terminal.sh --proxy` 才启用（需 `THETA_HTTP_PROXY`）。
+
+## Massive（原 Polygon.io）已核实事实（2026-11-14 VPS 实测，`docs/research/R057_MASSIVE_DATA.md`）
+
+- 密钥只在 VPS `.env`（MASSIVE_API_KEY、MASSIVE_S3_ACCESS_KEY、MASSIVE_S3_SECRET_KEY）；客户端 `zr/data/massive.py`（S3 SigV4 用标准库实现，REST 用 Bearer 头，均不打印密钥）。
+- flat files：`https://files.massive.com`，bucket `flatfiles`，键 `us_stocks_sip/{minute_aggs_v1,day_aggs_v1}/YYYY/MM/YYYY-MM-DD.csv.gz`，只有交易日有文件。REST：`https://api.massive.com`。
+- 当前订阅（Stocks Developer）可下载最早 2021-11-15，更早返回 403（列表仍能列出 2003-09 起的文件）；疑似滚动 5 年窗口（未验证）。reference 接口不受此限（`date=2017-06-15` 可查）。
+- 分钟文件字段 ticker, volume, open, close, high, low, window_start（UTC 纳秒，K 线开始时刻，整分钟）, transactions；覆盖 04:00–19:59 美东（含盘前盘后）；不复权；只有有成交的分钟才有行；2026 年文件 volume 为浮点（小数股）。单日约 17–28 MB、140–190 万行。
+- 日文件：window_start = 当日美东 00:00；开 = 常规时段首根 1 分钟开盘；收盘 = 官方收盘价（与 15:59 那根收盘常不同）；量 = 全天合并成交量（= 长桥日线量，> 全部分钟量之和）；高低与常规时段 1 分钟极值 90%–99% 相等。
+- reference tickers：`active=false` 含退市股与 `delisted_utc`；`date=YYYY-MM-DD` 返回当日在市的标的（含后来退市的）。splits：`execution_date`、`split_from`、`split_to`。
 
 ## 指标标准口径（与长桥 App 对齐；D-028 取代 D-027 的时段/重置部分，2026-10-22）
 
