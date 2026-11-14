@@ -363,6 +363,17 @@ def _eq(a: pd.Series, b: pd.Series) -> float:
     return round(float((np.abs(a - b) < 1e-6).mean()), 4)
 
 
+def monthly_days(ff: mv.FlatFiles, start: str, end: str) -> list[dt.date]:
+    """每月 15 日或之后的第一个有文件的交易日（交易日以 flat files 实际存在的文件为准）。"""
+    ds = [dt.date.fromisoformat(k.split("/")[-1][:10]) for k in all_day_keys(ff, mv.MINUTE_PREFIX)]
+    ds = [d for d in ds if start <= str(d) <= end]
+    out: dict[tuple[int, int], dt.date] = {}
+    for d in ds:
+        if d.day >= 15 and (d.year, d.month) not in out:
+            out[(d.year, d.month)] = d
+    return sorted(out.values())
+
+
 def probe(root: Path, days: list[dt.date]) -> dict:
     """日线口径核对：Massive 日聚合 vs 常规时段 1 分钟聚合 vs 长桥日线；长桥 1 分钟 K 是否为 SIP 的成交子集。"""
     ff = mv.FlatFiles()
@@ -406,6 +417,10 @@ def probe(root: Path, days: list[dt.date]) -> dict:
                     for c in ("open", "high", "low", "close", "volume")
                 },
             }
+            vr = y["volume_lb"] / y["volume_m"]
+            out["lb_daily_vs_day"]["volume_ratio_lb_over_m_q"] = [
+                round(float(q), 4) for q in vr.quantile([0.0, 0.5, 1.0])
+            ]
         cont = {}
         for sym in LB_CMP:
             lbm = lb_bars(root, sym, day)
@@ -424,6 +439,9 @@ def probe(root: Path, days: list[dt.date]) -> dict:
             j = a_.join(b_, how="inner", lsuffix="_m", rsuffix="_l")
             et = pd.DatetimeIndex(j.index).tz_convert(ET)
             j = j[(et.hour * 60 + et.minute >= 570) & (et.hour * 60 + et.minute < 960)]
+            out.setdefault("lb_1m_compare", {})[sym] = compare_lb(
+                a_.reset_index()[["ts", "open", "high", "low", "close", "volume"]], lbm
+            )
             cont[sym] = {
                 "n": len(j),
                 "sip_high_ge_lb": round(float((j["high_m"] >= j["high_l"] - 1e-9).mean()), 4),
@@ -457,6 +475,8 @@ def main(argv: list[str] | None = None) -> int:
         nargs="+",
         default=["2023-11-15", "2024-04-15", "2024-12-16", "2025-04-09", "2025-10-15", "latest"],
     )
+    p.add_argument("--probe-from", default="2023-11-01")
+    p.add_argument("--probe-to", default="2026-10-31")
     a = p.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     root = get_settings().zr_data_root
@@ -469,10 +489,7 @@ def main(argv: list[str] | None = None) -> int:
         verify(root, parse(a.days3), parse(a.cmp_days))
         print(root / "sip" / "massive" / "verify.json")
     elif a.phase == "probe":
-        days = [dt.date.fromisoformat(x) for x in a.cmp_days if x != "latest"] + [
-            dt.date(2026, 10, 15)
-        ]
-        probe(root, days)
+        probe(root, monthly_days(mv.FlatFiles(), a.probe_from, a.probe_to))
         print(root / "sip" / "massive" / "probe.json")
     return 0
 
