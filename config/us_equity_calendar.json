@@ -1,13 +1,135 @@
 {
  "source": "ThetaData /v3/calendar/year_holidays（交易所日程，经本地 Theta Terminal）",
- "fetched_utc": "2026-10-22T02:47:37+00:00",
+ "fetched_utc": "2026-11-14T02:19:49+00:00",
  "years": [
+  2021,
+  2022,
   2023,
   2024,
   2025,
   2026
  ],
  "days": [
+  {
+   "date": "2021-01-01",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2021-01-18",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2021-02-15",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2021-04-02",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2021-05-31",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2021-07-05",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2021-09-06",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2021-11-25",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2021-11-26",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2021-12-24",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2022-01-17",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2022-02-21",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2022-04-15",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2022-05-30",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2022-06-20",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2022-07-04",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2022-09-05",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2022-11-24",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2022-11-25",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2022-12-26",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
   {
    "date": "2023-01-02",
    "type": "full_close",

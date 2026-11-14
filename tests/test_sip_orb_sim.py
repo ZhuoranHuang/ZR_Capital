@@ -114,3 +114,28 @@ def test_portfolio_compounding_identity():
     assert r["trades"]["shares"].iloc[2] == so.shares(
         100_000 + r["trades"]["pnl"].iloc[:2].sum(), 20, 0.5, 10.0, 4.0
     )
+
+
+def test_portfolio_per_day_n_dict():
+    import datetime as dt
+
+    import pandas as pd
+
+    from zr.research import sip_orb as so
+
+    d1, d2 = dt.date(2024, 1, 2), dt.date(2024, 1, 3)
+    T = pd.DataFrame(
+        {
+            "date": [d1, d2],
+            "dir": [1, 1],
+            "atr": [1.0, 1.0],
+            "entry": [50.0, 50.0],
+            "exit": [51.0, 51.0],
+            "rank": [1, 1],
+        }
+    )
+    p = so.portfolio(T, 100_000, {d1: 10, d2: 40}, 4.0, "per_share", compound=False)
+    sh = p["trades"]["shares"].to_numpy()
+    # 风险 = 10 万 / N × 1%，股数 = floor(风险 / 0.1)，名义上限 4 × 10 万 / N
+    assert sh[0] == min(int(100_000 / 10 * 0.01 / 0.1), int(4 * 100_000 / 10 / 50))
+    assert sh[1] == min(int(100_000 / 40 * 0.01 / 0.1), int(4 * 100_000 / 40 / 50))

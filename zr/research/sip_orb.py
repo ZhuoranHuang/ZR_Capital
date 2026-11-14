@@ -101,21 +101,31 @@ def wilder_atr(h: pd.Series, l_: pd.Series, c: pd.Series, n: int = LOOKBACK) -> 
     return tr.ewm(alpha=1 / n, adjust=False, min_periods=n).mean()
 
 
-def daily_eligibility(d: pd.DataFrame) -> pd.DataFrame:
+def daily_eligibility(d: pd.DataFrame, split_dates=None) -> pd.DataFrame:
     """单个标的的日线（不复权 open/high/low/close/volume + 前复权 fwd_open，按日期升序）→ 每日合格标记。
     当日合格 ⇔ 当日开盘 > 5 美元 且 前 14 个交易日日均量 ≥ 100 万股 且 前一日 ATR(14)（Wilder，不复权）> 0.50 美元
     且不在拆股剔除期内。除当日开盘价外只用前一日及更早的数据；拆股识别用前复权开盘 ÷ 不复权开盘的因子
-    （开盘即可知），因子单日变化超过 ×1.2 / ÷1.2 记为拆股日 s，交易日序号 s … s+14 剔除。"""
+    （开盘即可知），因子单日变化超过 ×1.2 / ÷1.2 记为拆股日 s，交易日序号 s … s+14 剔除。
+    split_dates 不为 None 时（R-057 Massive 版）：拆股日取自拆股接口的执行日（提前公告，开盘即可知，调用方已按
+    ×1.2 / ÷1.2 过滤），s = 该标的第一个日期 ≥ 执行日的交易日序号，不需要 fwd_open。"""
     d = d.sort_values("date").reset_index(drop=True)
     atr = wilder_atr(d["high"], d["low"], d["close"])
     out = pd.DataFrame({"date": d["date"], "open": d["open"]})
     out["atr_prev"] = atr.shift(1)
     out["vol14_prev"] = d["volume"].rolling(LOOKBACK, min_periods=LOOKBACK).mean().shift(1)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        f = (d["fwd_open"] / d["open"]).to_numpy()
-        ch = np.r_[1.0, f[:-1] / f[1:]]
-    split = (ch > SPLIT_BAND) | (ch < 1 / SPLIT_BAND)
     idx = np.arange(len(d))
+    if split_dates is None:
+        with np.errstate(invalid="ignore", divide="ignore"):
+            f = (d["fwd_open"] / d["open"]).to_numpy()
+            ch = np.r_[1.0, f[:-1] / f[1:]]
+        split = (ch > SPLIT_BAND) | (ch < 1 / SPLIT_BAND)
+    else:
+        dates = np.asarray(d["date"], dtype=object)
+        split = np.zeros(len(d), bool)
+        for x in split_dates:
+            k = int(np.searchsorted(dates, x, side="left"))
+            if k < len(d):
+                split[k] = True
     last_split = np.maximum.accumulate(np.where(split, idx, -(10**9)))
     out["split_block"] = (idx - last_split) <= SPLIT_BLOCK
     out["eligible"] = (
@@ -147,6 +157,13 @@ def opening_range(b5: pd.DataFrame) -> pd.DataFrame:
             "or_vol": first["volume"],
         }
     )
+    return or_stats(o)
+
+
+def or_stats(o: pd.DataFrame) -> pd.DataFrame:
+    """每日开盘区间（date、or_open、or_high、or_low、or_close、or_vol，按日期升序、只含有开盘区间的日子）→ 加 RelVol 与方向。
+    RelVol = 当日 ORVol ÷ 前 14 个有开盘区间的交易日 ORVol 均值（不足 14 个 → 空）。方向：收 > 开 = +1，收 < 开 = −1，相等 = 0。"""
+    o = o.reset_index(drop=True).copy()
     base = o["or_vol"].rolling(LOOKBACK, min_periods=LOOKBACK).mean().shift(1)
     with np.errstate(invalid="ignore", divide="ignore"):
         o["relvol"] = np.where(base > 0, o["or_vol"] / base, np.nan)
@@ -286,9 +303,10 @@ def shares_vec(equity, n, atr, entry, lev) -> np.ndarray:
 
 
 def portfolio(
-    T: pd.DataFrame, equity0: float, n: int | None, lev: float, fee: str, compound: bool = True
+    T: pd.DataFrame, equity0: float, n, lev: float, fee: str, compound: bool = True
 ) -> dict:
-    """逐日：当日所有仓位按当日期初权益定股数（N = n；n 为 None 时 N = 当日笔数），日末权益 = 期初 + Σ 盈亏。
+    """逐日：当日所有仓位按当日期初权益定股数（N = n；n 为 None 时 N = 当日笔数；n 为 dict 时 N = n[日期]，
+    R-057 Massive 版基础版用「当日合格且非十字星只数」，09:35 已知），日末权益 = 期初 + Σ 盈亏。
     T：date / dir / atr / entry / exit（成交价，已含滑点）。compound=False 时每日都用 equity0（安慰剂比较用）。"""
     T = T.sort_values(["date", "rank"] if "rank" in T else ["date"], kind="mergesort").reset_index(
         drop=True
@@ -298,7 +316,7 @@ def portfolio(
     d_all, a_all, e_all, x_all = (T[k].to_numpy() for k in ("dir", "atr", "entry", "exit"))
     for day, ix in T.groupby("date", sort=True).indices.items():
         base = eq if compound else equity0
-        N = n if n is not None else len(ix)
+        N = n[day] if isinstance(n, dict) else (n if n is not None else len(ix))
         sh = shares_vec(base, N, a_all[ix], e_all[ix], lev)
         p = sh * d_all[ix] * (x_all[ix] - e_all[ix]) - fees_vec(
             sh, e_all[ix], x_all[ix], d_all[ix], fee
