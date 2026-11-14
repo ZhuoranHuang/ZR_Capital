@@ -516,6 +516,69 @@ def write(R: dict, X: dict, P: dict, B: dict, G: dict | None = None) -> str:
     return str(out)
 
 
+def summary(R: dict, X: dict, P: dict, B: dict, G: dict) -> dict:
+    """关键数字（写入 derived/r057_summary.json，供 RESEARCH_LOG / STATUS 引用）。"""
+    crit = criteria(X, P)
+
+    def mm(sg: str, name: str) -> dict:
+        m = X[sg][name]["m"]
+        return {
+            k: (float(m[k]) if k != "trades" and k != "days" else int(m[k]))
+            for k in (
+                "days",
+                "trades",
+                "mean",
+                "t",
+                "sharpe",
+                "total",
+                "irr",
+                "vol",
+                "mdd",
+                "hit_day",
+            )
+        }
+
+    out = {
+        "start": str(R["start"]),
+        "last": str(R["last"]),
+        "days": {sg: len(R["seg_days"][sg]) for sg in mr.SEGMENTS},
+        "criteria": {k: v for k, v in crit.items() if not k.startswith("_")},
+        "years": {str(k): float(v) for k, v in crit["_years"].items()},
+        "passed": int(sum(1 for k, v in crit.items() if not k.startswith("_") and v)),
+    }
+    for sg in mr.SEGMENTS:
+        d = G[sg]["decomp"].set_index(["算法", "每边滑点", "佣金"])["每笔净 R"]
+        out[sg] = {
+            "main": mm(sg, mr.MAIN_NAME),
+            "paper_sip": mm(sg, mr.PAPER_SIP),
+            "paper_base": mm(sg, mr.PAPER_BASE),
+            "breakeven_main": {
+                k: (None if not np.isfinite(v) else float(v))
+                for k, v in B[sg]
+                .iloc[0][["零滑点每笔盈亏（美元）", "盈亏平衡滑点（美元 / 边）"]]
+                .items()
+            },
+            "breakeven_diag": [
+                {
+                    k: (v if isinstance(v, str) else (None if not np.isfinite(v) else float(v)))
+                    for k, v in r.items()
+                }
+                for r in G[sg]["be"].to_dict("records")
+            ],
+            "net_R": {"|".join(k): float(v) for k, v in d.items()},
+            "entry": {k: float(v) for k, v in G[sg]["entry"].items()},
+            "placebo": {
+                k: {
+                    "actual": float(P[sg][k][0]),
+                    "p95": float(np.percentile(P[sg][k][1], 95)),
+                    "pct": float((P[sg][k][1] < P[sg][k][0]).mean()),
+                }
+                for k in ("i", "ii")
+            },
+        }
+    return out
+
+
 def main(argv=None) -> int:
     R = mr.run()
     X = mr.experiments(R)
@@ -530,6 +593,11 @@ def main(argv=None) -> int:
         for sg in mr.SEGMENTS
     }
     print(write(R, X, P, B, G))
+    sp = R["r"] / "derived" / "r057_summary.json"
+    sp.write_text(
+        json.dumps(summary(R, X, P, B, G), ensure_ascii=False, indent=1), encoding="utf-8"
+    )
+    print(sp)
     return 0
 
 
