@@ -128,6 +128,27 @@ def inventory(root: Path) -> str:
         "常规时段应有根数按交易所日程（提前收盘日 13:00）计算；缺根 = 该分钟在源文件里没有行（没有成交，或源数据缺）。"
         + ("缺根天数 ≤ 3 的标的逐日列出：" + "；".join(gaps) + "。" if gaps else ""),
     ]
+    sec = root / "bars_1s_sip"
+    if sec.exists():
+        L += [
+            "",
+            "SIP 秒级 K（`bars_1s_sip/underlying=<代码>/date=<日>/bars.parquet`，含盘前盘后，不复权，只有有成交的秒；`zr/data/massive_seconds.py`）：",
+            "",
+            "| 标的 | 最早 | 最晚 | 交易日文件数 | 大小 |",
+            "|---|---|---|---|---|",
+        ]
+        for d in sorted(sec.glob("underlying=*")):
+            fs = sorted(d.glob("date=*/bars.parquet"))
+            if fs:
+                L.append(
+                    f"| {d.name.split('=')[1]} | {fs[0].parent.name[5:]} | {fs[-1].parent.name[5:]} | {len(fs):,} | {sum(f.stat().st_size for f in fs) / 1e9:.2f} GB |"
+                )
+        fa = sec / "first_accessible.txt"
+        if fa.exists():
+            L += [
+                "",
+                f"当前档位秒级聚合最早可取日：{fa.read_text(encoding='utf-8').strip()}（滚动约 5 年）。",
+            ]
     m = root / "sip" / "massive"
     L += ["", "R-057 逐日产出（`sip/massive/`）：", ""]
     for name, desc in (

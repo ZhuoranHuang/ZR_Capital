@@ -60,11 +60,59 @@ def to_md(rows: list[dict]) -> str:
     return "\n".join(L)
 
 
+def replace_section(doc: Path, heading_prefix: str, text: str) -> None:
+    """docs 里以 heading_prefix 开头的二级标题整节替换为 text；没有就追加到末尾。"""
+    body = doc.read_text(encoding="utf-8")
+    if heading_prefix in body:
+        i = body.index(heading_prefix)
+        j = body.find("\n## ", i + 1)
+        body = body[:i] + text.rstrip("\n") + "\n" + (body[j:] if j >= 0 else "")
+    else:
+        body = body.rstrip("\n") + "\n\n" + text.rstrip("\n") + "\n"
+    doc.write_text(body, encoding="utf-8")
+
+
+def overview_section(root: Path, vps_json: str | None = None) -> str:
+    """Mac 数据根总览；给了 VPS 的 --json 输出时，另列 VPS 上有而 Mac 没有（或更旧）的数据集。"""
+    import datetime as dt
+
+    rows = scan(root)
+    L = [
+        f"## 数据总览（Mac 外接盘 `$ZR_DATA_ROOT`；`zr/data/inventory.py --write-doc`，{dt.datetime.now(dt.UTC):%Y-%m-%d %H:%M} UTC 生成）",
+        "",
+        "数据集 = 数据根下第一层目录（带 underlying= 分区的按标的拆开）；最早 / 最晚取自路径里的日期或年份。",
+        "",
+        to_md(rows),
+        "",
+    ]
+    if vps_json:
+        mac = {r["dataset"]: r for r in rows}
+        vps = json.loads(Path(vps_json).read_text(encoding="utf-8"))
+        only = [
+            r
+            for r in vps
+            if r["dataset"] not in mac
+            or mac[r["dataset"]]["files"] < r["files"]
+            or (mac[r["dataset"]]["last"] or "") < (r["last"] or "")
+        ]
+        L += [
+            f"VPS `~/zr_data` 共 {sum(r['bytes'] for r in vps) / 1e9:.2f} GB、{len(vps)} 个数据集；其中 Mac 没有或更旧的：",
+            "",
+            to_md(only) if only else "（无）",
+            "",
+        ]
+    return "\n".join(L)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--skip", nargs="*", default=[])
+    ap.add_argument(
+        "--write-doc", action="store_true", help="写入 docs/DATA_INVENTORY.md 的「数据总览」小节"
+    )
+    ap.add_argument("--vps-json", help="VPS 上 --json 的输出文件，用于列出只在 VPS 的数据")
     a = ap.parse_args(argv)
     if a.root:
         root = Path(os.path.expanduser(a.root))
@@ -72,6 +120,11 @@ def main(argv: list[str] | None = None) -> int:
         from zr.config import get_settings
 
         root = Path(get_settings().zr_data_root)
+    if a.write_doc:
+        doc = Path(__file__).resolve().parents[2] / "docs" / "DATA_INVENTORY.md"
+        replace_section(doc, "## 数据总览", overview_section(root, a.vps_json))
+        print(doc)
+        return 0
     rows = scan(root, tuple(a.skip))
     print(json.dumps(rows, ensure_ascii=False) if a.json else to_md(rows))
     return 0

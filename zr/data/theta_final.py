@@ -507,12 +507,42 @@ def coverage(root: Path, end: dt.date) -> dict:
     return out
 
 
+def coverage_section(root: Path, end: dt.date) -> str:
+    cov = coverage(root, end)
+    stop = root / "theta_final" / "STOPPED.md"
+    L = [
+        f"## ThetaData 收尾拉取（`zr/data/theta_final.py --phase coverage`，{dt.datetime.now(dt.UTC):%Y-%m-%d %H:%M} UTC 生成；应有交易日算到 {end}）",
+        "",
+        "`options_1m/`：期权 1 分钟（MU、QQQ、SPY 含报价 / OHLC / 持仓；IWM、NVDA、TSLA、AAPL、AMD 只有报价，到期日 7 天内）。"
+        "`options_eod/`：日线级，每个标的每天全部合约——`eod.parquet`（收盘报价、成交量、隐含波动率与希腊值；source = eod 的日子只有报价与成交量）与 `oi.parquet`（持仓量）。",
+        "",
+        "| 数据集 | 最早 | 最晚 | 已有天数 | 应有天数 | 缺 | 小文件（< 4 KB，多为当日无数据） |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for k, v in cov.items():
+        miss = v["missing"] if isinstance(v["missing"], int) else len(v["missing"])
+        small = v.get("small_files(<4KB，多为无数据)", "—")
+        L.append(
+            f"| `{k}` | {v['first']} | {v['last']} | {v['days']:,} | {v['expected']:,} | {miss} | {small} |"
+        )
+    L += [
+        "",
+        ("**拉取中途停止**：" + stop.read_text(encoding="utf-8").replace("\n", " ").strip())
+        if stop.exists()
+        else "拉取没有因订阅失效而停止。",
+        "",
+    ]
+    return "\n".join(L)
+
+
 def main(argv: list[str] | None = None) -> int:
     from zr.config import get_settings
 
     ap = argparse.ArgumentParser()
     ap.add_argument(
-        "--phase", choices=["time", "p1", "p2", "p3", "p4", "all", "coverage"], required=True
+        "--phase",
+        choices=["time", "p1", "p2", "p3", "p4", "all", "coverage", "write-doc"],
+        required=True,
     )
     ap.add_argument("--end", help="最新交易日，默认自动判断")
     ap.add_argument("--symbols", nargs="*")
@@ -520,6 +550,13 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     root = Path(get_settings().zr_data_root)
     end = dt.date.fromisoformat(a.end) if a.end else latest_complete_day()
+    if a.phase == "write-doc":
+        from zr.data.inventory import replace_section
+
+        doc = Path(__file__).resolve().parents[2] / "docs" / "DATA_INVENTORY.md"
+        replace_section(doc, "## ThetaData 收尾拉取", coverage_section(root, end))
+        print(doc)
+        return 0
     if a.phase == "coverage":
         print(json.dumps(coverage(root, end), ensure_ascii=False, indent=1))
         return 0
