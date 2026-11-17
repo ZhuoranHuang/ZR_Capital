@@ -124,14 +124,50 @@ def probe(root: Path) -> dict:
     return res
 
 
-class Stop(Exception):
-    pass
+def accessible(rest: mv.Rest, sym: str, day: dt.date) -> bool:
+    try:
+        rest.get(
+            f"/v2/aggs/ticker/{sym}/range/1/second/{day}/{day}", {"adjusted": "false", "limit": 1}
+        )
+        return True
+    except mv.MassiveError as e:
+        if e.status in (401, 403):
+            return False
+        raise
+
+
+def first_accessible(rest: mv.Rest, days: list[dt.date]) -> dt.date | None:
+    """当前档位可取的最早交易日（二分；假设可取区间是连续的尾段）。最新一天也取不到 = 订阅失效。"""
+    if not days or not accessible(rest, "SPY", days[-1]):
+        return None
+    lo, hi = 0, len(days) - 1
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if accessible(rest, "SPY", days[mid]):
+            hi = mid
+        else:
+            lo = mid + 1
+    return days[lo]
 
 
 def pull(root: Path, symbols: tuple[str, ...], start: str, workers: int = 4) -> dict:
     rest = mv.Rest()
     o = out_root(root)
     days = trading_days(start)
+    first = first_accessible(rest, days)
+    if first is None:
+        return {
+            "total": 0,
+            "done": 0,
+            "rows": 0,
+            "stopped": "订阅失效或无权限：最新交易日也取不到",
+            "hours": 0,
+        }
+    days = [d for d in days if d >= first]
+    o.mkdir(parents=True, exist_ok=True)
+    (o / "first_accessible.txt").write_text(
+        f"{first}（{dt.datetime.now(dt.UTC):%Y-%m-%d} UTC 探查）\n", encoding="utf-8"
+    )
     todo = [
         (s, d)
         for s in symbols
