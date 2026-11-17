@@ -1,7 +1,12 @@
 {
  "source": "ThetaData /v3/calendar/year_holidays（交易所日程，经本地 Theta Terminal）",
- "fetched_utc": "2026-11-14T02:19:49+00:00",
+ "fetched_utc": "2026-11-17T23:51:12+00:00",
  "years": [
+  2016,
+  2017,
+  2018,
+  2019,
+  2020,
   2021,
   2022,
   2023,
@@ -10,6 +15,348 @@
   2026
  ],
  "days": [
+  {
+   "date": "2016-01-01",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2016-01-18",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2016-02-15",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2016-03-25",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2016-05-30",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2016-07-04",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2016-09-05",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2016-11-24",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2016-11-25",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2016-12-26",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2017-01-02",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2017-01-16",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2017-02-20",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2017-04-14",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2017-05-29",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2017-07-03",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2017-07-04",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2017-09-04",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2017-11-23",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2017-11-24",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2017-12-25",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2018-01-01",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2018-01-15",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2018-02-19",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2018-03-30",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2018-05-28",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2018-07-03",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2018-07-04",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2018-09-03",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2018-11-22",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2018-11-23",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2018-12-05",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2018-12-24",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2018-12-25",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2019-01-01",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2019-01-21",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2019-02-18",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2019-04-19",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2019-05-27",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2019-07-03",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2019-07-04",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2019-09-02",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2019-11-28",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2019-11-29",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2019-12-24",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2019-12-25",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2020-01-01",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2020-01-20",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2020-02-17",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2020-04-10",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2020-05-25",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2020-07-03",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2020-09-07",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2020-11-26",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
+  {
+   "date": "2020-11-27",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2020-12-24",
+   "type": "early_close",
+   "open": "09:30:00",
+   "close": "13:00:00"
+  },
+  {
+   "date": "2020-12-25",
+   "type": "full_close",
+   "open": null,
+   "close": null
+  },
   {
    "date": "2021-01-01",
    "type": "full_close",
