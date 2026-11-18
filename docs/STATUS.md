@@ -1,6 +1,6 @@
 # 状态
 
-更新：2026-11-14 SGT · docs/r057-close-project-brief → main（一页简报见 `docs/PROJECT_BRIEF.md`）
+更新：2026-11-19 SGT · data/final-pull-intraday → main（退订前收尾拉取；一页简报见 `docs/PROJECT_BRIEF.md`）
 
 ## 阶段
 
@@ -22,6 +22,14 @@
 | 期权是不是贵 | SPY 0DTE 开盘 IV 均值 0.17，随后 RV 低 0.08–0.10，**22/22 天 RV<IV** | RV_VS_IV |
 
 ## 进行中
+
+- **退订前收尾拉取（data/final-pull-intraday，2026-11-18～19，只拉数据、不做研究）**：全部完成，ThetaData 与 Massive 都没有返回权限错误。
+  ThetaData（`zr/data/theta_final.py`）：P1 MU / QQQ / SPY 期权 1 分钟补到 2026-11-17（各 19 天）；P2 QQQ / SPY 全链每日持仓 2023-10-02 起（各 786 天），
+  1 分钟 OHLC 由现有 `options_1m` 覆盖；P3 IWM / NVDA / TSLA / AAPL / AMD 期权 1 分钟报价 2025-11-18～2026-11-17（各 251 天）；
+  P4 15 只标的日线全合约（收盘报价、量、IV 与希腊值、持仓）2016-01-04～2026-11-17，各 2,735 天、缺 0，另补 FB（Facebook 改名前）2016-01-04～2022-06-09。
+  期权 flat file 在 Standard 档 403（需 Professional），按标的逐日拉；希腊值接口 2016 年部分标的无数据（退回只有报价）。0 行与只有报价的日子已全部重新请求一遍。
+  Massive（VPS，`zr/data/massive_seconds.py`）：9 只标的秒级 K 2021-11-18～2026-11-17，各 1,254 天；原始日文件补到 2026-11-17（2,514 个，Mac 核对后 VPS 副本已删）。
+  Theta Terminal 已停止；**ThetaData 尚未退订**（是否退订由负责人操作）。覆盖与缺口见 `docs/DATA_INVENTORY.md`「ThetaData 收尾拉取」「Massive」「数据总览」。
 
 - **R-057 SIP 开盘区间突破复现（research/r057-sip-orb-massive，2026-11-14，Massive 全市场数据）**：**复现不成立，已结项**（预登记标准 0 / 6；负责人 2026-11-14 决定不再投入，见待确认 0r）。样本外数据（2024-01～2026-11）已被查看，今后在这套数据上的新规则只算探索性结果，需用之后新增的数据验证。样本外 720 个交易日（2024-01-02～2026-11-12）：主口径日收益均值 -0.909%（t -31.91）；同一段按原文口径（乐观、每股 0.0035、零滑点）夏普 1.73（t +2.93）。每笔净 R（样本外、固定权益）：原文口径 +0.153 → 换长桥费率 +0.069 → 加每边 0.01 滑点 -0.094 → 保守算法 -0.675；乐观算法下盈亏平衡滑点每边 0.0091 美元（D-013 下 0.0038）；保守算法下 58.5% 的交易入场当根判止损，其中 44.0% 的先后无法用 1 分钟 K 分辨。样本内复现检查（2021-12～2023-12，只有原文 8 年中的约 2.1 年）：原文口径夏普 1.10 对原文 2.81，未能解释差距（选股、执行经独立重算核对一致）。不进入策略候选。数据：全部原始日文件（2,508 个、26.64 GB）已归档到 Mac 外接盘并核对 sha256，VPS 副本已删；MU / QQQ / SPY / SMH / AMD 的 SIP 1 分钟 K 在 `bars_1m_sip/`（D-038）。见 `docs/research/R057_SIP_ORB.md`、`docs/research/R057_MASSIVE_DATA.md`、`docs/research/LONGBRIDGE_MINUTE_DEPENDENCY.md`。
 

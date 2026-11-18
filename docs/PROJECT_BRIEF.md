@@ -1,6 +1,6 @@
 # 项目简报
 
-更新：2026-11-14。数字均引自所列编号的登记结果（`docs/RESEARCH_LOG.md`、`docs/DECISIONS.md`），细节以原报告为准。
+更新：2026-11-19（数据部分；其余同 2026-11-14）。数字均引自所列编号的登记结果（`docs/RESEARCH_LOG.md`、`docs/DECISIONS.md`），细节以原报告为准。
 **现状：没有任何规则进入策略候选；实盘未开始，只有纸面助手在跑。**
 
 ## 目标与硬约束
@@ -43,14 +43,24 @@
 
 - **回测引擎两个**：`zr/sim/engine.py` v1.1（期权报价 + 信号，带账户层；正股模式 `zr/sim/stock.py`，规则入口 `scripts/run_rule.py`）；`zr/backtest/intrabar.py`（逐秒评估、tick 级成交，R-048 验收后不再修改）。
 - **研究流水线**：RESEARCH_LOG 预登记 → `zr/research/leakcheck.py` 截断测试 → `zr/research/timing/`（特征、标签、随机对照、按日聚类统计）→ 报告。全市场：`zr/data/sip_stream.py` → `zr/research/sip_select.py` → `zr/research/sip_massive_report.py`。
-- **数据**（Mac 外接盘 `$ZR_DATA_ROOT`，清单 `docs/DATA_INVENTORY.md`）：
-  - Massive 全市场 1 分钟与日聚合原始文件：2021-11-15～2026-11-12，2,508 个、26.64 GB，`massive_raw/`，校验和已核对。订阅只能下载最近约 5 年。
-  - MU、QQQ、SPY、SMH、AMD 的全市场 1 分钟 K（含盘前盘后）：同一区间，`bars_1m_sip/`。
-  - ThetaData 期权 1 分钟：MU、QQQ、SPY 各 767 个交易日目录，2023-10-02～2026-10-21，`options_1m/`。
-  - 秒级正股价（期权平价反推）：2025-01-02～2026-10-21，MU 403 天、QQQ 442 天，`intrabar/`。
-  - 长桥 1 分钟 K（2023-10-02～2026-10-21）与录制器（2026-10-21 起）：只用于实盘侧与 App 对照。
+- **数据**（全部在 Mac 外接盘 `$ZR_DATA_ROOT`；覆盖与缺口见 `docs/DATA_INVENTORY.md`）：
+
+| 数据集 | 目录 | 范围 | 截止 |
+|---|---|---|---|
+| Massive 全市场 1 分钟与日聚合原始文件（2,514 个，sha256 已核对） | `massive_raw/` | 全市场 | 2021-11-15～2026-11-17 |
+| SIP 1 分钟 K（含盘前盘后） | `bars_1m_sip/` | MU、QQQ、SPY、SMH、AMD | 2021-11-15～2026-11-17 |
+| SIP 秒级 K（含盘前盘后，不复权） | `bars_1s_sip/` | MU、QQQ、SPY、IWM、NVDA、TSLA、AAPL、AMD、SMH | 2021-11-18～2026-11-17 |
+| 期权 1 分钟报价 / OHLC / 持仓（近月、价格带内） | `options_1m/` | MU、QQQ、SPY | 2023-10-02～2026-11-17 |
+| 期权 1 分钟报价（7 天内到期、±3%） | `options_1m/` | IWM、NVDA、TSLA、AAPL、AMD | 2025-11-18～2026-11-17 |
+| 期权日线全合约（收盘报价、量、IV 与希腊值、持仓） | `options_eod/` | 15 只（SPY…GLD；Facebook 2022-06-09 前在 `FB`） | 2016-01-04～2026-11-17 |
+| 秒级正股价（期权平价反推） | `intrabar/` | MU、QQQ | 2025-01-02～2026-10-21 |
+| 长桥 1 分钟 K、录制器、纸面助手 | `bars_1m/`、`recorder/`、`live/` | 实盘侧与 App 对照 | 录制器每日同步 |
+
+  - **ThetaData**：收尾拉取已完成（P1～P4 全部，未因权限错误中断），Theta Terminal 已停止。**截至 2026-11-19 00:36 SGT 尚未退订**（接口仍正常返回）；退订后上述 ThetaData 数据不再更新。
+  - **Massive**：订阅仍有效（Stocks Developer，只能取最近约 5 年）。
+  - **VPS**：除密钥与程序外不保留唯一数据——Massive 原始文件核对后已从 VPS 删除；`logs/` 与旧 `data_store/` 已复制到 Mac `vps_only/`；录制器与纸面助手当天的数据次日新加坡 09 点同步到 Mac（只有这一天的数据在同步前仅存于 VPS）。VPS 上的 `bars_1s_sip/`、`sip/` 是 Mac 的重复副本。
 - **VPS 定时任务**（systemd，UTC，周一至周五）：录制器 13:20；纸面助手 13:15；影子回放 21:40；标的池快照周五 21:30；健康检查每 5 分钟。
-- **Mac 常驻**（launchd）：`com.zr.sync-from-vps`（新加坡 09 点从 VPS 同步数据）、`com.zr.socks`（经 VPS 的代理，推送代码用）；launchd 访问外接盘此前有过权限问题，本次未复核。Theta Terminal 与数据补齐循环不是常驻，2026-11-14 检查时都没在运行。
+- **Mac 常驻**（launchd）：`com.zr.sync-from-vps`（新加坡 09 点从 VPS 同步数据）、`com.zr.socks`（经 VPS 的代理，推送代码用）；同步任务 2026-11-18 复核正常（每日成功）。Theta Terminal 不是常驻，2026-11-19 已停止。
 
 ## 待负责人决定
 
