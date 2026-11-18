@@ -5,9 +5,12 @@
   $ZR_DATA_ROOT/bars_1m_sip/underlying=<代码>/year=<年>/bars.parquet（与长桥 bars_1m 同布局；ts = UTC K 线开始时刻；
   session ∈ Pre / Intraday / Post，Intraday = 09:30 至当日收盘（提前收盘日按交易所日程）；只有有成交的分钟才有行，
   不补占位 K；不复权）。
+- extract：在 Mac 上直接从 massive_raw 原始分钟文件提取更多标的（2026-11-19 起 IWM、NVDA、TSLA、AAPL），
+  做法与 VPS pass1 的 extra_bars 相同，逐日写 sip/massive/extra1m_more/YYYY/<日>.parquet（断点续传：文件已存在即跳过）；
+  consolidate 同时合并 extra1m 与 extra1m_more。
 - load_sip_1m：读取。
 - inventory：Massive 数据清单（markdown），写入 docs/DATA_INVENTORY.md 的「Massive」小节。
-运行：python -m zr.data.sip_bars --consolidate | --inventory
+运行：python -m zr.data.sip_bars --extract [--symbols ...] | --consolidate | --inventory
 """
 
 from __future__ import annotations
@@ -18,18 +21,52 @@ from pathlib import Path
 
 import pandas as pd
 
-SYMS = ("MU", "QQQ", "SPY", "SMH", "AMD")
+SYMS = ("MU", "QQQ", "SPY", "SMH", "AMD", "IWM", "NVDA", "TSLA", "AAPL")
+MORE = ("IWM", "NVDA", "TSLA", "AAPL")
 
 
 def sip_dir(root: Path) -> Path:
     return Path(root) / "bars_1m_sip"
 
 
+def _extract_day(args) -> str:
+    raw, out, day = args
+    from zr.data.sip_massive import read_aggs
+    from zr.data.sip_stream import extra_bars, session_close_min
+
+    m = read_aggs(Path(raw))
+    d = extra_bars(m, session_close_min(dt.date.fromisoformat(day)), syms=MORE)
+    p = Path(out)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    d.to_parquet(tmp, index=False)
+    tmp.replace(p)
+    return day
+
+
+def extract(root: Path, workers: int = 8) -> dict:
+    """massive_raw 原始分钟文件 → sip/massive/extra1m_more/YYYY/<日>.parquet（MORE 中的标的）。"""
+    from concurrent.futures import ProcessPoolExecutor
+
+    raw = Path(root) / "massive_raw" / "us_stocks_sip" / "minute_aggs_v1"
+    out = Path(root) / "sip" / "massive" / "extra1m_more"
+    jobs = []
+    for f in sorted(raw.glob("*/*/*.csv.gz")):
+        day = f.name[:10]
+        o = out / day[:4] / f"{day}.parquet"
+        if not o.exists():
+            jobs.append((str(f), str(o), day))
+    with ProcessPoolExecutor(max_workers=workers) as ex:
+        done = list(ex.map(_extract_day, jobs))
+    return {"files": len(list(raw.glob("*/*/*.csv.gz"))), "extracted": len(done)}
+
+
 def consolidate(root: Path) -> dict:
-    src = Path(root) / "sip" / "massive" / "extra1m"
     by_year: dict[int, list[Path]] = {}
-    for p in sorted(src.glob("*/*.parquet")):
-        by_year.setdefault(int(p.parent.name), []).append(p)
+    for sub in ("extra1m", "extra1m_more"):
+        src = Path(root) / "sip" / "massive" / sub
+        for p in sorted(src.glob("*/*.parquet")):
+            by_year.setdefault(int(p.parent.name), []).append(p)
     out = {}
     for y, files in sorted(by_year.items()):
         d = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
@@ -188,6 +225,8 @@ def main(argv: list[str] | None = None) -> int:
     from zr.config import get_settings
 
     ap = argparse.ArgumentParser()
+    ap.add_argument("--extract", action="store_true", help="从 massive_raw 提取 MORE 中的标的")
+    ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--consolidate", action="store_true")
     ap.add_argument("--inventory", action="store_true")
     ap.add_argument(
@@ -195,6 +234,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     a = ap.parse_args(argv)
     root = get_settings().zr_data_root
+    if a.extract:
+        print(extract(root, a.workers))
     if a.consolidate:
         print(consolidate(root))
     if a.inventory:
