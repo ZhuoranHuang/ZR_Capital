@@ -88,6 +88,7 @@ uv run pytest -q
 - 单到期日 `strike=*` 1 分钟 quote ≈ 22 MB / 5 s；SPY 一天（DTE≤5）≈ 31 s、1.9 MB parquet。
 - 本机 LightGBM 缺 `libomp`（无 Homebrew），`zr/research/meta_model.py` 自动回退 sklearn HistGradientBoosting。
 - 终端连上游用 gRPC，只认 HTTP CONNECT 代理；SOCKS 会导致 `MDDS upstream unavailable`。默认直连，`run_theta_terminal.sh --proxy` 才启用（需 `THETA_HTTP_PROXY`）。
+- 2026-11-18 收尾拉取实测（`zr/data/theta_final.py`）：`/option/history/greeks/eod` 在 `expiration=*` 时只能一次一天，2016 年 SPY / IWM / SMH / GLD 等无数据（2017-01-03 起有）；`/option/history/eod` 可取到 2016-01-04，2015 年返回 403（需 Professional）；`/option/flat_file/eod` 在 Standard 档 403；`/option/history/open_interest?expiration=*&date=` 可用；`/stock/history/eod` 免费档可用。代码按当时代码存放：Facebook 2022-06-09 前在 `FB`，`META` 在 2021-07-08～2022-01-28 是另一只证券（未验证是哪只）。日线数据在 `options_eod/underlying=X/date=D/{eod,oi}.parquet`。
 
 ## Massive（原 Polygon.io）已核实事实（2026-11-14 VPS 实测，`docs/research/R057_MASSIVE_DATA.md`）
 
@@ -99,6 +100,7 @@ uv run pytest -q
 - reference tickers：`active=false` 含退市股与 `delisted_utc`；`date=YYYY-MM-DD` 返回当日在市的标的（含后来退市的）。splits：`execution_date`、`split_from`、`split_to`。
 - reference 的 `type` 字段有噪声：个别周的时点快照会把非普通股标成 CS（2022-08-22 约 390 只 NYSE 封闭式基金，2025-06-30 58 只优先股 / 票据）；当前代码表每个代码只有一条记录，**代码复用**（同一代码先后属于不同证券，如 META、B）要靠日线断档识别（R-057 用「相隔超过 30 个自然日视为新标的」）。
 - 源文件偶有缺分钟：SPY 2023-06-05 09:52–09:55 没有行（同日 QQQ、MU、AMD 完整）。归档 2,508 个文件 26.64 GB 在 VPS 上用时 2 小时 11 分钟；向 Mac 的 rsync 会拖慢下载，下载时先停同步。
+- 秒级聚合 REST `/v2/aggs/ticker/<T>/range/1/second/<日>/<日>?adjusted=false`：含盘前盘后，与分钟文件同一滚动约 5 年窗口（2026-11-18 最早可取 2021-11-18～19）；落盘 `bars_1s_sip/underlying=X/date=D/bars.parquet`（`zr/data/massive_seconds.py`）。
 - **研究用的历史分钟 K 以 Massive 为准（D-038）**：MU、QQQ、SPY、SMH、AMD 的 SIP 1 分钟 K 在 `$ZR_DATA_ROOT/bars_1m_sip/`（2021-11-15 起，含盘前盘后，`zr/data/sip_bars.py` 的 `load_sip_1m`）；全部原始日文件归档在 Mac 外接盘 `$ZR_DATA_ROOT/massive_raw/`（sha256 清单已核对）。长桥分钟 K 只用于实盘侧与 App 对照。
 
 ## 指标标准口径（与长桥 App 对齐；D-028 取代 D-027 的时段/重置部分，2026-10-22）

@@ -13,7 +13,8 @@ P4  日线级：自 2016-01-01，每个标的每天全部合约的收盘报价�
     → options_eod/underlying=X/date=D/{eod,oi}.parquet
 价格带来源：ThetaData 正股日线（/stock/history/eod，开 / 高 / 低）。交易日：zr.data.calendar。
 断点续传：文件已存在即跳过；没有数据的日子写 0 行文件。订阅失效（401 / 403）立即停止并写进 theta_final/PROGRESS.md。
-运行：python -m zr.data.theta_final --phase time|p1|p2|p3|p4|all|coverage
+运行：python -m zr.data.theta_final --phase time|p1|p2|p3|p4|all|coverage|audit|refetch-empty|write-doc
+（P4 补拉改过代码的标的：--phase p4 --symbols FB --end 2022-06-09）
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pandas as pd
+import pyarrow.parquet as pq
 
 from zr.data import thetadata as td
 
@@ -53,6 +55,9 @@ P4_SYMS = (
     "GLD",
 )
 P3_BAND, P3_MAX_DTE = 0.03, 7
+# 代码沿革：Facebook 在 2022-06-09 由 FB 改为 META，ThetaData 按当时的代码存放（2026-11-18 实测：FB 的 eod 到 2022-06-08、
+# 持仓到 2022-06-09；META 在 2021-07-08～2022-01-28 是另一只证券，标的价约 15 美元，疑为 Roundhill 元宇宙 ETF，未验证）。
+SYMBOL_END = {"FB": dt.date(2022, 6, 9)}
 EOD_KEEP = [
     "open", "high", "low", "close", "volume", "count", "bid", "ask", "bid_size", "ask_size",
     "implied_vol", "iv_error", "delta", "gamma", "theta", "vega", "rho", "underlying_price",
@@ -470,6 +475,111 @@ def timing(client: td.ThetaClient, end: dt.date) -> dict:
 # ---------------- 覆盖检查 ----------------
 
 
+def eod_underlyings(root: Path) -> list[str]:
+    have = sorted(p.name[len("underlying=") :] for p in (root / "options_eod").glob("underlying=*"))
+    return [u for u in P4_SYMS if u in have] + [u for u in have if u not in P4_SYMS]
+
+
+def _meta(p: Path) -> tuple[int, bool]:
+    m = pq.read_metadata(p)
+    return m.num_rows, "implied_vol" in m.schema.names
+
+
+def _ranges(days: list[str], order: list[str]) -> list[str]:
+    """把日期列表按「在 order 中相邻」合并成区间文字。"""
+    pos = {d: i for i, d in enumerate(order)}
+    out: list[list[str]] = []
+    for d in sorted(days):
+        if out and pos[d] == pos[out[-1][1]] + 1:
+            out[-1][1] = d
+        else:
+            out.append([d, d])
+    return [a if a == b else f"{a}～{b}" for a, b in out]
+
+
+def audit(root: Path) -> dict:
+    """options_eod 内容级核对（只读 parquet 元数据）：逐日行数、0 行的日子、希腊值来源、行数异常的日子
+    （行数低于前后共 21 个有数据交易日中位数的一半）。"""
+    out: dict = {}
+    for u in eod_underlyings(root):
+        base = root / "options_eod" / f"underlying={u}"
+        rec: dict = {}
+        for k in ("eod", "oi"):
+            files = sorted(base.glob(f"date=*/{k}.parquet"))
+            if not files:
+                continue
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                metas = list(ex.map(_meta, files))
+            days = [p.parent.name[5:] for p in files]
+            rows = pd.Series([m[0] for m in metas], index=days)
+            nz = rows[rows > 0]
+            med = nz.rolling(21, center=True, min_periods=5).median()
+            low = nz[nz < 0.5 * med]
+            zero = list(rows[rows == 0].index)
+            r = {
+                "days": len(rows),
+                "rows": int(rows.sum()),
+                "first_data": nz.index[0] if len(nz) else None,
+                "last_data": nz.index[-1] if len(nz) else None,
+                "zero_days": len(zero),
+                "zero_ranges": _ranges(zero, days),
+                "low_days": {d: [int(nz[d]), float(med[d])] for d in low.index},
+            }
+            if k == "eod":
+                iv = pd.Series([m[1] for m in metas], index=days)
+                g = iv & (rows > 0)
+                r["days_greeks"] = int(g.sum())
+                r["days_quote_only"] = int((~iv & (rows > 0)).sum())
+                r["first_greeks"] = g[g].index[0] if g.any() else None
+            rec[k] = r
+        out[u] = rec
+    return out
+
+
+def refetch_empty(client: td.ThetaClient, root: Path, syms: tuple[str, ...] | None = None) -> dict:
+    """把 0 行的文件、以及没有希腊值的 eod 文件重新请求一遍（排除临时性空响应）。
+    0 行文件：这次有数据就替换；没有希腊值的 eod：这次拿到希腊值才替换。其余保持原样。"""
+    jobs = []
+    for u in syms or eod_underlyings(root):
+        base = root / "options_eod" / f"underlying={u}"
+        for k in ("eod", "oi"):
+            for p in sorted(base.glob(f"date=*/{k}.parquet")):
+                n, has_iv = _meta(p)
+                if n == 0 or (k == "eod" and not has_iv):
+                    jobs.append((u, dt.date.fromisoformat(p.parent.name[5:]), k, n))
+    pr = Progress(root, "空文件复查", len(jobs))
+    stop: dict = {}
+    errors: list = []
+    filled: list = []
+
+    def work(job):
+        if stop:
+            return
+        u, d, k, n0 = job
+        try:
+            df = fetch_oi(client, u, d) if k == "oi" else fetch_eod(client, u, d)
+        except td.ThetaError as e:
+            if e.status in (401, 403):
+                stop["reason"] = f"HTTP {e.status}: {str(e)[:160]}（{u} {d} {k}）"
+            else:
+                errors.append((u, str(d), k, str(e)[:120]))
+            return
+        better = len(df) and (n0 == 0 or "implied_vol" in df)
+        if better:
+            write_atomic(df, eod_dir(root, u, d) / f"{k}.parquet")
+            with pr.lock:
+                filled.append((u, str(d), k, n0, len(df)))
+        pr.step(f"{u} {d} {k}")
+
+    with ThreadPoolExecutor(max_workers=client.concurrency) as ex:
+        list(ex.map(work, jobs))
+    res = {"checked": len(jobs), "filled": sorted(filled), "errors": errors[:10]}
+    if stop:
+        note_stop(root, "空文件复查", stop["reason"])
+        raise Stop(stop["reason"])
+    return res
+
+
 def coverage(root: Path, end: dt.date) -> dict:
     out: dict = {}
     for u in sorted({*P1_SYMS, *P3_SYMS}):
@@ -487,45 +597,83 @@ def coverage(root: Path, end: dt.date) -> dict:
             "expected": len(exp),
             "missing": [str(d) for d in sorted(set(exp) - set(ds))][:10],
         }
-    for u in P4_SYMS:
+    for u in eod_underlyings(root):
         base = root / "options_eod" / f"underlying={u}"
         for k in ("eod", "oi"):
             files = sorted(base.glob(f"date=*/{k}.parquet"))
             if not files:
                 continue
             ds = [dt.date.fromisoformat(p.parent.name[5:]) for p in files]
-            exp = trading_days(ds[0], end)
-            empty = sum(1 for p in files if p.stat().st_size < 4000)
+            exp = trading_days(ds[0], min(end, SYMBOL_END.get(u, end)))
             out[f"options_eod {u} {k}"] = {
                 "first": str(ds[0]),
                 "last": str(ds[-1]),
                 "days": len(ds),
                 "expected": len(exp),
                 "missing": len(set(exp) - set(ds)),
-                "small_files(<4KB，多为无数据)": empty,
             }
     return out
 
 
 def coverage_section(root: Path, end: dt.date) -> str:
     cov = coverage(root, end)
+    aud = audit(root)
+    (root / "theta_final").mkdir(parents=True, exist_ok=True)
+    (root / "theta_final" / "audit.json").write_text(
+        json.dumps(aud, ensure_ascii=False, indent=1), encoding="utf-8"
+    )
     stop = root / "theta_final" / "STOPPED.md"
     L = [
-        f"## ThetaData 收尾拉取（`zr/data/theta_final.py --phase coverage`，{dt.datetime.now(dt.UTC):%Y-%m-%d %H:%M} UTC 生成；应有交易日算到 {end}）",
+        f"## ThetaData 收尾拉取（`zr/data/theta_final.py --phase write-doc`，{dt.datetime.now(dt.UTC):%Y-%m-%d %H:%M} UTC 生成；应有交易日算到 {end}）",
         "",
-        "`options_1m/`：期权 1 分钟（MU、QQQ、SPY 含报价 / OHLC / 持仓；IWM、NVDA、TSLA、AAPL、AMD 只有报价，到期日 7 天内）。"
-        "`options_eod/`：日线级，每个标的每天全部合约——`eod.parquet`（收盘报价、成交量、隐含波动率与希腊值；source = eod 的日子只有报价与成交量）与 `oi.parquet`（持仓量）。",
+        "`options_1m/`：期权 1 分钟（MU、QQQ、SPY 含报价 / OHLC / 持仓，最近 2 个到期日 ∪ 到期日 5 天内；IWM、NVDA、TSLA、AAPL 只有报价、到期日 7 天内、行权价带 3%；"
+        "AMD 在 2025-11-18 之前是旧范围（含 OHLC / 持仓），之后只有报价）。",
         "",
-        "| 数据集 | 最早 | 最晚 | 已有天数 | 应有天数 | 缺 | 小文件（< 4 KB，多为当日无数据） |",
-        "|---|---|---|---|---|---|---|",
+        "| 数据集 | 最早 | 最晚 | 已有天数 | 应有天数 | 缺 |",
+        "|---|---|---|---|---|---|",
     ]
     for k, v in cov.items():
-        miss = v["missing"] if isinstance(v["missing"], int) else len(v["missing"])
-        small = v.get("small_files(<4KB，多为无数据)", "—")
-        L.append(
-            f"| `{k}` | {v['first']} | {v['last']} | {v['days']:,} | {v['expected']:,} | {miss} | {small} |"
-        )
+        if k.startswith("options_1m"):
+            L.append(
+                f"| `{k}` | {v['first']} | {v['last']} | {v['days']:,} | {v['expected']:,} | {len(v['missing'])} |"
+            )
     L += [
+        "",
+        "`options_eod/`：日线级，每个标的每天全部合约——`eod.parquet`（收盘报价、OHLC、成交量与笔数；有希腊值的日子另含隐含波动率、"
+        "delta / gamma / theta / vega / rho、标的价）与 `oi.parquet`（持仓量）。「只有报价」= `/option/history/greeks/eod` 当日无数据、"
+        "退回 `/option/history/eod`（`source` 列 = eod）。行数异常 = 当日行数低于前后共 21 个有数据交易日中位数的一半。",
+        "",
+        "| 标的 | 文件 | 最早 | 最晚 | 文件天数 | 应有 | 缺 | 0 行天数 | 总行数 | 含希腊值天数 | 只有报价天数 | 希腊值最早 | 行数异常天数 |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    notes: list[str] = []
+    for u, rec in aud.items():
+        for k, r in rec.items():
+            c = cov[f"options_eod {u} {k}"]
+            g = (
+                f"{r['days_greeks']:,} | {r['days_quote_only']:,} | {r['first_greeks'] or '—'}"
+                if k == "eod"
+                else "— | — | —"
+            )
+            L.append(
+                f"| {u} | {k} | {c['first']} | {c['last']} | {c['days']:,} | {c['expected']:,} | {c['missing']} | {r['zero_days']:,} | {r['rows']:,} | {g} | {len(r['low_days'])} |"
+            )
+            if r["zero_ranges"]:
+                notes.append(f"- {u} {k} 0 行：{'、'.join(r['zero_ranges'])}")
+            if r["low_days"]:
+                txt = "、".join(f"{d}（{v[0]:,} 行，中位数 {v[1]:,.0f}）" for d, v in r["low_days"].items())
+                notes.append(f"- {u} {k} 行数异常：{txt}")
+    L += ["", "0 行与行数异常的日子（0 行文件在拉取结束后都重新请求过一遍，仍无数据才保留）：", ""]
+    L += notes or ["- 无"]
+    L += [
+        "",
+        "边界：",
+        "- **META / FB**：Facebook 在 2022-06-09 由 FB 改为 META，ThetaData 按当时的代码存放。2022-06-09 之前的 Facebook 期权在 `underlying=FB`；"
+        "`underlying=META` 在 2021-07-08～2022-01-28 的数据属于另一只当时使用 META 代码的证券（标的价约 15 美元，疑为 Roundhill 元宇宙 ETF，未验证），"
+        "**不是 Facebook，使用时必须剔除**。其余标的未逐一核对代码沿革（未验证）。",
+        "- 希腊值接口在 2016 年多数标的没有数据（见「希腊值最早」列），这些日子只有收盘报价与成交量。",
+        "- 期权 flat file 接口（`/option/flat_file/eod`）在 Options Standard 档返回 403（需 Professional），所以按标的逐日拉；2016-01-01 之前的日线同样需 Professional。",
+        "- 希腊值与隐含波动率是 ThetaData 的计算值（模型与利率、股息口径未核对，未验证）。",
         "",
         ("**拉取中途停止**：" + stop.read_text(encoding="utf-8").replace("\n", " ").strip())
         if stop.exists()
@@ -541,7 +689,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--phase",
-        choices=["time", "p1", "p2", "p3", "p4", "all", "coverage", "write-doc"],
+        choices=["time", "p1", "p2", "p3", "p4", "all", "coverage", "audit", "refetch-empty", "write-doc"],
         required=True,
     )
     ap.add_argument("--end", help="最新交易日，默认自动判断")
@@ -560,6 +708,9 @@ def main(argv: list[str] | None = None) -> int:
     if a.phase == "coverage":
         print(json.dumps(coverage(root, end), ensure_ascii=False, indent=1))
         return 0
+    if a.phase == "audit":
+        print(json.dumps(audit(root), ensure_ascii=False, indent=1))
+        return 0
     client = td.ThetaClient()
     res: dict = {"end": str(end)}
     try:
@@ -573,6 +724,10 @@ def main(argv: list[str] | None = None) -> int:
             res["p3"] = p3(client, root, end)
         if a.phase in ("p4", "all"):
             res["p4"] = p4(client, root, end, tuple(a.symbols) if a.symbols else P4_SYMS)
+        if a.phase == "refetch-empty":
+            res["refetch_empty"] = refetch_empty(
+                client, root, tuple(a.symbols) if a.symbols else None
+            )
     except Stop as e:
         res["stopped"] = str(e)
         note_stop(root, a.phase, str(e))
