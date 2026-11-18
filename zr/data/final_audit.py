@@ -397,11 +397,29 @@ def splits(root: Path, syms=SPLIT_SYMS, since: str = "2016-01-01") -> dict:
     return out
 
 
+def a2_refetch(root: Path, items: list[str]) -> dict:
+    """只在 VPS 上运行：重拉指定的（标的:日）秒级 K 到 theta_final/a2_refetch/（不覆盖 bars_1s_sip）。"""
+    from zr.data import massive as mv
+    from zr.data.massive_seconds import fetch_day
+
+    rest = mv.Rest()
+    out = {}
+    for it in items:
+        sym, day = it.split(":")
+        d = fetch_day(rest, sym, dt.date.fromisoformat(day))
+        p = audit_dir(root, "a2_refetch") / f"underlying={sym}" / f"date={day}" / "bars.parquet"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        d.to_parquet(p, index=False)
+        out[it] = len(d)
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     from zr.config import get_settings
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--phase", required=True, choices=["a1", "a1-summary", "a2", "a2-summary", "splits"])
+    ap.add_argument("--phase", required=True, choices=["a1", "a1-summary", "a2", "a2-summary", "splits", "a2-refetch"])
+    ap.add_argument("--items", nargs="*", default=[], help="a2-refetch：标的:日")
     ap.add_argument("--workers", type=int, default=10)
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -412,6 +430,7 @@ def main(argv: list[str] | None = None) -> int:
         "a2": lambda: a2(root),
         "a2-summary": lambda: a2_summary(root),
         "splits": lambda: splits(root),
+        "a2-refetch": lambda: a2_refetch(root, a.items),
     }[a.phase]
     res = fn()
     print(json.dumps(res, ensure_ascii=False, indent=1, default=str))
