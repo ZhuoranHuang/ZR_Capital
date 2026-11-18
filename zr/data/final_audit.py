@@ -414,11 +414,158 @@ def a2_refetch(root: Path, items: list[str]) -> dict:
     return out
 
 
+# ---------------- 报告（A 阶段） ----------------
+
+
+def pull_bands(root: Path) -> pd.DataFrame:
+    """拉取当时用的行权价带：manifest.jsonl 的 band_lo / band_hi；manifest_p3.jsonl 的 px = (开, 低, 高) × 3%。"""
+    rows = []
+    for line in (Path(root) / "options_1m" / "manifest.jsonl").read_text(encoding="utf-8").splitlines():
+        if '"band_lo"' in line:
+            r = json.loads(line)
+            rows.append((r["underlying"], r["date"], r["band_lo"], r["band_hi"]))
+    p3 = Path(root) / "options_1m" / "manifest_p3.jsonl"
+    for line in p3.read_text(encoding="utf-8").splitlines():
+        r = json.loads(line)
+        if r.get("px"):
+            _, lo, hi = r["px"]
+            rows.append((r["underlying"], r["date"], lo * (1 - BAND_DEFAULT), hi * (1 + BAND_DEFAULT)))
+    d = pd.DataFrame(rows, columns=["underlying", "date", "pull_lo", "pull_hi"])
+    return d.drop_duplicates(["underlying", "date"], keep="last")
+
+
+def strike_gaps(root: Path) -> pd.DataFrame:
+    c = a1_flags(root)["strike_cover"].merge(pull_bands(root), on=["underlying", "date"], how="left")
+
+    def inside(r):
+        if pd.isna(r.pull_lo) or not r.missing_list:
+            return np.nan
+        ks = [float(k) for k in r.missing_list.split(",")]
+        return sum(r.pull_lo - 1e-9 <= k <= r.pull_hi + 1e-9 for k in ks)
+
+    c["miss_in_pull_band"] = c.apply(inside, axis=1)
+    return c
+
+
+def _cell(x) -> str:
+    if isinstance(x, (float, np.floating)):
+        if np.isnan(x):
+            return ""
+        return f"{x:,.0f}" if float(x).is_integer() and abs(x) >= 100 else f"{x:,.4g}"
+    if isinstance(x, (int, np.integer)) and not isinstance(x, bool):
+        return f"{x:,}" if abs(x) >= 10000 else str(x)
+    return str(x)
+
+
+def _md(df: pd.DataFrame) -> str:
+    cols = list(df.columns)
+    out = ["| " + " | ".join(map(str, cols)) + " |", "|" + "---|" * len(cols)]
+    for r in df.itertuples(index=False):
+        out.append("| " + " | ".join(_cell(x) for x in r) + " |")
+    return "\n".join(out)
+
+
+def report_a(root: Path) -> str:
+    root = Path(root)
+    o1 = audit_dir(root, "audit_a1")
+    days = pd.read_parquet(o1 / "day.parquet")
+    exps = pd.read_parquet(o1 / "expiry.parquet")
+    fl = a1_flags(root)
+    sg = strike_gaps(root)
+    a2d = pd.read_parquet(audit_dir(root, "audit_a2") / "day.parquet")
+    a2s = a2_summary(root)["by_symbol"]
+    au = json.loads((root / "theta_final" / "audit.json").read_text(encoding="utf-8"))
+    sp = json.loads((root / "theta_final" / "splits.json").read_text(encoding="utf-8"))
+    L: list[str] = []
+    L += ["## A1 期权 1 分钟（`options_1m/`）", ""]
+    t = days.groupby("underlying").agg(
+        交易日=("date", "size"), 最早=("date", "min"), 最晚=("date", "max"), 到期日数=("n_expiries", "sum"),
+        报价行数=("rows", "sum"), 有效报价=("valid", "sum"),
+    )
+    t["有效报价占比"] = (t["有效报价"] / t["报价行数"]).round(4)
+    mm = exps.groupby("underlying").agg(每到期日分钟数中位数=("minutes", "median"), 合约数中位数=("contracts", "median"))
+    t = t.join(mm).reset_index()
+    L += [_md(t), ""]
+    L += [
+        f"- 0 行或没有列的文件：{len(fl['empty_file'])} 个（{', '.join(fl['empty_file']['underlying'] + ' ' + fl['empty_file']['date'])}）。",
+        f"- manifest 请求过但文件里没有的到期日：{len(fl['missing_expiry'])} 个（标的，日，到期日）：",
+        "",
+        _md(fl["missing_expiry"].groupby(["underlying", "expiry"])["date"].agg(lambda x: "、".join(x)).reset_index().rename(columns={"date": "交易日"})),
+        "",
+        f"- 不同分钟数低于中位数 90%：{len(fl['minutes_low'])} 个。每个到期日的分钟数中位数都是 391（09:30～16:00 每分钟一行）；"
+        f"提前收盘日（{int(days.drop_duplicates('date')['early_close'].sum())} 天）ThetaData 同样给到 16:00，收盘后的行是收盘时的报价延续，单独算中位数也是 391。",
+        f"- 有效报价（bid > 0 且 ask ≥ bid）占比低于该标的中位数一半的日子：{len(fl['valid_low'])} 个。",
+        f"- MU / QQQ / SPY 的 ohlc.parquet：{len(days[days.underlying.isin(['MU','QQQ','SPY'])])} 个交易日，缺 volume / count 列或 0 行的 {len(fl['ohlc_bad'])} 个"
+        "（SPY 2026-03-31 整天的三个文件都是空的，算在上面「0 行文件」里）。" if len(fl["ohlc_bad"]) else
+        f"- MU / QQQ / SPY 的 ohlc.parquet：全部含 volume 与 count 两列、都有行（{len(days[days.underlying.isin(['MU','QQQ','SPY'])]) - len(fl['empty_file'])} 个交易日；SPY 2026-03-31 整天为空，见上）。",
+        "",
+        "**行权价覆盖**：价格带 = [Massive 日聚合最低价 ×(1−b), 最高价 ×(1+b)]（不复权；SPY、QQQ 与 P3 五只 b = 3%，MU 8%）。"
+        "「缺档」= 同日 `options_eod` 全链里该到期日落在价格带内、但 1 分钟文件里没有的行权价（全链来自同一数据源，比「最低 / 最高行权价是否越过带边」精确；"
+        f"{int(exps['missing_strikes'].notna().sum()):,} / {len(exps):,} 个到期日都能对上全链）。",
+        "",
+    ]
+    sg["类别"] = np.where(sg["miss_in_pull_band"] > 0, "拉取时价格带内也缺（真缺口）",
+                       np.where(sg["miss_in_pull_band"] == 0, "只缺拉取带外、Massive 带内的档（价格带来源不同）", "无拉取带记录"))
+    t = sg.groupby(["underlying", "类别"]).agg(到期日=("expiry", "size"), 缺档=("missing_strikes", "sum")).reset_index()
+    L += [_md(t), ""]
+    real = sg[sg["miss_in_pull_band"] > 0]
+    rd = real.groupby(["underlying", "date"]).agg(到期日=("expiry", "size"), 带内缺档=("miss_in_pull_band", "sum"),
+                                                  全链带内=("chain_in_band", "sum")).reset_index()
+    L += ["真缺口按日：", "", _md(rd), "",
+          "价格带来源不同：MU / QQQ / SPY 在 2026-10-21 及以前拉取时，价格带取长桥 1 分钟 K 常规时段的高低点，且先用 `clean_wicks` 收回疑似坏成交影线"
+          "（`zr/data/thetadata.py` 的 `day_price_range`）；2026-10-22 起的补拉与 P3 用 ThetaData 正股日线。Massive 日聚合的高低点是全天官方值，通常更宽，"
+          "差出来的一两档不在当时请求的范围内，不是数据丢失。", ""]
+    L += ["## A2 秒级 K（`bars_1s_sip/`）与 SIP 1 分钟 K（`bars_1m_sip/`）", "",
+          "`bars_1m_sip/` 已从 `massive_raw/` 扩到 IWM、NVDA、TSLA、AAPL（与原 5 只同做法：含盘前盘后、不复权；逐日中间文件 `sip/massive/extra1m_more/`）。", ""]
+    t = pd.DataFrame(a2s).T.reset_index().rename(columns={"index": "标的"})
+    t = t[["标的", "days", "rows", "zero_days", "first_et_min", "last_et_max", "minutes_both", "only_sec", "only_1m", "eq_px_pct", "eq_vol_pct", "eq_all_pct", "vol_ratio_p01", "vol_ratio_p50", "vol_ratio_p99"]]
+    t.columns = ["标的", "标的日", "秒级行数", "0 行文件", "最早时刻", "最晚时刻", "共有分钟", "只在秒级", "只在分钟", "价格全等 %", "量相等 %", "全部相等 %", "日量比 P1", "日量比 P50", "日量比 P99"]
+    L += [_md(t), ""]
+    f = a2_flags(root)
+    L += [
+        f"- 分钟集合：{len(a2d):,} 个标的日全部一致（没有只在一边出现的分钟）。",
+        f"- 日量比 = 秒级 K 当日成交量合计 / 分钟 K 当日成交量合计：没有一天大于 1；偏离 1 不超过 0.1% 的只有 {int(((a2d.vol_ratio - 1).abs() <= VOL_TOL).sum())} 天，"
+        f"按 0.1% 的标准异常日 {len(f):,} 个（几乎全部标的日）。成交笔数同样是秒级少。",
+        "- 抽查 9 个标的日（SPY、MU、NVDA 各 3 天，种子 20261119）：常规时段秒级量为分钟量的 96.6%～99.96%，盘后 31%～99%，盘前 51%～97%——差额集中在盘前盘后；"
+        "缺的成交 SPY 平均每笔 190～719 股，MU / NVDA 14～53 股。推测秒级聚合与分钟聚合计入的成交条件不同（未验证，未查到 Massive 的明确说明）。",
+        "- 重拉核对：SPY 2024-04-30、NVDA 2024-06-05、MU 2024-09-20 在 VPS 上重拉，与磁盘上的文件逐行完全相同——差异来自数据源口径，不是传输残缺。",
+        "",
+        "拆股日前后（Massive reference/splits；秒级区间 2021-11-18～2026-11-17 内）：",
+        "",
+    ]
+    rows = []
+    for s, xs in sp.items():
+        for x in xs:
+            e = x["execution_date"]
+            g = a2d[(a2d.symbol == s)]
+            if g.empty or e < g.date.min():
+                continue
+            ds = sorted(g.date)
+            i = next(k for k, d in enumerate(ds) if d >= e)
+            win = ds[i - 2 : i + 2]
+            w = g[g.date.isin(win)]
+            px = []
+            for d in ds[i - 1 : i + 1]:
+                b = pd.read_parquet(root / "bars_1s_sip" / f"underlying={s}" / f"date={d}" / "bars.parquet")
+                et = b.ts.dt.tz_convert(ET)
+                m = et.dt.hour * 60 + et.dt.minute
+                r = b[(m >= 570) & (m < 960)]
+                px.append((r.close.iloc[-1], r.open.iloc[0]))
+            rows.append({"标的": s, "拆股日": e, "比例": f"{x['split_from']}:{x['split_to']}", "前后两天": f"{win[0]}～{win[-1]}",
+                         "价格全等分钟": f"{int(w.eq_px.sum())} / {int(w.min_both.sum())}", "前日收 / 当日开": round(px[0][0] / px[1][1], 3)})
+    L += [_md(pd.DataFrame(rows)), "",
+          "价格在拆股日按拆股比例跳变，秒级与分钟级在拆股前后同样不复权、价格一致。", ""]
+    L += ["## A3 options_eod 行数异常文件（之前没有重新请求过）", ""]
+    rr = [{"标的": u, "文件": k, "日期": d, "行数": v[0], "前后 21 个交易日中位数": v[1]} for u, rec in au.items() for k, r in rec.items() for d, v in r["low_days"].items()]
+    L += [_md(pd.DataFrame(rr)), ""]
+    return "\n".join(L)
+
+
 def main(argv: list[str] | None = None) -> int:
     from zr.config import get_settings
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--phase", required=True, choices=["a1", "a1-summary", "a2", "a2-summary", "splits", "a2-refetch"])
+    ap.add_argument("--phase", required=True, choices=["a1", "a1-summary", "a2", "a2-summary", "splits", "a2-refetch", "report-a"])
     ap.add_argument("--items", nargs="*", default=[], help="a2-refetch：标的:日")
     ap.add_argument("--workers", type=int, default=10)
     a = ap.parse_args(argv)
@@ -431,9 +578,10 @@ def main(argv: list[str] | None = None) -> int:
         "a2-summary": lambda: a2_summary(root),
         "splits": lambda: splits(root),
         "a2-refetch": lambda: a2_refetch(root, a.items),
+        "report-a": lambda: report_a(root),
     }[a.phase]
     res = fn()
-    print(json.dumps(res, ensure_ascii=False, indent=1, default=str))
+    print(res if isinstance(res, str) else json.dumps(res, ensure_ascii=False, indent=1, default=str))
     return 0
 
 
